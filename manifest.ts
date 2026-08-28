@@ -122,6 +122,20 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   name: 'Paper',
   version: VERSION,
   summary: 'The paper this epic is aimed at, read as prose: sections, figures and tables rather than markup.',
+  /**
+   * What an agent should do about this module being here.
+   *
+   * Not what it shows — the summary says that, and a host that framed it can
+   * see it. This says what its PRESENCE OBLIGES, and a host composes it into
+   * the prompt every agent on the canvas is handed, attributed to this module.
+   */
+  guidance:
+    'This epic is aimed at a paper, and the paper is the argument the work is supposed to make ' +
+    'true. Read the relevant sections before changing behaviour: if a sentence in it describes ' +
+    'what the code does, your change can make that sentence false, and the paper is then part of ' +
+    'the work rather than documentation of it. Cite by section when you say a change follows from ' +
+    'the paper, so a reader can check you. This module only reads — edit the .tex on disk, and ' +
+    'never restate here what the paper already says, because two copies of an argument drift.',
   entry: '/app',
   modes: [{ id: 'paper', label: 'Paper', scope: 'epic' }],
   mcp: {
