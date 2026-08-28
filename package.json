@@ -1,0 +1,23 @@
+{
+  "name": "kehikko-paper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The paper an epic is aimed at, read as prose rather than as LaTeX. An app: a page, a reader over a directory of papers and an MCP door, which a host may frame but nothing here needs one.",
+  "scripts": {
+    "dev": "vite",
+    "start": "vite",
+    "build": "vite build",
+    "register": "bun run register.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "roadmap-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#main"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0",
+    "vite": "^7.2.4"
+  }
+}
