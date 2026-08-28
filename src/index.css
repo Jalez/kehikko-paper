@@ -1,0 +1,408 @@
+@import 'tailwindcss';
+
+/**
+ * The palette and the two layout rules that matter more here than the colours.
+ *
+ * ## Tailwind v4 is configured in CSS, and there is no `tailwind.config.js`
+ *
+ * `@tailwindcss/vite` reads this file. A config file would be a second place
+ * where the theme lives, and the failure mode of two is that one of them is the
+ * one somebody edits.
+ *
+ * ## `dark` follows the HOST, not the reader's operating system
+ *
+ * Tailwind's stock dark variant is `prefers-color-scheme`, which asks the wrong
+ * question for a framed module: the theme this page has to agree with is the
+ * one the roadmap around it is painted in, and that arrives on every
+ * `roadmap.context` as `theme`. So the variant below is a class the wire sets,
+ * and `.light` is set explicitly as well, so a host asking for light on a
+ * machine set to dark actually gets light.
+ *
+ * The media query still appears once, in `main.tsx`, and only as the SEED for a
+ * page nobody is framing — opened directly, there is no host to have an opinion
+ * and the machine's is the only one going. Any context that arrives overrides
+ * it. That keeps one mechanism rather than two: the class is always the answer,
+ * and the media query only ever decides what the class starts as.
+ *
+ * ## Container queries, not viewport breakpoints
+ *
+ * This page's normal case is a pane 220 to 400 pixels wide inside a canvas on a
+ * monitor two thousand across. Every viewport breakpoint Tailwind ships would
+ * therefore fire — `lg:` is true, `xl:` is true — and the page would lay itself
+ * out for a screen it has three per cent of. So `<body>` is a named container
+ * and everything that responds to width asks `@container pane`. The margin rail
+ * is the sharpest case: whether there is room beside the text for one is a fact
+ * about the pane and has nothing whatever to do with the window.
+ *
+ * ## Nothing overflows sideways, ever
+ *
+ * A pane that scrolls horizontally is a pane where half a sentence is behind an
+ * edge nobody thinks to drag. `overflow-x: hidden` on the body would HIDE that
+ * rather than fix it, so it is not here. What is here is `overflow-wrap:
+ * anywhere` on the prose — only `anywhere` lowers a long token's min-content
+ * contribution, which is the entire fix — `min-width: 0` on the flex children,
+ * and a scroller of its own around each table and each verbatim block, because
+ * code and columns do not reflow and must not be allowed to widen the document.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --radius: 0.5rem;
+
+  /**
+   * The sheet.
+   *
+   * The app this reader was rebuilt from had one visual idea — a warm lit page
+   * against cool chrome — and it is worth keeping, because it says at a glance
+   * which part of the pane is the author's argument and which part is this
+   * program talking. In light that is a genuinely warm off-white.
+   *
+   * In dark it is NOT a white sheet, and that is a deliberate departure. This
+   * module is framed between other panes; a bright rectangle among them would
+   * be the first thing anybody noticed about the protocol, and the module it
+   * replaces spent a long comment arguing for sharing a surface with its
+   * neighbours. So in dark the sheet is a lifted surface rather than a lit one,
+   * and the metaphor is carried by its edge and its shadow instead.
+   */
+  --paper: oklch(0.985 0.006 85);
+  --paper-foreground: oklch(0.21 0.012 60);
+  --paper-muted: oklch(0.51 0.014 60);
+  --paper-edge: oklch(0.91 0.012 85);
+
+  /* A copy-editor's two pencils: blue for navigation, amber for what wants the
+     author. Both are used for meaning and never alone — every colour on this
+     page is paired with a word or a glyph, because colour is a channel some
+     readers do not have. */
+  --pencil: oklch(0.55 0.16 265);
+  --mark: oklch(0.62 0.12 75);
+  --code-bg: oklch(0 0 0 / 5%);
+}
+
+/*
+ * Dark, twice, for the reason above: the class is what the wire sets, and the
+ * media query only decides what an unframed page starts as before `main.tsx`
+ * has turned that answer into the class.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.985 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+
+    --paper: oklch(0.205 0.006 80);
+    --paper-foreground: oklch(0.94 0.008 80);
+    --paper-muted: oklch(0.71 0.01 80);
+    --paper-edge: oklch(1 0 0 / 12%);
+
+    --pencil: oklch(0.72 0.13 265);
+    --mark: oklch(0.78 0.12 80);
+    --code-bg: oklch(1 0 0 / 8%);
+  }
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+
+  --paper: oklch(0.205 0.006 80);
+  --paper-foreground: oklch(0.94 0.008 80);
+  --paper-muted: oklch(0.71 0.01 80);
+  --paper-edge: oklch(1 0 0 / 12%);
+
+  --pencil: oklch(0.72 0.13 265);
+  --mark: oklch(0.78 0.12 80);
+  --code-bg: oklch(1 0 0 / 8%);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-paper: var(--paper);
+  --color-paper-foreground: var(--paper-foreground);
+  --color-paper-muted: var(--paper-muted);
+  --color-paper-edge: var(--paper-edge);
+  --color-pencil: var(--pencil);
+  --color-mark: var(--mark);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-reading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, ui-serif, serif;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body {
+    background: var(--background);
+    color: var(--foreground);
+  }
+
+  /*
+   * The container every responsive rule in this app measures. Named, so a
+   * `@container pane` rule cannot accidentally attach itself to some nested
+   * container a component introduces later.
+   */
+  body {
+    container: pane / inline-size;
+    margin: 0;
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * Long, unbroken strings are the one thing that widens a pane past its frame:
+   * a `\texttt` span holding `roadmap-module-protocol`, a label like
+   * `sec:extraction`, a URL in a footnote. Breaking them is the honest fix —
+   * the whole string stays on screen, wrapped, rather than being clipped by an
+   * `overflow: hidden` that says nothing about what is missing.
+   */
+  p,
+  li,
+  h1,
+  h2,
+  h3,
+  h4,
+  summary,
+  code {
+    overflow-wrap: anywhere;
+  }
+}
+
+@layer components {
+  /* ---- The sheet ------------------------------------------------------- */
+
+  .sheet {
+    padding-inline: 1.25rem;
+    background: var(--paper);
+    color: var(--paper-foreground);
+    box-shadow:
+      0 0 0 1px var(--paper-edge),
+      0 10px 30px -18px rgb(0 0 0 / 45%);
+  }
+
+  .prose-reading {
+    font-family: var(--font-reading);
+    font-size: 1rem;
+    line-height: 1.7;
+    font-variant-numeric: oldstyle-nums proportional-nums;
+  }
+
+  /* ---- Gutter tags ----------------------------------------------------- */
+
+  /*
+   * The block's actual kind — structural truth, not decoration — revealed on
+   * hover so it never competes with reading. Excluded from selection, because
+   * letting a marker into a drag would put a stray `¶` into the passage the
+   * reader thinks they highlighted.
+   */
+  .gutter-mark {
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--paper-muted);
+    opacity: 0;
+    transition: opacity 140ms ease;
+  }
+  .block-row:hover .gutter-mark,
+  .gutter-tag:focus-visible .gutter-mark {
+    opacity: 0.7;
+  }
+
+  /*
+   * There is no room for a gutter beside the text in a narrow pane, so the tag
+   * is not drawn there at all. It is not moved inline: a `¶` in the reading
+   * flow is a character in the argument, which is exactly the confusion the
+   * tags exist to prevent.
+   */
+  .gutter-tag {
+    display: none;
+  }
+
+  /* ---- Notes: the pin, and the text behind it -------------------------- */
+
+  .note-pin {
+    color: var(--mark);
+    font-size: 0.72em;
+    vertical-align: super;
+    line-height: 1;
+    padding: 0 0.15em;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .note-pin:hover,
+  .note-pin[data-lit='true'] {
+    background: color-mix(in oklab, var(--mark) 22%, transparent);
+  }
+
+  /*
+   * The inline fallback. Where there is no rail, the note's text follows its
+   * pin in the reading flow rather than vanishing behind it — a pin pointing at
+   * nothing is a silent loss, and the worst kind, because the page still looks
+   * complete.
+   */
+  .note-inline {
+    display: inline;
+    color: var(--mark);
+    background: color-mix(in oklab, var(--mark) 12%, transparent);
+    padding: 0.05rem 0.2rem;
+    border-radius: 3px;
+  }
+
+  /*
+   * The same fallback for a source comment, which is a paragraph rather than a
+   * phrase and so needs a block box.
+   *
+   * It is a class of its own rather than `.note-inline` plus Tailwind's
+   * `block`, and that is not fussiness: utilities sit in a later cascade layer
+   * than components, so a `block` on the element would beat the `display: none`
+   * that hides it beside the rail, and the note's text would then be printed
+   * twice on any pane wide enough to have one.
+   */
+  .note-inline-block {
+    display: block;
+  }
+
+  .note-card {
+    border-left: 3px solid var(--mark);
+    background: color-mix(in oklab, var(--paper-foreground) 4%, transparent);
+    transition:
+      background-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+  .note-card[data-kind='comment'] {
+    border-left-color: var(--paper-edge);
+  }
+  .note-card:hover,
+  .note-card[data-lit='true'] {
+    background: color-mix(in oklab, var(--paper-foreground) 9%, transparent);
+    box-shadow: -6px 0 16px -12px var(--mark);
+  }
+
+  /*
+   * The leader line: the signature of the old reader. It connects a margin card
+   * to the exact text it marks, and draws itself only when that pair is active.
+   */
+  .leader-line {
+    position: absolute;
+    height: 1px;
+    background: repeating-linear-gradient(to right, var(--mark) 0 4px, transparent 4px 8px);
+    opacity: 0;
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition:
+      opacity 180ms ease,
+      transform 240ms cubic-bezier(0.2, 0, 0, 1);
+    pointer-events: none;
+  }
+  .leader-line[data-lit='true'] {
+    opacity: 0.85;
+    transform: scaleX(1);
+  }
+
+  /* The rail itself is absent below the threshold — see the container query. */
+  .margin-rail {
+    display: none;
+  }
+}
+
+/*
+ * The one width question this page asks, asked of the PANE.
+ *
+ * 700px is where a 300px rail plus a readable measure stop fighting each other,
+ * measured rather than guessed: below it the rail would either crush the text
+ * to forty characters or be too narrow to hold a sentence. Above it, the rail
+ * appears and the notes come out of the reading flow; below it, the notes stay
+ * inline exactly as they are now and the rail is not rendered at all.
+ */
+@container pane (min-width: 700px) {
+  .margin-rail {
+    display: block;
+  }
+  /*
+   * Room in the sheet's own left margin for the gutter tags.
+   *
+   * They are positioned outside the text column, which is what makes them a
+   * gutter rather than a prefix; without this the column starts at the sheet's
+   * edge and every tag is drawn off the left of the page, present in the DOM
+   * and invisible. Added only where the tags are shown, so a narrow pane does
+   * not pay for a margin nothing is in.
+   */
+  .sheet {
+    padding-left: 3.75rem;
+  }
+  .note-inline,
+  .note-inline-block {
+    display: none;
+  }
+  .gutter-tag {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .leader-line {
+    transform: scaleX(1);
+  }
+}

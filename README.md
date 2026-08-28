@@ -51,6 +51,56 @@ paper the next read shows.
   paper defines for itself (`\gh{111}` reads as `gh#111`, as it does in the
   PDF), and renders headings, prose, lists, figures, tables and annotations.
 
+## How it reads: pages, a margin, and a gutter
+
+The reader is React, Tailwind v4 and shadcn — the same stack as Checklist and
+for the same reason, which is that a control here should be the control it is
+everywhere else on the canvas.
+
+**Pages, not a scroll.** A paper is shown one sheet at a time, with a page
+indicator and next/previous, and the arrow keys turn it. Which blocks are on
+which sheet is a PURE FUNCTION of the block list (`src/reader/pages.ts`) —
+weighed in lines, packed to a budget, with a heading never left alone at the
+foot of a page. It is deliberately not measured. The reader this was rebuilt
+from laid a hidden copy of the chapter out and read real pixel heights, which is
+more accurate and re-packs itself every time the pane is resized or a font
+finishes loading; the reader on page 7 is then silently moved to page 6,
+mid-sentence, with no event they could point at. These breaks are an estimate
+either way — the compiled PDF's are the compiler's, not this program's — and the
+page says so under the controls. A stable estimate is worth more than an
+accurate one that moves.
+
+**A margin rail.** A `todonotes` macro is a margin note in the compiled PDF, and
+a run of `%` lines in these papers carries the reasoning behind the section under
+it. Both belong beside the text rather than in it, so each leaves a pin in the
+flow and its words go to a card in the rail, which draws a dashed leader line
+back to the exact pin when the pair is lit. Card placement is the one measured
+thing in the reader, and it is measured after pagination has already decided, so
+it cannot feed back.
+
+**In a narrow pane there is no rail**, and the note's text stays inline behind
+its pin as it did before — the fallback `parse.ts` argues for. That switch is a
+`@container` query, never a viewport breakpoint: this module is sized by its
+pane, and the pane is routinely 300 pixels wide inside a window that is two
+thousand. Both presentations are rendered and CSS shows exactly one, which keeps
+the width question out of the component tree entirely.
+
+**Gutter tags.** Every block carries a short tag naming its kind — `§` heading,
+`¶` paragraph, `fig`, `tab`, `eq`, `list`, `code`, `%`, `pre`, `inc`, `cmd`,
+`env` — revealed on hover. It is structural truth about how the LaTeX parsed,
+and the fastest way to see that what reads as a table was parsed as `unknown`.
+There is no room for a gutter in a narrow pane, so it is not drawn there; it is
+never moved inline, because a `¶` in the reading flow is a character in the
+argument.
+
+**Highlight a passage** and a small panel says what you selected and where it
+lives — `chapters/2_bridge.tex` bytes 4120–4380 — with a button that copies that
+citation. `≈` means the selection crossed a macro expansion and was widened
+outward to a boundary this program can justify rather than to a fabricated
+offset. It posts nothing: the panel it replaces queued work for an agent, and
+what was load-bearing about it was never the textarea, it was that a highlight in
+a browser can be turned into an exact place in a file on disk.
+
 ## What it does not do, on purpose
 
 **It writes nothing.** The program this was extracted from was a workbench: a
@@ -76,11 +126,19 @@ about.** So:
   saying plainly what the ticket does and does not separate. The essay is at the
   top of `doors.ts`.
 
-There is also no KaTeX. Not one of the eleven papers in this roadmap contains a
-`$`, an `equation` or an `align` — measured, not assumed — so an equation is
-shown as its own LaTeX in a monospace box rather than shipping a typesetting
-library for a case that does not occur. `parse.ts` keeps the raw LaTeX on the
-block, so the day a paper has maths in it, that is the one branch that changes.
+There is also no KaTeX. Not one of the twenty-two `.tex` files in this roadmap
+contains a `$`, an `equation` or an `align` — measured, not assumed — so an
+equation is shown as its own LaTeX in a monospace box rather than shipping a
+typesetting library for a case that does not occur. `parse.ts` keeps the raw
+LaTeX on the block, so the day a paper has maths in it, that is the one branch
+that changes.
+
+And there is no `tailwind.config.js`. Tailwind v4 is configured in CSS, in
+`src/index.css`, which is also where the dark variant is defined — as a class
+the wire sets from `roadmap.context.theme` rather than `prefers-color-scheme`,
+because the theme this page has to agree with is the roadmap's and not the
+reader's operating system's. The one place the media query is consulted is
+`main.tsx`, to decide what that class starts as on a page nobody is framing.
 
 ## Two fences on the epic name
 
@@ -119,11 +177,30 @@ manifest.ts     what a host reads, and the essays on storage and the protocol
 doors.ts        every door but the page, as one function with no socket
 store.ts        the papers directory, the two fences, \include folded in
 latex/parse.ts  LaTeX -> source-mapped blocks (carried over; see its own header)
-page/           document, styles, block rendering, and the one file that knows
-                about both the wire and the papers
+page/           the document shell, and nothing drawn in it
+src/
+  main.tsx      mounts React, seeds the theme, imports the mailbox for effect
+  app.tsx       the screens, the picker, the goto answer
+  use-paper.ts  the ONE place the wire and the papers meet
+  index.css     the theme, the dark variant, the container query
+  reader/       pages.ts (pure pagination), blocks.tsx (the gutter),
+                segments.tsx, notes.ts, rail.tsx, paginated.tsx, ask.tsx
+  lib/          selection.ts (a highlight -> a source range), utils.ts
+  components/ui shadcn's button and badge
 wire/           the mailbox and the bridge, copied from References and Journeys
-test/           parse, store, doors, wire — 70 tests, no browser needed
+test/           parse, store, doors, wire, reader — 90 tests, no browser needed
 ```
+
+`src/reader/` knows about LaTeX and nothing about the wire. `wire/` knows about
+the wire and nothing about papers. `use-paper.ts` is the only place the two meet,
+and deliberately the only one: two places deciding which paper is on screen would
+eventually disagree, and that is the one question this app cannot afford to be
+confused about.
+
+Everything the client imports from `store.ts` comes in with `import type`.
+`store.ts` imports `node:fs`, and a value import of it would put a `node:` module
+in the browser bundle — a page that loads, fires `load`, gets greeted and never
+answers, with `tsc` and `bun test` both perfectly happy. Only a browser sees it.
 
 ## The two bugs every module here has hit
 

@@ -1,0 +1,9 @@
+# A DOM for every test file, registered once.
+#
+# The reader's tests render the real components — which page a reader lands on,
+# which gutter tag a block gets, whether a note reached the rail — and the pure
+# ones do not care. A preload is cheaper to reason about than two suites with
+# different globals: the failure where a component test runs without a document
+# is a stack trace nobody reads as "wrong config".
+[test]
+preload = ["./test/setup.ts"]

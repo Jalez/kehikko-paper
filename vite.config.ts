@@ -1,5 +1,8 @@
 import type { IncomingMessage } from 'node:http'
+import { resolve } from 'node:path'
 
+import tailwindcss from '@tailwindcss/vite'
+import react from '@vitejs/plugin-react'
 import { WELL_KNOWN } from 'roadmap-module-protocol'
 import { defineConfig, type Plugin } from 'vite'
 
@@ -206,6 +209,17 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown> |
  * the package's `exports` are correct, reaching past them is what made a whole
  * class of bug possible, and a module that resolved its contract differently
  * from the host it talks to is a module testing something nobody ships.
+ *
+ * The `@` alias below is a different thing entirely — it points inside this
+ * repository, at `src`, and exists because shadcn's own components are
+ * generated with `@/lib/utils` in them and a module rewritten by hand on every
+ * `shadcn add` is a module that drifts from upstream.
+ *
+ * ## Tailwind is configured in CSS, and there is no `tailwind.config.js`
+ *
+ * v4 reads `src/index.css`: the theme, the dark variant and the container
+ * queries all live there. A config file would be a second place the theme lives
+ * and the failure mode of two is that one of them is the one somebody edits.
  */
 export default defineConfig({
   /**
@@ -216,6 +230,7 @@ export default defineConfig({
    * just fetched.
    */
   base: './',
-  plugins: [doors()],
+  plugins: [doors(), react(), tailwindcss()],
+  resolve: { alias: { '@': resolve(import.meta.dirname, 'src') } },
   build: { outDir: 'dist', emptyOutDir: true },
 })

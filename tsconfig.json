@@ -4,6 +4,7 @@
     "target": "ESNext",
     "module": "Preserve",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
@@ -11,7 +12,9 @@
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
-    "types": ["bun", "vite/client"]
+    "types": ["bun", "vite/client"],
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["latex", "page", "wire", "test", "doors.ts", "manifest.ts", "register.ts", "store.ts", "vite.config.ts"]
+  "include": ["latex", "page", "src", "wire", "test", "doors.ts", "manifest.ts", "register.ts", "store.ts", "vite.config.ts"]
 }
