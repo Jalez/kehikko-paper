@@ -1,5 +1,14 @@
 import { ID, MANIFEST, VERSION } from './manifest.ts'
-import { isEpic, listPapers, papersDir, readPaper, readSource } from './store.ts'
+import {
+  isEpic,
+  listPapers,
+  papersDir,
+  readFigure,
+  readPaper,
+  readSource,
+  thesisRoot,
+  type PaperRoot,
+} from './store.ts'
 
 /**
  * Every door this app answers on that is not the page itself.
@@ -79,6 +88,19 @@ export interface Reply {
   status: number
   /** `null` means "answer with no body", which is what a notification gets. */
   body: unknown
+  /**
+   * An image, when the answer is one, with the content type to send it under.
+   *
+   * The one non-JSON answer this app has. It is a separate field rather than a
+   * `body` that is sometimes bytes so that the adapter cannot serve an image
+   * as `application/json` or a refusal as `image/png` by forgetting a branch —
+   * a refusal here is still an ordinary JSON `body`, and `binary` is present
+   * only when there really are bytes.
+   *
+   * The type comes from `store.ts`'s extension table and never from the bytes.
+   * See the essay there.
+   */
+  binary?: { bytes: Uint8Array; type: string }
 }
 
 const ok = (body: unknown): Reply => ({ status: 200, body })
@@ -95,7 +117,9 @@ const bad = (why: string, status = 400): Reply => ({ status, body: { ok: false, 
  */
 const UNCONFIGURED =
   'This app has not been told where the papers are. Set KEHIKKO_PAPERS_DIR to the directory holding one ' +
-  'folder per epic, or KEHIKKO_ROADMAP_DIR to a roadmap checkout, and restart it.'
+  'folder per epic, or KEHIKKO_ROADMAP_DIR to a roadmap checkout. For a single document that is not part of ' +
+  'a roadmap — a thesis, with its own main.tex at the top of its own repository — set KEHIKKO_THESIS_DIR to ' +
+  'that directory instead, or as well. Then restart it.'
 
 /* ------------------------------------------------------------------ *
  * The MCP door
@@ -103,6 +127,28 @@ const UNCONFIGURED =
 
 interface ToolCall {
   (args: Record<string, unknown>): string
+}
+
+/**
+ * Where this process may read, as one question with one answer.
+ *
+ * There are two roots now — the papers directory and, optionally, one thesis —
+ * and every door below needs both. Asking separately in seven places is how one
+ * door ends up handling one root and not the other, and that failure is not a
+ * crash: it is a tool answering "nobody has told me where to look" while the
+ * page beside it is showing the paper. `configured` is the disjunction for
+ * exactly that reason — somebody who set only `KEHIKKO_THESIS_DIR` has
+ * configured this app perfectly well.
+ */
+function where(): { dir: string | null; thesis: PaperRoot | null; configured: boolean } {
+  const dir = papersDir()
+  const thesis = thesisRoot()
+  return { dir, thesis, configured: dir !== null || thesis !== null }
+}
+
+/** The places this process is reading from, for a sentence in a refusal. */
+function places(w: { dir: string | null; thesis: PaperRoot | null }): string {
+  return [w.dir, w.thesis?.dir].filter(Boolean).join(' and ') || 'nowhere'
 }
 
 /**
@@ -132,10 +178,10 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       'is not the same as an epic that does not exist.',
     schema: { type: 'object', properties: {} },
     run() {
-      const dir = papersDir()
-      if (!dir) return UNCONFIGURED
-      const all = listPapers(dir)
-      if (!all.length) return `No papers under ${dir}.`
+      const w = where()
+      if (!w.configured) return UNCONFIGURED
+      const all = listPapers(w.dir, w.thesis)
+      if (!all.length) return `No papers under ${places(w)}.`
       return all.map((p) => `${p.epic}\t${p.files} file(s)\t${p.title ?? '(no \\title)'}`).join('\n')
     },
   },
@@ -154,11 +200,12 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
     run(args) {
       const epic = str(args.epic, MAX_SLUG)
       if (!isEpic(epic)) return 'that is not an epic name'
-      const dir = papersDir()
-      if (!dir) return UNCONFIGURED
-      const paper = readPaper(epic, dir)
+      const w = where()
+      if (!w.configured) return UNCONFIGURED
+      const paper = readPaper(epic, w.dir, w.thesis)
       if (!paper) {
-        return `no paper for "${epic}" here. Known: ${listPapers(dir).map((p) => p.epic).join(', ')}`
+        const known = listPapers(w.dir, w.thesis).map((p) => p.epic).join(', ')
+        return `no paper for "${epic}" here. Known: ${known}`
       }
       const lines: string[] = [`# ${paper.title ?? paper.epic}`, '']
       for (const block of paper.blocks) {
@@ -204,12 +251,12 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
     run(args) {
       const epic = str(args.epic, MAX_SLUG)
       if (!isEpic(epic)) return 'that is not an epic name'
-      const dir = papersDir()
-      if (!dir) return UNCONFIGURED
-      const paper = readPaper(epic, dir)
+      const w = where()
+      if (!w.configured) return UNCONFIGURED
+      const paper = readPaper(epic, w.dir, w.thesis)
       if (!paper) return `no paper for "${epic}" here`
       const file = str(args.file, MAX_PATH) || 'main.tex'
-      const source = readSource(epic, file, dir)
+      const source = readSource(epic, file, w.dir, w.thesis)
       if (source === null) {
         return `"${epic}" does not name a file called "${file}". It is made of: ${paper.files.join(', ')}`
       }
@@ -323,7 +370,26 @@ export function answer(
      * is written to avoid: an app that says "no epics" and quietly means "I was
      * not configured" has told somebody the opposite of the truth.
      */
-    return ok({ ok: true, configured: dir !== null, dir, papers: listPapers(dir) })
+    const thesis = thesisRoot()
+    /*
+     * `configured` is true if EITHER root was named, not only the first.
+     *
+     * The second root made this a real bug rather than a nicety: somebody with
+     * only `KEHIKKO_THESIS_DIR` set has configured this app perfectly well, and
+     * a `configured: false` beside a non-empty `papers` list would put the
+     * page's "nobody has told me where to look" screen in front of a reader
+     * whose thesis is sitting right there in the list. `dir` stays exactly what
+     * it was — the papers directory or null — because the page prints it in the
+     * unconfigured screen, and inventing a directory there would be worse than
+     * printing none.
+     */
+    return ok({
+      ok: true,
+      configured: dir !== null || thesis !== null,
+      dir,
+      thesis: thesis?.dir ?? null,
+      papers: listPapers(dir, thesis),
+    })
   }
 
   if (path === '/api/paper' && method === 'GET') {
@@ -332,18 +398,50 @@ export function answer(
        distinguished "no such paper" from "not an epic name" would be a way to
        enumerate what is on this disk. */
     if (!isEpic(epic)) return bad('that is not an epic name')
-    const dir = papersDir()
-    if (!dir) return { status: 503, body: { ok: false, error: UNCONFIGURED, configured: false } }
-    const paper = readPaper(epic, dir)
-    if (!paper) return bad(`no paper for "${epic}" under ${dir}`, 404)
+    const w = where()
+    if (!w.configured) return { status: 503, body: { ok: false, error: UNCONFIGURED, configured: false } }
+    const paper = readPaper(epic, w.dir, w.thesis)
+    if (!paper) return bad(`no paper for "${epic}" under ${places(w)}`, 404)
     return ok({ ok: true, paper })
+  }
+
+  if (path === '/api/figure' && method === 'GET') {
+    /*
+     * The only door here that answers with something other than JSON, and the
+     * only one that reads a file the paper did not `\\include`.
+     *
+     * The reading view used to draw a dashed box with a filename in it for
+     * every figure, and the comment explaining why said serving the image would
+     * mean "a door that reads arbitrary files out of somebody else's tree and
+     * answers them with a guessed content type". That is the right objection
+     * and it is answered rather than overruled: the file must be one the paper
+     * itself named (`Paper.figures`), the type is a constant looked up by
+     * extension in `store.ts` rather than guessed, SVG and PDF are refused
+     * outright, and `confine` still stands underneath all three.
+     *
+     * `nosniff` and a `default-src 'none'` policy ride along because a browser
+     * that decides for itself what these bytes are would undo the third check
+     * on its own.
+     */
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const file = str(query.get('file'), MAX_PATH)
+    if (!file) return bad('which figure')
+    const figure = readFigure(epic, file)
+    /* One refusal for "no such paper", "the paper does not name that file" and
+       "this app will not serve that kind of file", for the reason every other
+       refusal here is undifferentiated: a reply that distinguished them would
+       report what is on this disk. */
+    if (!figure) return bad('that paper does not name a figure by that name', 404)
+    return { status: 200, body: null, binary: figure }
   }
 
   if (path === '/api/source' && method === 'GET') {
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const file = str(query.get('file'), MAX_PATH) || 'main.tex'
-    const source = readSource(epic, file, papersDir())
+    const w = where()
+    const source = readSource(epic, file, w.dir, w.thesis)
     if (source === null) return bad('that paper does not name a file by that name', 404)
     return ok({ ok: true, epic, file, source })
   }

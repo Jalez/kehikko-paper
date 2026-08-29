@@ -26,6 +26,16 @@
 # and says on its own page what to set — a misconfiguration that announces
 # itself is worth far more than one that renders an empty world convincingly.
 #
+# `KEHIKKO_THESIS_DIR` is a SECOND root and names one document rather than a
+# directory of them: a `main.tex` at the top of its own repository, with
+# `chapters/`, `figures/` and a `references.bib` beside it. That is the shape
+# `../05_drafts/thesis_latex` actually has, and it is why the compiled-in
+# default could not simply become a compiled-in `KEHIKKO_PAPERS_DIR` — the
+# thesis has no parent directory full of sibling papers to point at. Setting it
+# is still somebody's decision, made outside this file; the essay on
+# `thesisRoot` in `store.ts` says why it is a variable and not a symlink.
+# `KEHIKKO_THESIS_EPIC` renames the slug it answers to; it defaults to `thesis`.
+#
 # It does NOT register. Registration is a deliberate act by a person — see
 # `register.ts` — and a start script that quietly wrote into somebody's home
 # directory would be doing it on their behalf.
@@ -55,8 +65,8 @@ if [ ! -d node_modules ]; then
   bun install >&2
 fi
 
-if [ -z "${KEHIKKO_PAPERS_DIR:-}" ] && [ -z "${KEHIKKO_ROADMAP_DIR:-}" ]; then
-  echo "paper: neither KEHIKKO_PAPERS_DIR nor KEHIKKO_ROADMAP_DIR is set." >&2
+if [ -z "${KEHIKKO_PAPERS_DIR:-}" ] && [ -z "${KEHIKKO_ROADMAP_DIR:-}" ] && [ -z "${KEHIKKO_THESIS_DIR:-}" ]; then
+  echo "paper: none of KEHIKKO_PAPERS_DIR, KEHIKKO_ROADMAP_DIR or KEHIKKO_THESIS_DIR is set." >&2
   echo "paper: starting anyway; the page will say so rather than pretending there are no papers." >&2
 fi
 

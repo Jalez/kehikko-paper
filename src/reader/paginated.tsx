@@ -121,7 +121,7 @@ export function PaginatedView({ paper, page, onPage, lit, onLit, sheetRef }: Pag
             </header>
           )}
           {blocks.map((block) => (
-            <BlockRow key={`${block.file}#${block.id}`} block={block} lit={lit} onNote={onLit} />
+            <BlockRow key={`${block.file}#${block.id}`} block={block} epic={paper.epic} lit={lit} onNote={onLit} />
           ))}
           {!blocks.length && (
             <p className="text-[0.85rem] text-[var(--paper-muted)]">This paper parsed to nothing a reader can see.</p>

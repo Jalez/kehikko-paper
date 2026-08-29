@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import type { Block } from '../../latex/parse.ts'
 import type { PlacedBlock } from '../../store.ts'
 import { cn } from '@/lib/utils.ts'
@@ -66,11 +68,21 @@ const HEADING_SIZE = [
 
 export interface BlockProps {
   block: PlacedBlock
+  /**
+   * Which paper this block belongs to.
+   *
+   * Only the figure case reads it, and it is threaded as a prop rather than
+   * read from a context because a block that could be drawn without knowing
+   * which document it came from would build an image URL out of a guess. The
+   * server checks the pair anyway — see `/api/figure` — so a wrong epic here
+   * produces a 404 and the fallback box rather than somebody else's picture.
+   */
+  epic: string
   lit: string | null
   onNote: (key: string | null) => void
 }
 
-export function BlockRow({ block, lit, onNote }: BlockProps) {
+export function BlockRow({ block, epic, lit, onNote }: BlockProps) {
   return (
     <div className="block-row group relative" data-block-id={anchorId(block.file, block.id)}>
       <div
@@ -80,12 +92,12 @@ export function BlockRow({ block, lit, onNote }: BlockProps) {
       >
         <span className="gutter-mark">{GUTTER[block.kind]}</span>
       </div>
-      <BlockBody block={block} lit={lit} onNote={onNote} />
+      <BlockBody block={block} epic={epic} lit={lit} onNote={onNote} />
     </div>
   )
 }
 
-function BlockBody({ block, lit, onNote }: BlockProps) {
+function BlockBody({ block, epic, lit, onNote }: BlockProps) {
   const seg = { file: block.file, blockId: block.id, lit, onNote }
   const id = anchorId(block.file, block.id)
 
@@ -163,22 +175,7 @@ function BlockBody({ block, lit, onNote }: BlockProps) {
       return (
         <figure id={id} className="my-6">
           {block.graphics.map((graphic) => (
-            /*
-             * The filename, in a box, rather than an `<img>`.
-             *
-             * Serving the image would mean a door that reads arbitrary files
-             * out of somebody else's tree and answers them with a guessed
-             * content type — the exact hazard `store.ts` spends two fences
-             * avoiding, reintroduced for a picture. Naming the file says what
-             * is there and where to find it, which is what a reader in a 240px
-             * pane can act on anyway.
-             */
-            <div
-              key={graphic}
-              className="rounded-md border border-dashed border-[var(--paper-edge)] px-3 py-4 text-center font-mono text-[0.75rem] text-[var(--paper-muted)]"
-            >
-              figure: {graphic}
-            </div>
+            <Graphic key={graphic} epic={epic} file={graphic} />
           ))}
           {block.caption.length > 0 && (
             <figcaption className="mt-2 text-[0.8rem] leading-snug text-[var(--paper-muted)]">
@@ -258,7 +255,17 @@ function BlockBody({ block, lit, onNote }: BlockProps) {
           >
             %
           </button>
-          <span className="note-inline-block ml-1 border-l-2 border-[var(--paper-edge)] pl-3 text-[0.82rem] leading-relaxed whitespace-pre-wrap text-[var(--paper-muted)]">
+          {/*
+           * `pre-wrap` keeps the author's own line breaks, which is the point
+           * of showing a comment at all — and it does NOT break a run with no
+           * spaces in it. Every roadmap paper's comments are prose, so that
+           * never showed; the thesis opens its files with
+           * `% ==============================…` banner rules sixty characters
+           * wide, and a 220px pane then scrolled sideways by four hundred
+           * pixels with nothing on screen looking wrong. `anywhere` breaks the
+           * rule and leaves ordinary sentences wrapping at spaces as before.
+           */}
+          <span className="note-inline-block ml-1 border-l-2 border-[var(--paper-edge)] pl-3 text-[0.82rem] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-[var(--paper-muted)]">
             {block.text}
           </span>
         </div>
@@ -281,4 +288,58 @@ function BlockBody({ block, lit, onNote }: BlockProps) {
          page agree about what is on it. */
       return null
   }
+}
+
+
+/**
+ * The raster image types this page will ASK for.
+ *
+ * Deliberately the same list as `IMAGE_TYPES` in `store.ts`, and deliberately a
+ * second copy of it rather than an import: importing would drag `store.ts` —
+ * and with it `node:fs` — into the browser bundle, which is the failure mode
+ * this codebase has hit before and which neither `tsc` nor `bun test` can see.
+ * The server is the authority; this list only decides whether to render an
+ * `<img>` at all, and being wrong about it costs a fallback box rather than a
+ * broken picture.
+ */
+const DRAWABLE = /\.(png|jpe?g|gif|webp)$/i
+
+/**
+ * One `\includegraphics` target, as a picture when it can be one.
+ *
+ * Three states and all three are visible:
+ *
+ *  - A raster the server will serve: an `<img>`, with the filename underneath
+ *    in the same monospace it always had, because a reader comparing the page
+ *    to the source still needs to know which file this is.
+ *  - A PDF or an SVG: the filename box, unchanged, because the server refuses
+ *    those on purpose — see the essay on `IMAGE_TYPES`. The thesis on this
+ *    machine has one PDF figure, so this branch is live rather than theoretical.
+ *  - A raster that failed to load: the box, via `onError`. A broken-image glyph
+ *    with no explanation is the one outcome worth ruling out, because it looks
+ *    like the reader's browser is broken rather than like the file is missing.
+ */
+function Graphic({ epic, file }: { epic: string; file: string }) {
+  const [failed, setFailed] = useState(false)
+  const box = (
+    <div className="rounded-md border border-dashed border-[var(--paper-edge)] px-3 py-4 text-center font-mono text-[0.75rem] break-all text-[var(--paper-muted)]">
+      figure: {file}
+    </div>
+  )
+  if (failed || !DRAWABLE.test(file)) return box
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <img
+        src={`/api/figure?epic=${encodeURIComponent(epic)}&file=${encodeURIComponent(file)}`}
+        alt={file}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        /* `max-w-full` and an `auto` height so a 1400px-wide plot in a 220px
+           pane scales instead of pushing the whole column sideways. Horizontal
+           overflow in a reading view is the bug this pane is measured for. */
+        className="h-auto max-w-full rounded-md border border-[var(--paper-edge)] bg-white"
+      />
+      <span className="font-mono text-[0.7rem] break-all text-[var(--paper-muted)]">{file}</span>
+    </div>
+  )
 }

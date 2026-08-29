@@ -177,7 +177,12 @@ export function MarginRail({ notes, sheetRef, lit, onLit }: Props) {
               >
                 {note.kind === 'todo' ? 'todo' : 'source comment'}
               </span>
-              <p className="mt-1 text-[0.78rem] leading-snug text-[var(--paper-foreground)]">{note.text}</p>
+              {/* `anywhere` for the reason given beside the inline note in
+                  `blocks.tsx`: a source comment can be a banner rule with no
+                  spaces in it, and the rail is narrower than the text column. */}
+              <p className="mt-1 text-[0.78rem] leading-snug [overflow-wrap:anywhere] text-[var(--paper-foreground)]">
+                {note.text}
+              </p>
             </div>
           </div>
         )

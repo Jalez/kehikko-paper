@@ -35,13 +35,36 @@ beforeAll(() => {
       '\\end{document}',
     ].join('\n'),
   )
+  /* A second root, of the shape a thesis actually has: one document at the top
+     of its own directory with a `figures/` folder beside it, rather than a
+     subdirectory of a directory of papers. */
+  mkdirSync(join(root, 'thesis', 'figures'), { recursive: true })
+  writeFileSync(
+    join(root, 'thesis', 'main.tex'),
+    [
+      '\\title{A thesis}',
+      '\\begin{document}',
+      '\\begin{figure}',
+      '\\includegraphics{figures/plot.png}',
+      '\\caption{A plot.}',
+      '\\end{figure}',
+      '\\end{document}',
+    ].join('\n'),
+  )
+  writeFileSync(join(root, 'thesis', 'figures', 'plot.png'), PNG)
+  writeFileSync(join(root, 'thesis', 'figures', 'private.png'), PNG)
   process.env.KEHIKKO_PAPERS_DIR = papers
+  process.env.KEHIKKO_THESIS_DIR = join(root, 'thesis')
 })
 
 afterAll(() => {
   delete process.env.KEHIKKO_PAPERS_DIR
+  delete process.env.KEHIKKO_THESIS_DIR
   rmSync(root, { recursive: true, force: true })
 })
+
+/** The PNG signature, so a served figure can be checked byte for byte. */
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 const get = (path: string, query = '') => answer('GET', path, new URLSearchParams(query), null)
 const post = (path: string, body: Record<string, unknown> | null) =>
@@ -54,7 +77,15 @@ describe('there is no write path', () => {
    * fails and whoever added it has to come and read the essay in `doors.ts`
    * about the ticket, the origin and the CORS header that must arrive with it.
    */
-  test.each(['/api/edits', '/api/paper', '/api/papers', '/api/source', '/api/notice', '/api/work'])(
+  test.each([
+    '/api/edits',
+    '/api/paper',
+    '/api/papers',
+    '/api/source',
+    '/api/figure',
+    '/api/notice',
+    '/api/work',
+  ])(
     'POST %s is refused',
     (path) => {
       const reply = post(path, { anything: 'at all' })
@@ -79,9 +110,15 @@ describe('the ordinary doors', () => {
   test('the paper list says whether anybody has configured this', () => {
     /* Two fields, not one empty list. "No papers here" and "nobody said where to
        look" are different sentences and the page draws different screens. */
-    const body = get('/api/papers')?.body as { configured: boolean; papers: unknown[] }
+    const body = get('/api/papers')?.body as {
+      configured: boolean
+      papers: { epic: string }[]
+    }
     expect(body.configured).toBe(true)
-    expect(body.papers).toHaveLength(1)
+    /* Both roots, in one list, because a picker is a list of papers and not a
+       list of the variables that were set. Which root a paper came from is this
+       file's business and never the reader's. */
+    expect(body.papers.map((p) => p.epic).sort()).toEqual(['a-paper', 'thesis'])
   })
 
   test('one paper comes back parsed, with its chapters in reading order', () => {
@@ -158,5 +195,61 @@ describe('the MCP door', () => {
 
   test('a GET on the MCP door is refused', () => {
     expect(get('/mcp')?.status).toBe(405)
+  })
+})
+
+describe('the figure door', () => {
+  /*
+   * The only door here that answers with something other than JSON, and the
+   * only one that opens a file the paper did not `\include`.
+   *
+   * The reading view used to draw a dashed box with a filename in it for every
+   * figure, and the comment saying why called serving the image "a door that
+   * reads arbitrary files out of somebody else's tree and answers them with a
+   * guessed content type". These tests are the answer to that objection rather
+   * than a repeal of it: named-by-the-paper, typed from a table, extension
+   * allowlisted, confined. Take any one of the four away and one of these
+   * fails.
+   */
+
+  test('a raster the paper named comes back as bytes with a type, not as JSON', () => {
+    const reply = get('/api/figure', 'epic=thesis&file=figures%2Fplot.png')
+    expect(reply?.status).toBe(200)
+    expect(reply?.body).toBeNull()
+    expect(reply?.binary?.type).toBe('image/png')
+    expect(Buffer.from(reply!.binary!.bytes).equals(PNG)).toBe(true)
+  })
+
+  test('a file sitting beside it that the paper never named is refused', () => {
+    /* The check that stops this being a file server. `figures/private.png`
+       exists, is a PNG, and is inside the root; it is refused because the paper
+       does not name it. */
+    const reply = get('/api/figure', 'epic=thesis&file=figures%2Fprivate.png')
+    expect(reply?.status).toBe(404)
+    expect(reply?.binary).toBeUndefined()
+  })
+
+  test('a refusal is still JSON, so no branch can serve an error as an image', () => {
+    for (const query of [
+      'epic=thesis&file=..%2F..%2Fetc%2Fpasswd',
+      'epic=thesis&file=main.tex',
+      'epic=thesis',
+    ]) {
+      const reply = get('/api/figure', query)
+      expect(reply?.binary).toBeUndefined()
+      expect(reply?.status).toBeGreaterThanOrEqual(400)
+    }
+  })
+
+  test('an epic name that is not one is refused before any filesystem call', () => {
+    expect(get('/api/figure', 'epic=..%2F..&file=figures%2Fplot.png')?.status).toBe(400)
+  })
+
+  test('one root cannot be asked for the other root’s figure', () => {
+    /* Both roots are configured in this file. `a-paper` lives under the papers
+       directory and names no figures at all; asking for the thesis's figure
+       under its slug must not resolve, because a union of roots is exactly what
+       a second root must not become. */
+    expect(get('/api/figure', 'epic=a-paper&file=figures%2Fplot.png')?.status).toBe(404)
   })
 })

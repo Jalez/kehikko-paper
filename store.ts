@@ -46,6 +46,106 @@ export function papersDir(env: Record<string, string | undefined> = process.env)
   return null
 }
 
+/** A directory holding one paper: a `main.tex` and whatever it includes. */
+export interface PaperRoot {
+  /** The slug this paper answers to on the wire. */
+  epic: string
+  /** The directory `main.tex` sits in. Every path is confined to THIS. */
+  dir: string
+}
+
+/**
+ * A second readable root, naming ONE paper rather than a directory of them.
+ *
+ * ## Why this is a second source and not a thirteenth subdirectory
+ *
+ * `KEHIKKO_PAPERS_DIR` names a directory of directories: one per epic, each
+ * with a `main.tex` inside. A thesis on this machine is not shaped like that.
+ * It is a single document — `main.tex`, `chapters/`, `figures/`, a `.cls` and a
+ * `references.bib` — living in a repository of its own with its own history,
+ * and it is the ONLY thing in that repository. There is no parent directory
+ * full of siblings to point at.
+ *
+ * The three ways to force it into the existing model are all worse than a
+ * second variable:
+ *
+ *  - Point `KEHIKKO_PAPERS_DIR` at the thesis's parent (`05_drafts/`). That
+ *    makes every unrelated sibling folder a candidate epic and, worse, makes
+ *    the confinement root the parent — so `\include{../thesis_latex/…}` from a
+ *    neighbouring folder would resolve INSIDE the root and be served. The fence
+ *    would still be doing its job and the job would have become the wrong one.
+ *  - Symlink the thesis into `data/papers/thesis`. `confine` realpaths the
+ *    root, so this works — and it works by asking the author to put a link to
+ *    their thesis inside the roadmap's own data directory, which is a change to
+ *    somebody else's repository made so that this app did not have to grow a
+ *    variable.
+ *  - Copy it in. That is the one thing the essay at the top of this file exists
+ *    to forbid.
+ *
+ * So: a second root, confined separately, with its own slug. `roots()` below is
+ * where the two meet, and the meeting is a list rather than a merge — nothing
+ * resolves a path against more than the one root it belongs to.
+ *
+ * The slug defaults to `thesis` and is overridable, because a canvas whose epic
+ * is called something else should be able to say so, and because two people
+ * with two theses on one machine is not this app's problem to have an opinion
+ * about. It goes through `isEpic` like everything else: a slug from the
+ * environment is no more trustworthy than a slug from a URL, it just arrives
+ * from somebody standing closer.
+ */
+export function thesisRoot(env: Record<string, string | undefined> = process.env): PaperRoot | null {
+  const dir = env.KEHIKKO_THESIS_DIR
+  if (!dir) return null
+  const epic = env.KEHIKKO_THESIS_EPIC ?? 'thesis'
+  if (!isEpic(epic)) return null
+  if (!existsSync(join(dir, MAIN))) return null
+  return { epic, dir: resolve(dir) }
+}
+
+/**
+ * Every root this process may read, papers directory first.
+ *
+ * The order matters exactly once: if somebody sets `KEHIKKO_THESIS_EPIC` to a
+ * slug that also exists under the papers directory, the papers directory wins
+ * and the thesis becomes unreachable rather than shadowing something. A
+ * collision is a misconfiguration either way; this way the thing that was
+ * already there keeps working, and the new variable is the one that visibly
+ * does nothing.
+ */
+export function roots(
+  dir: string | null = papersDir(),
+  thesis: PaperRoot | null = thesisRoot(),
+): PaperRoot[] {
+  const out: PaperRoot[] = []
+  const seen = new Set<string>()
+  if (dir) {
+    let entries: string[] = []
+    try {
+      entries = readdirSync(dir)
+    } catch {
+      entries = []
+    }
+    for (const entry of entries.sort()) {
+      if (!isEpic(entry) || seen.has(entry)) continue
+      const root = confine(dir, entry)
+      if (!root) continue
+      seen.add(entry)
+      out.push({ epic: entry, dir: root })
+    }
+  }
+  if (thesis && !seen.has(thesis.epic)) {
+    /* Confined against ITSELF, which is what `confine(root, '.')` asks: does
+       this directory resolve, through every symlink on the way, to itself. A
+       `KEHIKKO_THESIS_DIR` that is a symlink is fine — it is the person who
+       started this program naming a place. What is not fine is skipping the
+       realpath, because every later `confine` inside this root compares
+       against it. */
+    const real = confine(thesis.dir, '.')
+    if (real) out.push({ epic: thesis.epic, dir: real })
+  }
+  return out
+}
+
 /**
  * A slug, checked before it is put in a path.
  *
@@ -137,6 +237,8 @@ export interface Paper {
   outline: { id: string; level: number; text: string }[]
   /** Every file that was opened, in the order it was reached. */
   files: string[]
+  /** Every `\includegraphics` target the paper names, in document order. */
+  figures: string[]
 }
 
 /**
@@ -152,18 +254,13 @@ export interface Paper {
  * Sorted by slug so the list is stable between calls. A picker that reordered
  * itself on every read looks like a page that is flickering.
  */
-export function listPapers(dir: string | null = papersDir()): PaperBrief[] {
-  if (!dir) return []
-  let entries: string[]
-  try {
-    entries = readdirSync(dir)
-  } catch {
-    return []
-  }
+export function listPapers(
+  dir: string | null = papersDir(),
+  thesis: PaperRoot | null = thesisRoot(),
+): PaperBrief[] {
   const out: PaperBrief[] = []
-  for (const entry of entries.sort()) {
-    if (!isEpic(entry)) continue
-    const main = confine(dir, join(entry, MAIN))
+  for (const root of roots(dir, thesis)) {
+    const main = confine(root.dir, MAIN)
     if (!main || !existsSync(main)) continue
     let source: string
     let bytes: number
@@ -176,7 +273,7 @@ export function listPapers(dir: string | null = papersDir()): PaperBrief[] {
       continue
     }
     out.push({
-      epic: entry,
+      epic: root.epic,
       title: braced(source, 'title'),
       files: 1 + includeTargets(source).length,
       bytes,
@@ -218,6 +315,12 @@ function braced(source: string, command: string): string | null {
            in the picker and the same title in the reading view are one string
            rather than two that usually agree. */
         const text = raw
+          /* `\\` is a line break in a title, not a command — the loop above
+             skips it as an escape, so it survives to here and would otherwise
+             be printed literally in the picker. The thesis on this machine has
+             two of them in `\title{}`. A break becomes a space, because the
+             picker's title is one line. */
+          .replace(/\\\\/g, ' ')
           .replace(/\\[a-zA-Z]+\s*/g, '')
           .replace(/[{}]/g, '')
           .replace(/\s+/g, ' ')
@@ -257,9 +360,15 @@ function includeTargets(source: string): string[] {
  * a sentence a reader can act on; silently skipping it would present a paper
  * with a hole in it as a complete one.
  */
-export function readPaper(epic: string, dir: string | null = papersDir()): Paper | null {
-  if (!dir || !isEpic(epic)) return null
-  const main = confine(dir, join(epic, MAIN))
+export function readPaper(
+  epic: string,
+  dir: string | null = papersDir(),
+  thesis: PaperRoot | null = thesisRoot(),
+): Paper | null {
+  if (!isEpic(epic)) return null
+  const root = roots(dir, thesis).find((r) => r.epic === epic)?.dir
+  if (!root) return null
+  const main = confine(root, MAIN)
   if (!main || !existsSync(main)) return null
 
   let source: string
@@ -270,7 +379,6 @@ export function readPaper(epic: string, dir: string | null = papersDir()): Paper
     return null
   }
 
-  const root = join(dir, epic)
   /*
    * The macros come out of `main.tex` and are handed to every chapter.
    *
@@ -334,7 +442,108 @@ export function readPaper(epic: string, dir: string | null = papersDir()): Paper
         .trim(),
     }))
 
-  return { epic, title: braced(source, 'title'), author: braced(source, 'author'), blocks, outline, files }
+  /*
+   * Every image the paper names, collected once here rather than recomputed.
+   *
+   * It is the `readSource` argument applied to pictures: `/api/figure` checks a
+   * requested file against THIS list and not against the filesystem, so "show
+   * the figures in this paper" cannot become "serve any file under this
+   * directory". A `figures/` folder holding a private PDF the author never
+   * included stays unreachable, because the paper never named it.
+   */
+  const figures: string[] = []
+  for (const block of blocks) {
+    if (block.kind !== 'figure') continue
+    for (const graphic of block.graphics) if (!figures.includes(graphic)) figures.push(graphic)
+  }
+
+  return {
+    epic,
+    title: braced(source, 'title'),
+    author: braced(source, 'author'),
+    blocks,
+    outline,
+    files,
+    figures,
+  }
+}
+
+/**
+ * The image types this app will hand back, and the two it deliberately will not.
+ *
+ * The content type is looked up here rather than sniffed or guessed from the
+ * bytes, because a guessed type is how a file that is not what it claims gets
+ * executed as what it claims. A file whose extension is not in this table is
+ * not served at all — the reading view keeps showing its filename in a box,
+ * which is what it did for every figure before this door existed.
+ *
+ * SVG is absent on purpose and it is the interesting omission. An SVG is a
+ * document, it can carry `<script>`, and this app serves it from
+ * `127.0.0.1:7870` — the same origin as its own `/api`. A paper that included a
+ * hostile SVG would get script execution against this module's origin, which is
+ * precisely the origin `manifest.ts` argues so carefully for keeping.
+ *
+ * PDF is absent for a duller reason and one honest one. `<img>` cannot draw it,
+ * so serving it would mean an `<object>` or an iframe — an embedded viewer on
+ * this origin, which is the same hazard as the SVG with a bigger attack
+ * surface. The thesis on this machine has one PDF figure and three PNGs; the
+ * PDF keeps its filename box, and that is a visible, explicable gap rather than
+ * a silent one.
+ */
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+
+/** A bound on one image, for the reason `MAX_TEX_BYTES` exists. */
+const MAX_IMAGE_BYTES = 16_000_000
+
+export interface Figure {
+  bytes: Uint8Array
+  type: string
+}
+
+/**
+ * One image, if the paper named it and this app is willing to draw it.
+ *
+ * Four checks, and each one is load-bearing:
+ *
+ *  1. `isEpic` on the slug, as everywhere.
+ *  2. The file must appear in the paper's own `figures` list — see the comment
+ *     there. This is the check that stops the door being a file server.
+ *  3. The extension must be in `IMAGE_TYPES`, so the type sent is a constant in
+ *     this file and never a function of the bytes.
+ *  4. `confine` against the paper's own root, which is what catches a
+ *     `\includegraphics{../../../.ssh/id_rsa.png}` and a symlink pointing out
+ *     of the tree. Check 2 already makes that hard — the author would have to
+ *     have written it into their own paper — but this is a typo threat model
+ *     more than a hostile one, and the fence costs a line.
+ */
+export function readFigure(
+  epic: string,
+  file: string,
+  dir: string | null = papersDir(),
+  thesis: PaperRoot | null = thesisRoot(),
+): Figure | null {
+  const paper = readPaper(epic, dir, thesis)
+  if (!paper) return null
+  if (!paper.figures.includes(file)) return null
+  const dot = file.lastIndexOf('.')
+  const type = dot === -1 ? undefined : IMAGE_TYPES[file.slice(dot).toLowerCase()]
+  if (!type) return null
+  const root = roots(dir, thesis).find((r) => r.epic === epic)?.dir
+  if (!root) return null
+  const path = confine(root, file)
+  if (!path) return null
+  try {
+    if (statSync(path).size > MAX_IMAGE_BYTES) return null
+    return { bytes: readFileSync(path), type }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -347,11 +556,18 @@ export function readPaper(epic: string, dir: string | null = papersDir()): Paper
  * including a scratch file the author never included, and "what does the paper
  * say" would quietly become "what is lying around next to it".
  */
-export function readSource(epic: string, file: string, dir: string | null = papersDir()): string | null {
-  const paper = readPaper(epic, dir)
-  if (!paper || !dir) return null
+export function readSource(
+  epic: string,
+  file: string,
+  dir: string | null = papersDir(),
+  thesis: PaperRoot | null = thesisRoot(),
+): string | null {
+  const paper = readPaper(epic, dir, thesis)
+  if (!paper) return null
   if (!paper.files.includes(file)) return null
-  const path = confine(join(dir, epic), file)
+  const root = roots(dir, thesis).find((r) => r.epic === epic)?.dir
+  if (!root) return null
+  const path = confine(root, file)
   if (!path) return null
   try {
     return readFileSync(path, 'utf8')

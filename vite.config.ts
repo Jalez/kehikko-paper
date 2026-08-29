@@ -6,9 +6,9 @@ import react from '@vitejs/plugin-react'
 import { WELL_KNOWN } from 'roadmap-module-protocol'
 import { defineConfig, type Plugin } from 'vite'
 
-import { MANIFEST, answer } from './doors.ts'
+import { MANIFEST, answer, type Reply } from './doors.ts'
 import { page } from './page/document.ts'
-import { listPapers, papersDir } from './store.ts'
+import { listPapers, papersDir, thesisRoot } from './store.ts'
 
 /**
  * Every door this app answers on, served by the one process that serves the
@@ -63,13 +63,25 @@ function doors(): Plugin {
        * already read.
        */
       const dir = papersDir()
-      if (!dir) {
+      const thesis = thesisRoot()
+      if (!dir && !thesis) {
         server.config.logger.warn(
           'paper: no papers directory. Set KEHIKKO_PAPERS_DIR (or KEHIKKO_ROADMAP_DIR) and restart; the app ' +
             'will serve and say so on its own page until then.',
         )
       } else {
-        server.config.logger.info(`paper: reading ${listPapers(dir).length} paper(s) from ${dir}`)
+        /* Each root printed on its own line, because the failure this log
+           exists to catch is being pointed at the wrong place, and a total
+           that folded two roots into one number would hide exactly the case
+           where one of them found nothing. */
+        if (dir) server.config.logger.info(`paper: reading ${listPapers(dir, null).length} paper(s) from ${dir}`)
+        if (thesis) server.config.logger.info(`paper: reading "${thesis.epic}" from ${thesis.dir}`)
+        if (!dir && thesis) {
+          server.config.logger.info(
+            'paper: KEHIKKO_PAPERS_DIR is unset, so the thesis is the only paper here. That is a ' +
+              'configuration and not a fault; the picker will show one entry.',
+          )
+        }
       }
 
       server.middlewares.use((request, response, next) => {
@@ -77,20 +89,35 @@ function doors(): Plugin {
         const path = url.pathname
         const method = (request.method ?? 'GET').toUpperCase()
 
-        const send = (status: number, body: unknown) => {
-          if (body === null) {
-            response.statusCode = status
+        const send = (reply: Reply) => {
+          if (reply.binary) {
+            /*
+             * The one non-JSON answer. `nosniff` so the browser uses the type
+             * `store.ts` looked up rather than one it decided from the bytes,
+             * and a policy of `default-src 'none'` so that whatever these bytes
+             * turn out to be, they load nothing and run nothing on this origin.
+             * `sandbox` for the same reason, one layer further out.
+             */
+            response.statusCode = reply.status
+            response.setHeader('content-type', reply.binary.type)
+            response.setHeader('x-content-type-options', 'nosniff')
+            response.setHeader('content-security-policy', "default-src 'none'; sandbox")
+            response.end(Buffer.from(reply.binary.bytes))
+            return
+          }
+          if (reply.body === null) {
+            response.statusCode = reply.status
             response.end()
             return
           }
-          response.statusCode = status
+          response.statusCode = reply.status
           response.setHeader('content-type', 'application/json; charset=utf-8')
-          response.end(JSON.stringify(body, null, 2))
+          response.end(JSON.stringify(reply.body, null, 2))
         }
 
         /* Spelled by the protocol package so that this app and every host
            cannot disagree about it by a character. */
-        if (path === WELL_KNOWN) return send(200, MANIFEST)
+        if (path === WELL_KNOWN) return send({ status: 200, body: MANIFEST })
 
         if (path === '/app' || path === '/app/' || path === '/') {
           void server
@@ -128,7 +155,7 @@ function doors(): Plugin {
           .then((parsed) => {
             const reply = answer(method, path, url.searchParams, parsed)
             if (!reply) return next()
-            send(reply.status, reply.body)
+            send(reply)
           })
           .catch(next)
       })

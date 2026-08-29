@@ -375,7 +375,9 @@ function wordsFor(sight: Sight, papers: number): string[] {
       return [
         'Nobody has said where the papers are',
         sight.why,
-        'Start it again with KEHIKKO_PAPERS_DIR=…/data/papers ./run.sh and this page fills in.',
+        'Start it again with KEHIKKO_PAPERS_DIR=…/data/papers ./run.sh and this page fills in. For a ' +
+          'single document with its own main.tex — a thesis rather than a roadmap — KEHIKKO_THESIS_DIR=… ' +
+          'names it instead, or as well.',
       ]
     case 'asking':
       return ['Reading…', `Opening the paper for “${sight.epic}”.`]

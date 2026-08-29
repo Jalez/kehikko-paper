@@ -52,6 +52,7 @@ function fixture(): Paper {
     title: 'A paper about paginating',
     author: 'The test',
     blocks,
+    figures: [],
     outline: blocks
       .filter((b) => b.kind === 'heading')
       .map((b) => ({ id: b.id, level: b.kind === 'heading' ? b.level : 2, text: '' })),

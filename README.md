@@ -16,16 +16,18 @@ bun run typecheck
 
 ## Where the papers come from
 
-One environment variable, and no default:
+Environment variables, and no default:
 
 | Variable              | Means                                                    |
 | --------------------- | -------------------------------------------------------- |
 | `KEHIKKO_PAPERS_DIR`  | the directory holding one folder per epic                 |
 | `KEHIKKO_ROADMAP_DIR` | a roadmap checkout; `data/papers` under it is used        |
+| `KEHIKKO_THESIS_DIR`  | ONE document: a `main.tex` at the top of its own tree     |
+| `KEHIKKO_THESIS_EPIC` | the slug that document answers to. Default `thesis`       |
 | `PORT`                | 7870 by default                                           |
 | `ROADMAP_ORIGIN`      | who may frame this page; the local host by default        |
 
-Neither of the first two set is an ordinary state with a screen of its own,
+None of the first three set is an ordinary state with a screen of its own,
 saying what to set. It is deliberately not an error and deliberately not a
 default path: the program this was extracted from had `../05_drafts/thesis_latex`
 compiled into it, which is the line that made it one person's app rather than a
@@ -34,6 +36,34 @@ module.
 A paper is `<papers>/<epic>/main.tex`, plus whatever it `\include`s. Nothing is
 cached: the file is opened on every read, so a paper edited in an editor is a
 paper the next read shows.
+
+### Why a thesis is a second root and not a thirteenth subdirectory
+
+`KEHIKKO_PAPERS_DIR` names a directory of directories. A thesis is not shaped
+like that: `main.tex` sits at the top of its own repository with `chapters/`,
+`figures/`, a `.cls` and a `references.bib` beside it, and it is the only thing
+in there. There is no parent full of siblings to point at.
+
+The three ways of forcing it into the existing model are each worse than a
+variable. Pointing `KEHIKKO_PAPERS_DIR` at the thesis's parent makes every
+unrelated sibling folder a candidate epic and — worse — makes the confinement
+root the parent, so `\include{../other/…}` would resolve *inside* the root and
+be served: the fence still doing its job, and the job having become the wrong
+one. Symlinking the thesis into `data/papers/thesis` works, and works by asking
+the author to put a link to their thesis inside the roadmap's own data directory
+so that this app did not have to grow a variable. Copying it in is the one thing
+the essay at the top of `store.ts` exists to forbid.
+
+So: a second root, **confined separately**, with its own slug. `roots()` is
+where the two meet, and the meeting is a list rather than a merge — nothing
+resolves a path against more than the one root it belongs to, and a path outside
+every root is refused. A slug that exists under both loses in the thesis root,
+so an existing paper keeps working and the new variable is the one that visibly
+does nothing.
+
+The slug from the environment goes through the same `SLUG` check as one from a
+URL. A variable is set by somebody standing closer, not by somebody more
+trustworthy.
 
 ## What it does
 
@@ -126,6 +156,34 @@ about.** So:
   saying plainly what the ticket does and does not separate. The essay is at the
   top of `doors.ts`.
 
+### Figures are drawn, and two kinds deliberately are not
+
+For a long time a figure was a dashed box with a filename in it, and the comment
+saying why was right: serving the image would mean "a door that reads arbitrary
+files out of somebody else's tree and answers them with a guessed content type".
+The thesis is the first corpus here with real figures in it, and that objection
+is answered rather than overruled. Four checks, each load-bearing:
+
+1. The epic passes `SLUG`.
+2. The file must be one the **paper itself named** — collected from the parsed
+   `\includegraphics` targets, never from a directory listing. A private PNG
+   sitting in `figures/` that the author never included stays unreachable.
+3. The extension must be in a table in `store.ts`, and the `Content-Type` sent
+   is that table's constant. It is never sniffed and never guessed from the
+   bytes. `x-content-type-options: nosniff` and
+   `content-security-policy: default-src 'none'; sandbox` ride along, because a
+   browser deciding for itself what these bytes are would undo check 3 on its own.
+4. `confine()` still stands underneath, catching `\includegraphics{../../x.png}`
+   and a symlink out of the tree.
+
+**SVG and PDF are refused.** An SVG is a document, it can carry `<script>`, and
+this app would serve it from the same origin as its own `/api` — the origin
+`manifest.ts` argues so carefully for keeping. A PDF cannot go in an `<img>` at
+all, so serving it would mean an embedded viewer on that same origin with a
+larger surface. Both keep the filename box. The thesis on this machine has three
+PNG figures, which render, and one PDF figure, which does not: a visible,
+explicable gap rather than a silent one.
+
 There is also no KaTeX. Not one of the twenty-two `.tex` files in this roadmap
 contains a `$`, an `equation` or an `align` — measured, not assumed — so an
 equation is shown as its own LaTeX in a monospace box rather than shipping a
@@ -147,12 +205,16 @@ reader's operating system's. The one place the media query is consulted is
 1. `SLUG` — the shape check, applied before any filesystem call, refusing
    identically whether or not the epic exists.
 2. `confine()` — resolves the real path and refuses anything that did not land
-   under the papers directory. This is the one that matters for include targets,
-   which legitimately contain slashes and never go through the shape check, and
-   for symlinks, which a string comparison cannot see.
+   under **that paper's own root**. This is the one that matters for include
+   targets, which legitimately contain slashes and never go through the shape
+   check, and for symlinks, which a string comparison cannot see. With two
+   configured roots it is applied per root: one root can never resolve a path
+   against the other's, and a path outside every root is refused.
 
 `read_source` goes further: it will only open a file the paper itself named, so
 "what does the paper say" cannot become "what is lying around next to it".
+`/api/figure` applies the same rule to images, plus an extension allowlist — see
+below.
 
 ## The doors
 
@@ -164,6 +226,7 @@ reader's operating system's. The one place the media query is consulted is
 | `/api/papers`                     | every epic with a paper, and whether this app was configured at all |
 | `/api/paper?epic=…`               | one paper, parsed, chapters folded in |
 | `/api/source?epic=…&file=…`       | the raw `.tex` of one file the paper names |
+| `/api/figure?epic=…&file=…`       | one image the paper names — bytes, not JSON |
 | `/mcp`                            | `list_papers`, `read_paper`, `read_source` |
 
 All of it is middleware in front of the one Vite server. A module is one origin

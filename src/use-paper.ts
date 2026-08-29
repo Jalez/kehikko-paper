@@ -205,8 +205,9 @@ export function usePaper(framed: boolean) {
           setSight({
             at: 'unconfigured',
             why:
-              'This app reads papers out of a directory named by an environment variable, and neither ' +
-              'KEHIKKO_PAPERS_DIR nor KEHIKKO_ROADMAP_DIR is set for the process serving this page.',
+              'This app reads papers out of directories named by environment variables, and none of ' +
+              'KEHIKKO_PAPERS_DIR, KEHIKKO_ROADMAP_DIR or KEHIKKO_THESIS_DIR is set for the process ' +
+              'serving this page.',
           })
         }
       })

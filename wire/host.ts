@@ -209,6 +209,11 @@ export function connect(id: string, events: HostEvents = {}, source: MessageSour
            though the host had never mentioned it. */
         prompt: message.prompt,
         pinned: message.pinned,
+        /* Added by protocol 0.7. Same argument as the two above, and the same
+           cost asymmetry: this app cannot tell which canvas it is standing on
+           and does not currently need to, but a field dropped here is a field
+           the page believes the host never mentioned. */
+        kehikko: message.kehikko,
       })
       return
     }
