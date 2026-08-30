@@ -294,14 +294,35 @@
    * So the column is as tall as the pane minus the chrome above and below it,
    * and the page's own height then stays about what the pane already is, which
    * is what `resize` reports back. That is a fixed point rather than a loop.
-   * `dvh` and not `vh`, because on a phone-shaped viewport `vh` is the height
-   * the browser wishes it had.
    *
-   * The floor is there for the pane nobody can read in anyway: below it the
-   * column would be shorter than its own scrollbar.
+   * ## The height is no longer a subtraction, and the subtraction was a guess
+   *
+   * It used to be `max(12rem, calc(100dvh - 8rem))`: the pane, minus eight rems
+   * of chrome estimated by counting the things above and below it. Every one of
+   * those was a number in this file that had to be right about markup in
+   * another one — and it was wrong the moment a strip was removed from the
+   * bottom, which is how eight rems came to reserve room for a caption that had
+   * moved into a tooltip.
+   *
+   * Now the page is a flex column the height of the frame and this is its
+   * growing child, so the browser does the subtraction with the real chrome. No
+   * number here has an opinion about how tall a heading is.
+   *
+   * `min-height: 0` is not tidiness. A flex item's `min-height` defaults to
+   * `auto`, which in a column resolves to the CONTENT's height, so without it
+   * every sheet stacked would override this element's height upward and the
+   * document would scroll instead of the column — measured at 23,383 pixels,
+   * inside a page 23,467 tall, with the pages scrolling in a 672-pixel box in
+   * the middle of it. Two scrolls, one of them of nothing.
+   *
+   * `flex-1` and `min-h-0` are also written on the element in `paginated.tsx`,
+   * which is a duplication with a reason: this class can be read on its own and
+   * says what the element IS, while a class list somebody edits in a hurry is
+   * where the load-bearing one would go missing.
    */
   .reading-column {
-    height: max(12rem, calc(100dvh - 8rem));
+    flex: 1 1 auto;
+    min-height: 0;
     padding-block: 0.5rem;
     background: color-mix(in oklab, var(--foreground) 4%, transparent);
     border-radius: var(--radius-md);
@@ -347,21 +368,21 @@
   /* ---- What the author wrote in the margin ----------------------------- */
 
   /*
-   * A `\todo{…}` the author left in the source, in the flow and visibly not the
-   * argument.
+   * There is no rule here any more, and the absence is the point.
    *
-   * It used to be a pin here and a card in a margin rail beside the page. The
-   * rail is gone — annotation is becoming a module of its own — and this is the
-   * fallback the rail always had for a narrow pane, promoted to the only
-   * presentation. The author's words are not lost, which is the half of the old
-   * arrangement that mattered.
+   * A `\todo{…}` was a pin and a card in a margin rail; then, when the rail
+   * went, an amber run in the flow — `.note-inline` — on the reasoning that the
+   * author's words should stay where the author put them. Annotation now has a
+   * module of its own that reads those very macros out of the source and
+   * anchors them to the bytes they sit at, so the words are not lost; they are
+   * beside the paper rather than inside it, which is where the user asked for
+   * them.
+   *
+   * The class is deleted rather than left unused. A stylesheet full of rules
+   * for things nothing draws is a stylesheet nobody can read to find out what
+   * the page looks like, and the next person to see `.note-inline` here would
+   * reasonably conclude that notes are still drawn inline.
    */
-  .note-inline {
-    color: var(--mark);
-    background: color-mix(in oklab, var(--mark) 12%, transparent);
-    padding: 0.05em 0.2em;
-    border-radius: 3px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

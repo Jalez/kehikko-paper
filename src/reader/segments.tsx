@@ -17,17 +17,30 @@ import type { Segment, SegmentStyle } from '../../latex/parse.ts'
  * and no string out of a `.tex` file is ever handed to `dangerouslySetInnerHTML`.
  * There is no KaTeX here, so there is no branch that would want to.
  *
- * ## A todonote is now text on the page, and no longer a pin
+ * ## A todonote is not drawn here at all any more
  *
- * `\todo{…}` used to be split out of the flow here — a pin left in the text and
- * the words moved to a card in a margin rail. The rail is gone (see the note in
- * the README on annotation moving to a module of its own), and with it the
- * split: a note is the author's own words, so it stays where the author put
- * them, marked in the copy-editor's amber so nobody reads it as the argument.
+ * There have been three arrangements and this is the third. First a pin in the
+ * text and the words on a card in a margin rail; then, when the rail went, the
+ * words inline in the copy-editor's amber, on the reasoning that a note is the
+ * author's own words and belongs where the author put them.
  *
- * What did NOT change is `stripPin`. The parser emits the `◆` glyph in front of
- * a todonote's text precisely so that a pin can exist; with no pin the glyph
- * would be a decoration in the middle of a sentence.
+ * That reasoning was sound and has been overtaken rather than refuted: the
+ * words now have somewhere to live. Notes ingests every `\todo{}` and every
+ * `%` run out of the source, anchored to the byte range it sits at, and shows
+ * them beside the paper — which is a better home for them than the middle of a
+ * sentence, and the thing the user asked for in as many words: "can they be
+ * converted into notes so that they are not mixed in with the actual paper
+ * paragraphs?"
+ *
+ * So this file draws the paper. It is not a claim that the annotations do not
+ * matter; it is the opposite claim, that they matter enough to be a first-class
+ * thing somewhere rather than a coloured aside here. `latex/parse.ts` still
+ * PARSES both, unchanged and deliberately — Notes reads exactly what it parses,
+ * and a parser that dropped them would leave that module with nothing to read.
+ *
+ * `stripPin` stays for the same reason it was written: the parser emits `◆` in
+ * front of a todonote's text so that a pin can exist, and any segment that
+ * escapes the filter below must not put a lone glyph in a sentence.
  */
 
 /** The inline styles the parser can attach, and the element each becomes. */
@@ -39,8 +52,13 @@ const INLINE: Record<SegmentStyle, { tag: 'em' | 'strong' | 'code' | 'span' | 'q
   ref: { tag: 'span', className: 'text-[0.92em] text-[var(--pencil)]' },
   math: { tag: 'span', className: 'mx-[0.05em] font-mono text-[0.92em] text-[var(--pencil)]' },
   quote: { tag: 'q' },
-  /* The author's own margin note, in the flow and visibly not the argument. */
-  todo: { tag: 'span', className: 'note-inline' },
+  /* Unreachable, and kept because the type is a `Record` over every style the
+     parser can attach — a missing key would be a compile error, and a key that
+     is a lie would be worse than one that is never read. `withoutNotes` removes
+     these segments before anything gets here; if one ever arrives it should
+     look like the prose around it rather than reintroduce a colour scheme this
+     module no longer has an argument for. */
+  todo: { tag: 'span' },
 }
 
 /**
@@ -117,8 +135,23 @@ function styled(segment: Segment, key: string): ReactNode {
 }
 
 /** Plain text of a run of segments, for a title attribute, a search or a test. */
+/**
+ * The author's annotations, taken out of the run before anything reads it.
+ *
+ * One function, used by both `plain` and `Segments`, so that what is DRAWN and
+ * what is SEARCHED cannot disagree. They disagreeing is a real bug rather than
+ * an untidiness: `roadmap.goto` answers by looking for a reference in the text
+ * and then scrolling to the block that holds it, and a reference found only
+ * inside a note nobody draws would turn the page to a paragraph with no visible
+ * reference in it. This file's own rule about searching rendered text rather
+ * than source is the same rule, one layer down.
+ */
+export function withoutNotes(segments: readonly Segment[]): readonly Segment[] {
+  return segments.filter((segment) => !segment.styles.includes('todo'))
+}
+
 export function plain(segments: readonly Segment[]): string {
-  return segments
+  return withoutNotes(segments)
     .map((s) => s.text)
     .join('')
     .replace(/\s+/g, ' ')
@@ -126,7 +159,7 @@ export function plain(segments: readonly Segment[]): string {
 }
 
 export function Segments({ segments }: { segments: readonly Segment[] }) {
-  return <>{coalesce(segments).map((s, i) => styled(stripPin(s), String(i)))}</>
+  return <>{coalesce(withoutNotes(segments)).map((s, i) => styled(stripPin(s), String(i)))}</>
 }
 
 /**

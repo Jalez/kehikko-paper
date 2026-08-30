@@ -37,13 +37,26 @@ describe('what this app claims about itself', () => {
     expect(MANIFEST.declares.storage).toBe(true)
   })
 
-  test('it asks for the epic list and nothing else, and wants no prompt', () => {
+  test('it asks to say where the reader is pointing, and for nothing else', () => {
     /* Which epic is open is not in this list because it is not a capability: it
-       arrives on the greeting to every module whatever it declared. `epics:read`
-       is here for the gap — which epics exist and have NO paper — which is
-       invisible from a directory of papers. */
-    expect(MANIFEST.declares.uses).toEqual([])
+       arrives on the greeting to every module whatever it declared. What IS
+       here is the one thing this app asks permission to do to its neighbours —
+       put a path, a page, a byte range and a paragraph of somebody's document
+       into the context every pane on the canvas is told. */
+    expect(MANIFEST.declares.uses).toEqual(['passage:set'])
     expect(MANIFEST.declares.prompt).toBe(false)
+  })
+
+  test('it does not ask for the epic list, and the removal is deliberate', () => {
+    /* `epics:read` was declared for a picker that is gone. A capability asked
+       for and never used is a request somebody has to grant and re-evaluate for
+       a program that will not call the method. */
+    expect(MANIFEST.declares.uses).not.toContain('epics:read')
+    /* And not the selection either, which is a different offer: refs, looked up
+       in a tracker by whoever receives them. A byte range posted into that
+       field would be handed to Journeys and to References as though it were an
+       issue, and each would fail to find it silently. */
+    expect(MANIFEST.declares.uses).not.toContain('selection:set')
   })
 
   test('the id is the one the registration file has to be named after', () => {

@@ -17,31 +17,34 @@ import { clearSelection, fileOfSelection, readSelection, selectionRect, type Sou
  * PUBLISHES it is an addition at the bottom of this file rather than a rewrite
  * of the page. That is the whole reason for the file: see the open question.
  *
- * ## The open question, which is deliberately not answered here
+ * ## The open question, answered — and the prediction it made was right
  *
- * The user wants a Notes module to be able to attach a note to the passage a
- * reader has highlighted in Paper. The obvious-looking route is the canvas
- * `selection` on `roadmap.context`, and it is wrong: that field carries TRACKER
- * REFS — `gh#105`, `!1801` — and every module that reads it looks the string up
- * in a tracker. A byte range posted into it would be handed to Journeys and to
- * References as though it were an issue, and each would fail to find it,
- * silently, in a way whose cause is three modules away from the symptom.
+ * This file used to end with an open question: the user wants a Notes module to
+ * be able to attach a note to the passage a reader has highlighted here, and
+ * the obvious-looking route — the canvas `selection` on `roadmap.context` — is
+ * wrong, because that field carries TRACKER REFS. A byte range posted into it
+ * would be handed to Journeys and to References as though it were an issue, and
+ * each would fail to find it silently, in a way whose cause is three modules
+ * away from the symptom. That paragraph still holds and is the reason
+ * `selection:set` is not declared in `manifest.ts`.
  *
- * What a passage needs is a shape of its own — epic, file, byte range, the
- * rendered text, and the `exact` flag, because a consumer that ignored `exact`
- * would attach a note to a range this program has already said it widened. That
- * shape has two ends and only one of them exists: the Notes module has not been
- * written, and a protocol extension designed against an imaginary consumer is a
- * protocol extension that gets designed twice.
+ * What it asked for was "a shape of its own", deferred because "a protocol
+ * extension designed against an imaginary consumer is a protocol extension that
+ * gets designed twice". Protocol 0.9 supplied one: `context.passage`, a field
+ * with three rungs — no document, a document with nothing selected, a range —
+ * and `passage.set` to fill it. It is CONTEXT rather than an extension event,
+ * which is better than what was imagined here for a reason this module could
+ * not have supplied on its own: a reader highlights at 10:04 and puts a notes
+ * pane on the canvas at 10:05, and an event is gone by then.
  *
- * So for this pass the selection is observable inside the module and published
- * nowhere. When Notes exists, the addition is:
- *
- *   - a `passage` extension in `manifest.ts` under `extensions.emits`,
- *   - one `host.emit(...)` where `setPassage` is called below,
- *
- * and nothing else in this file or in `lib/selection.ts` changes. If you are
- * about to widen `selection` instead, read the paragraph above first.
+ * The prediction about the SHAPE of the change was exact. Nothing in this file
+ * and nothing in `lib/selection.ts` changed. The addition is one hook —
+ * `use-published-passage.ts` — reading what this already produces, and one line
+ * in `app.tsx` calling it. The one thing that did not survive is `exact`: the
+ * wire has no field for it, and rather than invent one, the passage carries the
+ * `quoted` text, which is strictly better evidence — a consumer comparing the
+ * words against the file can see a widened or rotten range for itself instead
+ * of being told a flag about it.
  */
 
 export interface Passage extends SourceSelection {

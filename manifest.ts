@@ -46,6 +46,26 @@ export const VERSION = '1.0.0'
  *   protocol's rule is that a declaration is not a request and is not answered,
  *   so nothing breaks either way — which is exactly why an unused one would
  *   never be noticed, and exactly why it goes now rather than later.
+ * - **`passage:set` — declared, and it is the only capability this module asks
+ *   for.** A reader drags across a paragraph, and this app can do something no
+ *   other program on the canvas can: turn "these words on screen" into
+ *   `chapters/2_bridge.tex`, bytes 4120–4380, and the text that was there. That
+ *   is a fact about where the reader is standing, and the protocol's answer for
+ *   such a fact is the context — the host holds it and every pane is told,
+ *   which is how a notes pane beside this one narrows to the paragraph without
+ *   either module having been written for the other.
+ *
+ *   It is worth being plain about what this asks for, because it is more than
+ *   `selection:set` asks for. A selection broadcasts refs. This broadcasts a
+ *   path on the operator's disk, a place inside it, and a paragraph of the
+ *   document — to every framed module on the canvas, including ones this app
+ *   has never heard of. Somebody deciding whether to place this module is
+ *   entitled to read that in a sentence rather than infer it, which is why the
+ *   protocol's own text for the capability spells it out and why this note
+ *   exists rather than a line saying "sets the passage".
+ *
+ *   Declared where `epics:read` was removed, and by the same rule: a capability
+ *   is declared when the program calls the method and not otherwise.
  * - **`steps:read` — not declared.** A paper is prose. It argues for an
  *   arrangement; it does not track work, and a reader that drew a step rail
  *   beside the argument would be a second, worse Journeys.
@@ -148,10 +168,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   extensions: { emits: [], consumes: [] },
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
-    /* Empty, deliberately, and see the essay above: this app is handed the one
-       thing it needs — which epic is open — unbidden, on the greeting and on
-       every context, whatever it declared. */
-    uses: [],
+    /* One entry, and see the essay above. What this app READS — which epic is
+       open — is handed to it unbidden, on the greeting and on every context,
+       whatever it declared; there has never been anything to ask for on that
+       side. What it WRITES is `passage.set`, and that is a capability because
+       it changes what every other pane on the canvas is told. */
+    uses: ['passage:set'],
     storage: true,
     prompt: false,
   },

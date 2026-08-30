@@ -100,12 +100,30 @@ const lines = (chars: number): number => Math.max(1, Math.ceil(chars / CHARS_PER
  * - `include` cannot occur, `readPaper` having already replaced each one with
  *   the blocks of the file it named. Dropping rather than throwing means a
  *   single unassembled file still renders.
- * - a `comment` whose text is empty, which is what a run of `%` rules used as a
- *   visual separator in the source parses to.
+ * - `comment` — every one of them now, and not only the empty rules. This is a
+ *   decision and it changed: a `%` run in these papers is the author reasoning
+ *   about the section under it, and it used to be drawn in the flow behind a
+ *   rule so nobody mistook it for prose. It is not drawn any more, because
+ *   annotation has somewhere to live: Notes ingests every comment run out of
+ *   the source, anchored to the bytes it sits at, and shows it beside the paper
+ *   instead of inside it. The user's words were "can they be converted into
+ *   notes so that they are not mixed in with the actual paper paragraphs?"
+ *
+ *   Dropping it HERE rather than at render time is what keeps the promise this
+ *   list is about — pagination and the page agree on what is on the sheet, and
+ *   a block that was weighed and then not drawn is a page with a hole in it. It
+ *   also means the page count now matches what a reader sees; leaving comments
+ *   in the packing would have left blank bands where the annotations used to
+ *   be.
+ *
+ *   `latex/parse.ts` still parses them, deliberately: Notes reads exactly what
+ *   this parser produces, and a parser that dropped them would leave that
+ *   module with nothing to read. Not drawing something is not the same as not
+ *   knowing it.
  */
 export function visible(b: PlacedBlock): boolean {
   if (b.kind === 'preamble' || b.kind === 'structure' || b.kind === 'include') return false
-  if (b.kind === 'comment' && !b.text.trim()) return false
+  if (b.kind === 'comment') return false
   return true
 }
 

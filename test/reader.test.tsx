@@ -55,6 +55,7 @@ function fixture(): Paper {
   const blocks: PlacedBlock[] = parsed.blocks.map((b) => ({ ...b, file: 'main.tex' }))
   return {
     epic: 'paginating',
+    dir: '/tmp/papers/paginating',
     title: 'A paper about paginating',
     author: 'The test',
     blocks,
@@ -389,7 +390,7 @@ describe('the sections sit beside the paper and collapse to nothing', () => {
   })
 })
 
-describe('the rail is gone and the author’s words are not', () => {
+describe('the paper shows the paper, and the annotations have gone to Notes', () => {
   const paper = fixture()
 
   test('nothing draws a rail, a card, or a pin', () => {
@@ -401,25 +402,34 @@ describe('the rail is gone and the author’s words are not', () => {
     expect(rendered.container.textContent).not.toContain('No marks on this page')
   })
 
-  test('a source comment is still on the page, in the flow', () => {
-    /* The dangerous version of removing a rail is the one where the notes go
-       with it. The comment run is the author's reasoning about the section
-       under it; losing it would be the silent loss this codebase spends the
-       most words refusing. */
-    expect(paginate(paper.blocks).flat().some((b) => b.kind === 'comment')).toBe(true)
+  test('a source comment is not drawn, and is not weighed into a page either', () => {
+    /* Dropped in `visible()` rather than at render time, so the packing and the
+       sheet agree about what is on it. A comment left in the packing and not
+       drawn would be a blank band where the annotation used to be — a page with
+       a hole in it whose size nobody can explain. */
+    expect(paginate(paper.blocks).flat().some((b) => b.kind === 'comment')).toBe(false)
     const rendered = view(paper)
-    expect(rendered.container.textContent).toContain('carries the reasoning')
+    expect(rendered.container.textContent).not.toContain('carries the reasoning')
   })
 
-  test('a todonote keeps its words and loses its pin glyph', () => {
+  test('the parser still holds the comment, because Notes reads what it parses', () => {
+    /* Not drawing something is not the same as not knowing it. This is the line
+       that keeps the two apart: the block is in the paper, so the ingestion in
+       Notes has something to lift, and the reader simply does not draw it. */
+    expect(paper.blocks.some((b) => b.kind === 'comment' && b.text.includes('carries the reasoning'))).toBe(true)
+  })
+
+  test('a todonote is not in the prose, and its glyph is not either', () => {
     const rendered = view(paper)
-    expect(rendered.container.textContent).toContain('this needs a citation')
-    /* The pin glyph was `parse.ts`'s anchor for a rail. With no rail it would
-       be a character in the middle of a sentence. */
+    expect(rendered.container.textContent).not.toContain('this needs a citation')
     expect(rendered.container.textContent).not.toContain('◆')
-    /* Still marked as not-the-argument, so nobody reads an author's aside as
-       something the paper claims. */
-    expect(rendered.container.querySelector('.note-inline')).toBeTruthy()
+    /* The amber is gone with the words. Marking an aside as not-the-argument
+       was the right answer while the aside had nowhere else to be; it now has
+       somewhere else to be. */
+    expect(rendered.container.querySelector('.note-inline')).toBeNull()
+    /* The sentence the note sat inside is untouched — this removed an aside,
+       not a paragraph. */
+    expect(rendered.container.textContent).toContain('an author note inside it')
   })
 
   test('every rendered span still carries its source range', () => {

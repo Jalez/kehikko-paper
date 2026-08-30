@@ -7,6 +7,7 @@ import { paginate, pageOf, visible } from './reader/pages.ts'
 import { PaginatedView } from './reader/paginated.tsx'
 import { plain } from './reader/segments.tsx'
 import { usePaper, type Sight } from './use-paper.ts'
+import { usePublishedPassage, type Sheet } from './use-published-passage.ts'
 import { useSelection } from './use-selection.ts'
 
 /**
@@ -48,7 +49,7 @@ import { useSelection } from './use-selection.ts'
 const FRAMED = typeof window !== 'undefined' && window.parent !== window
 
 export function App() {
-  const { sight, said, setSaid, resize, goto } = usePaper(FRAMED)
+  const { sight, said, setSaid, resize, point, goto } = usePaper(FRAMED)
   const root = useRef<HTMLElement | null>(null)
   /**
    * A walk asked for from outside, and nothing else.
@@ -62,8 +63,24 @@ export function App() {
    */
   const [walk, setWalk] = useState<{ file: string; id: string; nonce: number } | null>(null)
   const selected = useSelection()
+  /**
+   * Which sheet is in front of the reader, lifted out of the view.
+   *
+   * The page number is a readout that follows the scroll and it lives in
+   * `PaginatedView`, which owns the scroll. It is reported up rather than moved
+   * up: `passage.page` has to say which sheet somebody is looking at, and this
+   * is the only thing that knows. Kept as one object so a page turn is one
+   * state change rather than two, which matters because every change of it is
+   * a candidate broadcast to every pane on the canvas.
+   */
+  const [sheet, setSheet] = useState<Sheet>({ page: 1, file: null })
 
   const paper = sight.at === 'reading' ? sight.paper : null
+
+  /* Where the reader is pointing, told to the canvas. Everything about when and
+     whether is in `use-published-passage.ts`; from here it is one line, which
+     is what `use-selection.ts` predicted it would be. */
+  usePublishedPassage(point, paper, sheet, selected.passage)
 
   /*
    * A different paper drops the selection with it.
@@ -174,13 +191,57 @@ export function App() {
     return map
   }, [paper])
 
+  /**
+   * One scroll, and nothing around the paper with a size of its own.
+   *
+   * ## What was here, and what it cost
+   *
+   * `mx-auto max-w-[80rem] … pb-10`, with a reading column of a fixed height
+   * inside it. Three things were wrong and they compounded:
+   *
+   * - **Two scrolls.** The reading column has an explicit height and scrolls
+   *   internally. Its parent is a flex COLUMN, where a child's `min-height`
+   *   resolves to `auto` — its content — so the column's 672px was overridden
+   *   upward to the height of every sheet stacked: measured at 23,383px, inside
+   *   a page 23,467px tall. The document scrolled twenty-three thousand pixels
+   *   of nothing while the pages scrolled inside it. `min-h-0` is the fix and
+   *   it is the whole fix; the flex sizing below is so the column can then FILL
+   *   the pane instead of guessing at it with `calc(100dvh - 8rem)`.
+   * - **A box drawn around the paper.** `max-w-[80rem] mx-auto` centred the
+   *   reader at 1280px, and the sheet inside it is already a fixed A4 page
+   *   centred by its own arithmetic in `SheetPage`. Two things centring one
+   *   thing is how a container appears inside a container, which is what the
+   *   user saw and said so.
+   * - **A 40-pixel dead strip** under everything, which is most of what read as
+   *   a footer. It grew visually when the sections panel opened, because a
+   *   narrower column scales the sheet down and leaves more empty pane around
+   *   it — the strip did not widen, the paper shrank.
+   *
+   * ## `h-dvh`, and the number this module reports
+   *
+   * `resize()` sends `document.documentElement.scrollHeight`. Before this, that
+   * was twenty-three thousand pixels — a module asking its host for a pane
+   * taller than the screen, clamped by the host and therefore invisible, which
+   * is the only reason it was survivable. There is a measured history here of a
+   * pane that DID grow that way, to 2552px, pushing its own resize handle off
+   * the canvas where nothing could reach it.
+   *
+   * With the page exactly the height of the frame it is in, the number reported
+   * is the pane's own height and the request is a no-op: the module asks to be
+   * the size it already is. That is the honest reading for a document reader —
+   * it is however tall the reader made it, and it scrolls.
+   */
   return (
-    <div className="mx-auto max-w-[80rem] px-3 pt-3 pb-10">
-      {!FRAMED && <h1 className="mb-2 text-base font-semibold tracking-tight">Paper</h1>}
+    <div className="flex h-dvh min-h-0 flex-col px-3 pt-3 pb-2">
+      {!FRAMED && <h1 className="mb-2 shrink-0 text-base font-semibold tracking-tight">Paper</h1>}
 
       {/* A finished drag over the pages becomes a citable source range. */}
-      <div onMouseUp={() => selected.read(root.current, filesByAnchor)}>
-        {paper ? <PaginatedView paper={paper} walk={walk} rootRef={root} /> : <Screen sight={sight} />}
+      <div className="flex min-h-0 flex-1 flex-col" onMouseUp={() => selected.read(root.current, filesByAnchor)}>
+        {paper ? (
+          <PaginatedView paper={paper} walk={walk} rootRef={root} onSheet={setSheet} />
+        ) : (
+          <Screen sight={sight} />
+        )}
       </div>
 
       {selected.passage && paper && (
@@ -196,7 +257,7 @@ export function App() {
         space where the paper goes.
       */}
       {said && (
-        <p className="mt-3 text-[0.8rem] text-muted-foreground" aria-live="polite">
+        <p className="mt-2 shrink-0 text-[0.8rem] text-muted-foreground" aria-live="polite">
           {said}
         </p>
       )}

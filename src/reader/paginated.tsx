@@ -103,9 +103,24 @@ export interface PaginatedProps {
    * of the next.
    */
   rootRef: React.RefObject<HTMLElement | null>
+  /**
+   * Which sheet is in front of the reader, reported outward.
+   *
+   * The page number is this component's, because the scroll is, and it is not
+   * moved out — see the note on the readout below, which has survived one
+   * attempt to lift it already. It is REPORTED because `passage.page` has to
+   * say which sheet somebody is looking at and nothing above here knows.
+   *
+   * The file is reported with it rather than derived above, and for the reason
+   * everything else in this file is measured rather than assumed: which file a
+   * sheet started in is a property of the packing, and the packing is here.
+   */
+  onSheet?: (sheet: { page: number; file: string | null }) => void
 }
 
-export function PaginatedView({ paper, walk, rootRef }: PaginatedProps) {
+const CAVEAT = 'Page breaks are this reader\u2019s, not the PDF\u2019s.'
+
+export function PaginatedView({ paper, walk, rootRef, onSheet }: PaginatedProps) {
   const pages = useMemo(() => paginate(paper.blocks), [paper.blocks])
   const count = Math.max(1, pages.length)
 
@@ -120,6 +135,27 @@ export function PaginatedView({ paper, walk, rootRef }: PaginatedProps) {
   const [at, setAt] = useState(0)
 
   const scale = room > 0 ? Math.min(1, room / PAGE.width) : 1
+
+  /**
+   * Which sheet the reader is on, told to whoever asked.
+   *
+   * In an effect keyed on the page rather than inside the scroll handler,
+   * because `setAt` already refuses to change when the page has not, so this
+   * runs once per page TURN rather than once per animation frame. The consumer
+   * of this is a broadcast to every pane on the canvas — see
+   * `use-published-passage.ts` — and a callback fired sixty times a second
+   * would put the debounce there in charge of a problem that is cheaper to not
+   * create.
+   *
+   * `onSheet` through a ref so a parent passing an inline arrow does not make
+   * this fire on every render of the parent.
+   */
+  const told = useRef(onSheet)
+  told.current = onSheet
+  const file = pages[at]?.[0]?.file ?? null
+  useEffect(() => {
+    told.current?.({ page: at + 1, file })
+  }, [at, file])
 
   const hold = useCallback(
     (el: HTMLDivElement | null) => {
@@ -289,10 +325,10 @@ export function PaginatedView({ paper, walk, rootRef }: PaginatedProps) {
   }, [])
 
   return (
-    <SidebarProvider className="w-full">
+    <SidebarProvider className="min-h-0 w-full flex-1">
       <Sections paper={paper} pages={pages} at={at} onGo={turnTo} />
 
-      <SidebarInset className="gap-2">
+      <SidebarInset className="min-h-0 gap-2">
         {/* The sections trigger and the page readout, on one row, because a
             pane cannot spare a strip of its own for chrome. */}
         {/* `flex-wrap`, because at 220 pixels with the sections open the column
@@ -312,7 +348,30 @@ export function PaginatedView({ paper, walk, rootRef }: PaginatedProps) {
             data-page-readout=""
             role="status"
             aria-live="polite"
-            aria-label={`Reading page ${at + 1} of ${count}`}
+            aria-label={`Reading page ${at + 1} of ${count}. ${CAVEAT}`}
+            /* The caveat, kept and costing nothing.
+             *
+             * It was a centred `<p>` under the scroll column: a permanent strip
+             * across the bottom of the pane, outside the scroll, taking height
+             * from every page forever. In a 340px pane that is a real fraction
+             * of the paper, and the user asked for the space.
+             *
+             * Deleting it was not an option. It is the honest caveat on a
+             * number a reader will otherwise trust, and it is still TRUE:
+             * `pages.ts` derives its characters-per-line from a mean character
+             * width and its lines-per-page from font size times line height,
+             * which is estimated arithmetic over a block list. LaTeX
+             * hyphenates, justifies, places floats and controls widows using
+             * real glyph metrics, so this reader's page 22 is very unlikely to
+             * be the PDF's.
+             *
+             * So it moves to where somebody actually wonders about it — the
+             * number itself — as a tooltip and in the accessible name, where it
+             * occupies no layout at all. The same move was made elsewhere on
+             * this canvas for the same reason: Atlas's "choosing one asks the
+             * host to show it" was good prose eating a short pane's height, and
+             * it became `title`/`aria-label` on the control it was about. */
+            title={CAVEAT}
           >
             {at + 1} / {count}
           </Badge>
@@ -325,7 +384,14 @@ export function PaginatedView({ paper, walk, rootRef }: PaginatedProps) {
           tabIndex={0}
           role="region"
           aria-label={`${paper.title ?? paper.epic}, ${count} pages`}
-          className="reading-column relative w-full overflow-x-hidden overflow-y-auto focus-visible:outline-none"
+          /* `min-h-0` is the one class here that is load-bearing rather than
+             cosmetic. This is a child of a flex COLUMN, where `min-height`
+             defaults to `auto` — the content's height — so without it the
+             column's own height is overridden upward to the height of every
+             sheet stacked, the pane stops scrolling in one place, and the
+             document becomes twenty-three thousand pixels tall. Measured. See
+             the essay in `app.tsx`. */
+          className="reading-column relative min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto focus-visible:outline-none"
         >
           {pages.map((blocks, i) => (
             <div
@@ -362,12 +428,6 @@ export function PaginatedView({ paper, walk, rootRef }: PaginatedProps) {
           ))}
         </div>
 
-        {/* Said plainly rather than implied. These breaks are this program's
-            arithmetic over the block list, not the compiler's over the real
-            document; float placement and hyphenation move the PDF's. */}
-        <p className="text-center text-[0.65rem] text-muted-foreground">
-          page breaks are this reader&rsquo;s, not the PDF&rsquo;s
-        </p>
       </SidebarInset>
     </SidebarProvider>
   )

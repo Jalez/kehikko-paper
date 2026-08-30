@@ -220,6 +220,17 @@ export function connect(id: string, events: HostEvents = {}, source: MessageSour
            and does not currently need to, but a field dropped here is a field
            the page believes the host never mentioned. */
         kehikko: message.kehikko,
+        /* Added by protocol 0.9, and this one is a field this app WRITES rather
+           than reads: the reader highlights a paragraph here and `passage.set`
+           puts it in front of every pane on the canvas. It is copied all the
+           same, for the reason the four above are — a field dropped here is a
+           field the page believes the host never mentioned — and for one more
+           that is specific to being the sender. What comes back is the host's
+           own account of what it is telling everybody. That is the only way
+           this page could ever notice that what it sent and what went out are
+           not the same thing, and a sender with no way to see its own broadcast
+           is a sender that finds out from somebody else's bug report. */
+        passage: message.passage,
       })
       return
     }

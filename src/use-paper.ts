@@ -1,4 +1,4 @@
-import type { Goto } from 'roadmap-module-protocol'
+import type { Goto, Passage } from 'roadmap-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Paper } from '../store.ts'
@@ -321,8 +321,37 @@ export function usePaper(framed: boolean) {
    */
   const resize = useCallback((height: number) => host.current?.resize(height), [])
 
+  /**
+   * Say where in the document the reader is pointing.
+   *
+   * ## Fire and forget, and the swallowed refusal is the design
+   *
+   * `passage.set` is a request, and every reason it can fail is a reason a
+   * reader must not be told about. A host that has not greeted this page yet
+   * refuses `silent`; a host that never learned the method refuses
+   * `unknown-method`; a host built against protocol 0.8 refuses it forever.
+   * None of those is a fault in the paper on screen and none of them is
+   * actionable by the person reading it — putting "the host would not take your
+   * highlight" under a paragraph would be this pane reporting somebody else's
+   * missing feature as its own failure, in the space the paper goes.
+   *
+   * What it must not do is throw. `request` rejects with `HostRefused`, and an
+   * unhandled rejection out of a mouse-up handler is a console full of red on a
+   * canvas where the notes pane simply is not present.
+   *
+   * The page loses nothing by being refused: the highlight is still on screen,
+   * the popover still offers the citation to copy, and this module goes on
+   * being a paper. That is the same shape as everything else here — the epic
+   * list arriving added a line and its absence removed one.
+   */
+  const point = useCallback((passage: Passage | null) => {
+    const conversation = host.current
+    if (!conversation) return
+    void conversation.request('passage.set', { passage }).catch(() => {})
+  }, [])
+
   return useMemo(
-    () => ({ sight, said, setSaid, resize, goto }),
-    [sight, said, resize],
+    () => ({ sight, said, setSaid, resize, point, goto }),
+    [sight, said, resize, point],
   )
 }

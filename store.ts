@@ -229,6 +229,31 @@ export type PlacedBlock = Block & { file: string }
 
 export interface Paper {
   epic: string
+  /**
+   * The directory `main.tex` sits in, absolute, on this machine.
+   *
+   * ## Why a page needs the root at all
+   *
+   * Every offset in this structure is per-file and every `file` on a block is
+   * RELATIVE to this — `chapters/2_bridge.tex` — which is right for everything
+   * inside this app: the fence in `confine` resolves against the root, the
+   * reader draws the relative name, and nothing here has to care where the
+   * folder is.
+   *
+   * It stops being enough the moment the page says where somebody is pointing
+   * to anybody else. The protocol is explicit that a `passage.path` should be
+   * ABSOLUTE, because that is the only spelling two modules can agree on
+   * without sharing a root, and it is right: a notes module handed
+   * `chapters/2_bridge.tex` would have to guess which of the eleven projects on
+   * this machine that is relative to, and a guess that lands on the wrong
+   * project's identically-named chapter is worse than no answer.
+   *
+   * So the root travels with the paper, and the page joins the two. It is the
+   * root this app was CONFIGURED with — an environment variable somebody set on
+   * purpose — and never anything a reader typed, so publishing it discloses
+   * where the operator put their papers and nothing else.
+   */
+  dir: string
   title: string | null
   author: string | null
   /** Every block in reading order, `\include` expanded in place. */
@@ -459,6 +484,13 @@ export function readPaper(
 
   return {
     epic,
+    /* `root` and not the `dir` argument: `roots()` has already resolved it —
+       and for the thesis root, realpath'd it — so this is the folder the fence
+       in `confine` measures against rather than the string somebody typed into
+       an environment variable. Two spellings of one folder would be two
+       different `passage.path`s for one file, and every consumer compares that
+       field for EQUALITY. */
+    dir: root,
     title: braced(source, 'title'),
     author: braced(source, 'author'),
     blocks,
