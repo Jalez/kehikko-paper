@@ -1,46 +1,84 @@
 import type { PlacedBlock } from '../../store.ts'
 
 /**
- * Where the pages break.
+ * The page, and where the pages break.
  *
- * ## Derived from the block list, and from nothing else
+ * ## The page is a real A4 sheet, and that is what makes this file honest
  *
- * The reader this was rebuilt from paginated by MEASUREMENT: it laid a hidden
- * copy of the chapter out at the sheet's content width, read every block's real
- * height, and packed sheets to a pixel budget. That is more accurate and it is
- * the wrong trade here, for a reason the measured version demonstrates rather
- * than argues. A measured pagination is a function of the rendered layout, and
- * the rendered layout changes for reasons that have nothing to do with the
- * paper: a pane resize, a font that finished loading, a `ResizeObserver` firing
- * during somebody else's drag. Each of those re-packs the sheets, and a reader
- * sitting on page 7 of 11 is silently moved to page 6 — mid-sentence, in a
- * document they were reading, with no event they could point at.
+ * The reader this replaces packed blocks to whatever height the PANE happened
+ * to have, so "a page" meant "as much as fits here at the moment". Two readers
+ * with differently sized panes were on different page 7s of the same paper, and
+ * one reader who dragged a pane edge was moved between them.
  *
- * So pagination here is a pure function of the block list. The same blocks give
- * the same pages, on every render, in every pane width, in both themes. A page
- * number stays the page the reader chose until they choose another one, and the
- * one thing that may move it is a different paper arriving.
+ * A page here is 210×297mm at 96dpi — the box below — and every measurement of
+ * type on it is fixed too. The whole sheet is then scaled to the width of the
+ * pane by a CSS transform, which changes how big the page LOOKS and nothing
+ * about what is on it. So pagination is a property of the DOCUMENT: the same
+ * blocks give the same pages in a 220-pixel pane and a 1200-pixel one, in both
+ * themes, on every render.
  *
- * What is given up is stated plainly rather than hidden: these breaks are an
- * ESTIMATE and always were. Even the measured version could not agree with the
- * compiled PDF — float placement, widow control and hyphenation all move the
- * real boundaries — so neither version was ever a claim about page 7 of the
- * thesis. Both are a reading rhythm. This one is a stable rhythm, which is the
- * property a reader actually notices.
+ * That property was already true of the previous version and it was true by
+ * ACCIDENT — it held because the weights below were written not to consult the
+ * pane, and any future line that measured a rendered width would have quietly
+ * ended it. Now it holds because the box the type is set in cannot vary. Keep
+ * it that way: nothing in this file may read the DOM, and `PAGE` is the only
+ * source of the numbers, so the sheet the browser draws and the sheet this
+ * function packs cannot disagree about how big a page is.
  *
- * ## The weights
+ * ## The estimate is still an estimate, and still says so
  *
- * One unit is roughly one line of type. The character counts are the measure of
- * a comfortable column rather than of any particular pane, which is the same
- * decision as the paragraph above: a weight that read the pane's width would
- * make pagination depend on the pane again through the back door.
+ * These breaks are this program's arithmetic over a block list, not a LaTeX
+ * compiler's over the real document: float placement, widow control and
+ * hyphenation all move the compiled PDF's boundaries. A fixed page box makes
+ * the estimate a better one — the column width and the leading are now the ones
+ * the reader is actually looking at — without making it a claim about page 7 of
+ * the thesis. The page says so under the controls.
  */
 
-/** Characters of prose that make roughly one line at the reading measure. */
-const CHARS_PER_LINE = 78
+/**
+ * The sheet, in CSS pixels, and the type set on it.
+ *
+ * ONE definition, exported, and read by both this file's arithmetic and the
+ * component that draws the sheet. Two copies of a page size is how a reader
+ * ends up with a paginator that thinks forty lines fit and a page that shows
+ * thirty-two, which looks like a bug in the text rather than in a constant.
+ *
+ * 794×1123 is A4 at 96dpi (210mm × 297mm), rounded to whole pixels. The margins
+ * are a book's rather than a word processor's: generous enough that the measure
+ * lands near the sixty-to-ninety characters a line of prose wants.
+ */
+export const PAGE = {
+  width: 794,
+  height: 1123,
+  /** Left and right margin. */
+  marginX: 64,
+  /** Head and foot margin. */
+  marginY: 72,
+  /** The body size everything on the sheet is expressed in ems of. */
+  fontSize: 15,
+  /** Leading, as a multiple of the body size. */
+  lineHeight: 1.6,
+  /**
+   * Mean advance width of one character of the reading face, in ems.
+   *
+   * A constant rather than a measurement: it is roughly what a serif at a
+   * reading size averages over English prose, counting the spaces. It is a
+   * NUMBER here because measuring the real face would mean reading the DOM,
+   * which is the thing this file must never do — a paginator that measured
+   * would be a paginator that re-packs when a font finishes loading, which is
+   * the failure this file exists to end.
+   */
+  meanCharEm: 0.5,
+} as const
 
-/** How many lines fit a sheet. A4 at this type size, near enough. */
-export const LINES_PER_PAGE = 34
+/** The type column, in pixels. */
+export const COLUMN = PAGE.width - PAGE.marginX * 2
+
+/** Characters of prose that make one line in that column. */
+export const CHARS_PER_LINE = Math.floor(COLUMN / (PAGE.fontSize * PAGE.meanCharEm))
+
+/** Lines of type that fit between the head and foot margins. */
+export const LINES_PER_PAGE = Math.floor((PAGE.height - PAGE.marginY * 2) / (PAGE.fontSize * PAGE.lineHeight))
 
 const textOf = (segments: { text: string }[]): string => segments.map((s) => s.text).join('')
 
@@ -71,7 +109,16 @@ export function visible(b: PlacedBlock): boolean {
   return true
 }
 
-/** Roughly how many lines of a sheet this block will take. */
+/**
+ * Roughly how many lines of the sheet this block will take.
+ *
+ * A figure is eight lines per graphic rather than the three it was, and the
+ * change is the fixed page rather than a better guess: an image on a 666-pixel
+ * column is drawn at whatever width it has up to that, which is a third of the
+ * sheet's height for a normal plot. Three lines was calibrated for a page that
+ * was however tall the pane was, where being wrong about a figure cost nothing
+ * because the sheet stretched. On a fixed sheet it costs an overrun.
+ */
 export function weigh(b: PlacedBlock): number {
   switch (b.kind) {
     case 'heading':
@@ -83,9 +130,7 @@ export function weigh(b: PlacedBlock): number {
     case 'list':
       return b.items.reduce((n, item) => n + lines(textOf(item).length), 0) + 1
     case 'figure':
-      /* A named graphic is a box of fixed height per graphic; the caption
-         wraps like prose. */
-      return b.graphics.length * 3 + lines(textOf(b.caption).length) + 2
+      return b.graphics.length * 8 + lines(textOf(b.caption).length) + 2
     case 'table':
       return (b.grid ? b.grid.rows.length * 2 : b.raw.split('\n').length) + lines(textOf(b.caption).length) + 2
     case 'verbatim':
@@ -105,7 +150,10 @@ export function weigh(b: PlacedBlock): number {
  * A block heavier than a whole sheet gets a sheet of its own and is allowed to
  * run over it, which is the least-bad answer for an oversized table: splitting
  * it would need the measurement this function exists to avoid, and dropping any
- * of it is not an option at all.
+ * of it is not an option at all. The sheet is drawn with a MINIMUM height of
+ * `PAGE.height` rather than a fixed one for exactly this case — a page that
+ * clipped its overflow would lose the author's words silently, which is the one
+ * failure this codebase spends the most words refusing.
  *
  * A heading is never the last thing on a sheet. That is the one typographic
  * rule kept here, because a heading stranded at the foot of a page with its
@@ -153,11 +201,12 @@ export function paginate(blocks: readonly PlacedBlock[], budget = LINES_PER_PAGE
  * Which sheet a given block landed on, or -1.
  *
  * This is how `roadmap.goto` walks to a reference that is not on the page the
- * reader is standing on: the block is found in the block list, this says which
- * sheet holds it, and the reader is turned to that sheet before the anchor is
- * scrolled into view. Without it, a walk could only ever answer for the sheet
- * that happened to be open, which would be a module answering "found" or "not
- * found" about a fraction of the paper it is showing.
+ * reader is standing on, and how a press in the sections sidebar turns to a
+ * section: the block is found in the block list, this says which sheet holds
+ * it, and the reader is turned to that sheet before the anchor is scrolled into
+ * view. Without it, a walk could only ever answer for the sheet that happened
+ * to be open, which would be a module answering "found" or "not found" about a
+ * fraction of the paper it is showing.
  */
 export function pageOf(
   pages: readonly (readonly { file: string; id: string }[])[],

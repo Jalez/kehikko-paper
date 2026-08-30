@@ -134,9 +134,10 @@ describe('a thesis as a second root', () => {
     expect(paper.files).toEqual(['main.tex', 'chapters/one.tex'])
   })
 
-  test('a title broken over lines is one line in the picker', () => {
+  test('a title broken over lines is one line when it is named', () => {
     /* `\\` is an escape to the brace matcher and a line break to LaTeX, so it
-       survived the command stripping and was printed literally in the picker.
+       survived the command stripping and was printed literally where the
+       paper is named.
        The real thesis has two of them in its `\title{}`. */
     const [brief] = listPapers(null, thesisRoot(asThesis))
     expect(brief?.title).toBe('Chat as an Exercise: Evaluating things in Education')

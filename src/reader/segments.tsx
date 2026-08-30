@@ -1,8 +1,6 @@
-import { Fragment, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
 import type { Segment, SegmentStyle } from '../../latex/parse.ts'
-import { cn } from '@/lib/utils.ts'
-import { runs, type Note } from './notes.ts'
 
 /**
  * Segments to elements, and the two things every span has to carry.
@@ -18,6 +16,18 @@ import { runs, type Note } from './notes.ts'
  * `<` in a paragraph about generics and an `&` in a URL are text, not markup,
  * and no string out of a `.tex` file is ever handed to `dangerouslySetInnerHTML`.
  * There is no KaTeX here, so there is no branch that would want to.
+ *
+ * ## A todonote is now text on the page, and no longer a pin
+ *
+ * `\todo{…}` used to be split out of the flow here — a pin left in the text and
+ * the words moved to a card in a margin rail. The rail is gone (see the note in
+ * the README on annotation moving to a module of its own), and with it the
+ * split: a note is the author's own words, so it stays where the author put
+ * them, marked in the copy-editor's amber so nobody reads it as the argument.
+ *
+ * What did NOT change is `stripPin`. The parser emits the `◆` glyph in front of
+ * a todonote's text precisely so that a pin can exist; with no pin the glyph
+ * would be a decoration in the middle of a sentence.
  */
 
 /** The inline styles the parser can attach, and the element each becomes. */
@@ -29,11 +39,8 @@ const INLINE: Record<SegmentStyle, { tag: 'em' | 'strong' | 'code' | 'span' | 'q
   ref: { tag: 'span', className: 'text-[0.92em] text-[var(--pencil)]' },
   math: { tag: 'span', className: 'mx-[0.05em] font-mono text-[0.92em] text-[var(--pencil)]' },
   quote: { tag: 'q' },
-  /* The `todo` style is handled by the run splitter, not here: a todonote is a
-     structure the rail cares about rather than an inline decoration. It is in
-     this table so the record is exhaustive and so a segment carrying `todo`
-     alongside `emph` still gets its emphasis. */
-  todo: { tag: 'span' },
+  /* The author's own margin note, in the flow and visibly not the argument. */
+  todo: { tag: 'span', className: 'note-inline' },
 }
 
 /**
@@ -45,8 +52,11 @@ const INLINE: Record<SegmentStyle, { tag: 'em' | 'strong' | 'code' | 'span' | 'q
  * that render identically must not produce different trees. `<em>` and `<code>`
  * mean different things to a screen reader, so they are nested elements rather
  * than one element with two classes.
+ *
+ * `todo` is outermost, so a `\todo{a \emph{stressed} word}` is one marked run
+ * with emphasis inside it rather than two differently-marked pieces.
  */
-const NESTING: SegmentStyle[] = ['cite', 'ref', 'math', 'quote', 'bold', 'emph', 'code']
+const NESTING: SegmentStyle[] = ['todo', 'cite', 'ref', 'math', 'quote', 'bold', 'emph', 'code']
 
 /**
  * Adjacent segments that are styled identically, merged into one.
@@ -115,67 +125,23 @@ export function plain(segments: readonly Segment[]): string {
     .trim()
 }
 
-export interface SegmentsProps {
-  file: string
-  blockId: string
-  segments: readonly Segment[]
-  /** Which note is currently lit, by key, or null. */
-  lit: string | null
-  onNote: (key: string | null) => void
+export function Segments({ segments }: { segments: readonly Segment[] }) {
+  return <>{coalesce(segments).map((s, i) => styled(stripPin(s), String(i)))}</>
 }
 
 /**
- * One run of segments, with its notes split out.
+ * The pin glyph, removed from the text it was put in front of.
  *
- * Both presentations of a note are emitted: the pin, which is the anchor and is
- * always there, and the note's text inline behind it, which `index.css` hides
- * the moment the pane is wide enough for a rail. Rendering both and letting a
- * container query choose is what keeps this component from having to know how
- * wide it is — and a component that measured its own width would re-render on
- * every drag of the pane, which is the churn the rest of this reader is built
- * to avoid.
- */
-export function Segments({ file, blockId, segments, lit, onNote }: SegmentsProps) {
-  return (
-    <>
-      {runs(file, blockId, coalesce(segments)).map((run, i) => {
-        const note: Note | null = run.note
-        if (!note) return <Fragment key={i}>{run.segments.map((s, j) => styled(s, `${i}-${j}`))}</Fragment>
-        return (
-          <Fragment key={i}>
-            <button
-              type="button"
-              data-note-key={note.key}
-              data-lit={lit === note.key ? 'true' : undefined}
-              className="note-pin"
-              title={note.text}
-              aria-label={`Note: ${note.text}`}
-              onMouseEnter={() => onNote(note.key)}
-              onMouseLeave={() => onNote(null)}
-              onFocus={() => onNote(note.key)}
-              onBlur={() => onNote(null)}
-              onClick={() => onNote(lit === note.key ? null : note.key)}
-            >
-              ◆
-            </button>
-            <span className={cn('note-inline')}>{run.segments.map((s, j) => styled(stripPin(s), `${i}-${j}`))}</span>
-          </Fragment>
-        )
-      })}
-    </>
-  )
-}
-
-/**
- * The pin, removed from the text that follows it.
- *
- * The parser emits the glyph as a derived segment at the head of the note; the
- * pin above is drawn from that same fact and would otherwise be printed twice.
- * The segment keeps its offsets, because they still describe where the note
- * came from and `selection.ts` still has to be able to read them.
+ * `latex/parse.ts` renders a todonote as `◆` plus the note's words, and its own
+ * comment says it does that so a rail has something to point at. There is no
+ * rail and no pin now, so the glyph would be a character in the middle of a
+ * sentence with nothing to explain it. The segment keeps its offsets, because
+ * they still describe where the note came from and `selection.ts` still has to
+ * be able to read them; it is marked non-literal, because after this its
+ * rendered characters no longer line up with the source one for one.
  */
 function stripPin(segment: Segment): Segment {
   if (!segment.text.startsWith('◆')) return segment
-  const text = segment.text.replace(/^◆ ?\s*/, '')
+  const text = segment.text.replace(/^◆ ?\s*/, '')
   return { ...segment, text, literal: false }
 }

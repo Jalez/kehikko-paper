@@ -115,7 +115,8 @@ describe('the ordinary doors', () => {
       papers: { epic: string }[]
     }
     expect(body.configured).toBe(true)
-    /* Both roots, in one list, because a picker is a list of papers and not a
+    /* Both roots, in one list, because this is the answer to "what papers are on
+this machine" — the MCP `list_papers` tool's question — and not a
        list of the variables that were set. Which root a paper came from is this
        file's business and never the reader's. */
     expect(body.papers.map((p) => p.epic).sort()).toEqual(['a-paper', 'thesis'])

@@ -4,8 +4,13 @@ The paper an epic is aimed at, read as prose rather than as LaTeX.
 
 An app: a page, a reader over a directory of `.tex` files, and an MCP door. A
 host may frame it and then it follows whichever epic the canvas is on — but
-nothing here needs one. Open `http://127.0.0.1:7870/app` and the whole reader is
-there, with a picker in place of the canvas.
+nothing here needs one. Open `http://127.0.0.1:7870/app?epic=thesis` and the
+whole reader is there, reading that one paper off this machine.
+
+It shows **the paper for the epic the canvas is on, and nothing else**. There is
+no list of the other papers, no margin rail, and no sentence under the page
+explaining which paper it is: the pane header already carries this module's name
+and the canvas already says which epic it is on.
 
 ```bash
 KEHIKKO_PAPERS_DIR=~/Projects/roadmap/data/papers ./run.sh   # 7870
@@ -74,62 +79,118 @@ trustworthy.
 - Fetching is keyed to the epic **changing**. The host sends a context after
   every selection change anywhere on the canvas, and re-reading on each of those
   would throw the paper away and lose the reader's place mid-sentence.
-- Asks the host `epics.list` once, on the greeting, for one thing only: which
-  epics have **no** paper. That is the one fact a directory of papers cannot
-  contain. Refused or unanswered, the line simply is not drawn.
+- Asks a host for **nothing**. `declares.uses` is empty. `epics:read` used to be
+  there to draw one line — the epics a host knew about that had no paper — under
+  a picker that no longer exists, and a capability asked for and never used is a
+  permission somebody has to keep granting a program that will not call it.
 - Parses LaTeX into blocks that keep their byte offsets, expands the macros a
   paper defines for itself (`\gh{111}` reads as `gh#111`, as it does in the
   PDF), and renders headings, prose, lists, figures, tables and annotations.
 
-## How it reads: pages, a margin, and a gutter
+## How it reads: whole A4 pages, in one scrolling column
 
 The reader is React, Tailwind v4 and shadcn — the same stack as Checklist and
 for the same reason, which is that a control here should be the control it is
 everywhere else on the canvas.
 
-**Pages, not a scroll.** A paper is shown one sheet at a time, with a page
-indicator and next/previous, and the arrow keys turn it. Which blocks are on
-which sheet is a PURE FUNCTION of the block list (`src/reader/pages.ts`) —
-weighed in lines, packed to a budget, with a heading never left alone at the
-foot of a page. It is deliberately not measured. The reader this was rebuilt
-from laid a hidden copy of the chapter out and read real pixel heights, which is
-more accurate and re-packs itself every time the pane is resized or a font
-finishes loading; the reader on page 7 is then silently moved to page 6,
-mid-sentence, with no event they could point at. These breaks are an estimate
-either way — the compiled PDF's are the compiler's, not this program's — and the
-page says so under the controls. A stable estimate is worth more than an
-accurate one that moves.
+**A whole page, not as much of one as fits.** The sheet is 794×1123 CSS pixels,
+which is A4 at 96dpi, and it is scaled to the width of the pane by one
+`transform: scale`. Every proportion inside it is fixed: the measure is always
+the same number of characters, the margins are always the same fraction of the
+sheet, a figure is always the same share of the page. Only the apparent size
+changes. Measured at 220, 280, 320, 400 and 1200 pixels, in both themes: the
+rendered aspect ratio is 1.4144 every time, against √2 = 1.41421.
 
-**A margin rail.** A `todonotes` macro is a margin note in the compiled PDF, and
-a run of `%` lines in these papers carries the reasoning behind the section under
-it. Both belong beside the text rather than in it, so each leaves a pin in the
-flow and its words go to a card in the rail, which draws a dashed leader line
-back to the exact pin when the pair is lit. Card placement is the one measured
-thing in the reader, and it is measured after pagination has already decided, so
-it cannot feed back.
+The cost is stated rather than hidden. At 220 pixels the scale is 0.247 and the
+body type draws at under four pixels — a thumbnail of a page, which is what
+"show the whole page" means at that width. Clamping the scale instead would put
+half a sheet behind the edge of a pane, and dragging sideways to read is the one
+thing this module refuses.
 
-**In a narrow pane there is no rail**, and the note's text stays inline behind
-its pin as it did before — the fallback `parse.ts` argues for. That switch is a
-`@container` query, never a viewport breakpoint: this module is sized by its
-pane, and the pane is routinely 300 pixels wide inside a window that is two
-thousand. Both presentations are rendered and CSS shows exactly one, which keeps
-the width question out of the component tree entirely.
+**Pagination is a property of the DOCUMENT, not of the pane.** Because the page
+box is fixed, `src/reader/pages.ts` derives its line budget from that box —
+`CHARS_PER_LINE` and `LINES_PER_PAGE` are computed from `PAGE`, not typed in —
+and takes nothing else. The thesis is 55 pages at 220px and 55 pages at 1200px;
+resizing a pane cannot move a reader, because there is nothing about the pane
+for the paginator to see. That property used to hold by accident, because the
+weights happened not to consult the pane; now it holds because the box the type
+is set in cannot vary.
+
+The breaks are still an ESTIMATE and the page still says so under them. A LaTeX
+compiler's float placement, widow control and hyphenation move the real ones.
+
+**Scrolling, not page turns.** Every page is laid out in one column and the
+reader scrolls through them the way they scroll a PDF, with the join between one
+sheet and the next visible as it passes. The page number is a READOUT — it
+follows the scroll and is not something to press, because a number that looks
+pressable and is not is worse than no number. `PageUp`, `PageDown`, `Home`,
+`End` and the arrows reach the column: it is focusable, and a key pressed while
+focus is on the sections trigger is forwarded to it rather than doing nothing.
+
+**Nothing is virtualised, and that is a decision.** The whole thesis is 55 pages,
+2,437 DOM nodes and 16,101 words rendered at once, first paint in ~610ms against
+a Vite dev server. Virtualising would cost three things that do not throw when
+they break: `scrollIntoView` on an unrendered page does nothing, so a
+`roadmap.goto` at the end of the paper fails silently; the browser's own
+find-in-page can only see what is in the DOM; and a highlight anchored to page 30
+cannot be resolved. Measured, the cost of rendering everything was not there.
+
+**The sections are a shadcn sidebar beside the paper.** Collapsed to nothing by
+default, because a pane is routinely 280 pixels wide and a table of contents open
+by default is a reader who asked for a paper being handed an index of it. The
+trigger opens and closes it; a press on a section scrolls that page into view,
+smoothly, so the reader can see how far they went.
+`src/components/ui/sidebar.tsx` says exactly which three things about upstream's
+version were changed for a pane and why — the short version is that upstream
+positions itself against the VIEWPORT, swaps to a `Sheet` at a viewport
+breakpoint, and takes ⌘B globally, and all three are the wrong answer inside
+somebody else's canvas.
 
 **Gutter tags.** Every block carries a short tag naming its kind — `§` heading,
 `¶` paragraph, `fig`, `tab`, `eq`, `list`, `code`, `%`, `pre`, `inc`, `cmd`,
-`env` — revealed on hover. It is structural truth about how the LaTeX parsed,
-and the fastest way to see that what reads as a table was parsed as `unknown`.
-There is no room for a gutter in a narrow pane, so it is not drawn there; it is
-never moved inline, because a `¶` in the reading flow is a character in the
-argument.
+`env` — revealed on hover, in the sheet's own left margin. It is structural truth
+about how the LaTeX parsed, and the fastest way to see that what reads as a table
+was parsed as `unknown`. Because that margin is now a fixed fraction of a fixed
+page, there is no longer a width at which the tag is silently not drawn.
 
 **Highlight a passage** and a small panel says what you selected and where it
 lives — `chapters/2_bridge.tex` bytes 4120–4380 — with a button that copies that
 citation. `≈` means the selection crossed a macro expansion and was widened
 outward to a boundary this program can justify rather than to a fabricated
-offset. It posts nothing: the panel it replaces queued work for an agent, and
-what was load-bearing about it was never the textarea, it was that a highlight in
-a browser can be turned into an exact place in a file on disk.
+offset. It posts nothing.
+
+### What was removed, and where it went
+
+**The margin rail is gone**, and so are the pins that anchored it. `notes.ts`
+argued — correctly — that a `\todo{}` is a margin note in the compiled PDF and
+that a run of `%` lines carries the reasoning behind the section under it, so
+both belonged beside the text rather than in it. That argument was not wrong; the
+decision is the reader's, and annotation is becoming a module of its own, which
+makes this a MOVE rather than a loss.
+
+What was load-bearing about the rail is kept: the author's words are still on the
+page. A `\todo{}` is set inline in the copy-editor's amber, visibly not the
+argument, and a source comment keeps its rule and its muted colour. The one thing
+that goes with the rail is the `◆` glyph the parser emits in front of a note,
+because a pin pointing at nothing is a character in the middle of a sentence.
+
+**The picker is gone.** It listed every paper on this machine with a muted line
+naming the epics that had none. What replaces it is nothing: which paper is on
+screen is the canvas's answer. The three honest screens stay — no epic open, an
+epic with no paper, nobody has said where the papers are — because those are
+facts a reader has to be told rather than an affordance for browsing. Unframed,
+`?epic=…` in the address says which one paper to read; it is not a list and
+cannot become one.
+
+**`selection.ts` stays, and publishes nothing yet.** A Notes module should be
+able to attach a note to the passage a reader has highlighted here. The canvas
+`selection` on `roadmap.context` is the wrong pipe for it: that field carries
+tracker refs (`gh#105`) and every module that reads it looks the string up in a
+tracker, so a byte range posted there would be handed to Journeys and to
+References as an issue neither can find. A passage needs a shape of its own, and
+that shape has two ends, one of which does not exist yet. `src/use-selection.ts`
+holds the selection in one place, with the open question written down and the
+two-line addition named.
 
 ## What it does not do, on purpose
 
@@ -223,7 +284,7 @@ below.
 | `/app`                            | the page |
 | `/.well-known/roadmap-module.json`| the manifest |
 | `/healthz`                        | |
-| `/api/papers`                     | every epic with a paper, and whether this app was configured at all |
+| `/api/papers`                     | every epic with a paper, and whether this app was configured at all — the page reads only the second half, the MCP `list_papers` tool the first |
 | `/api/paper?epic=…`               | one paper, parsed, chapters folded in |
 | `/api/source?epic=…&file=…`       | the raw `.tex` of one file the paper names |
 | `/api/figure?epic=…&file=…`       | one image the paper names — bytes, not JSON |
@@ -242,16 +303,18 @@ store.ts        the papers directory, the two fences, \include folded in
 latex/parse.ts  LaTeX -> source-mapped blocks (carried over; see its own header)
 page/           the document shell, and nothing drawn in it
 src/
-  main.tsx      mounts React, seeds the theme, imports the mailbox for effect
-  app.tsx       the screens, the picker, the goto answer
-  use-paper.ts  the ONE place the wire and the papers meet
-  index.css     the theme, the dark variant, the container query
-  reader/       pages.ts (pure pagination), blocks.tsx (the gutter),
-                segments.tsx, notes.ts, rail.tsx, paginated.tsx, ask.tsx
-  lib/          selection.ts (a highlight -> a source range), utils.ts
-  components/ui shadcn's button and badge
+  main.tsx         mounts React, seeds the theme, imports the mailbox for effect
+  app.tsx          the screens and the goto answer
+  use-paper.ts     the ONE place the wire and the papers meet
+  use-selection.ts what is highlighted, and the open question about publishing it
+  index.css        the theme, the dark variant, the sheet, the scroll column
+  reader/          pages.ts (the A4 page box and pure pagination),
+                   paginated.tsx (the scrolling column and the sections),
+                   blocks.tsx (the gutter), segments.tsx, ask.tsx
+  lib/             selection.ts (a highlight -> a source range), utils.ts
+  components/ui    shadcn's button, badge and sidebar
 wire/           the mailbox and the bridge, copied from References and Journeys
-test/           parse, store, doors, wire, reader — 90 tests, no browser needed
+test/           parse, store, doors, wire, reader — 134 tests, no browser needed
 ```
 
 `src/reader/` knows about LaTeX and nothing about the wire. `wire/` knows about

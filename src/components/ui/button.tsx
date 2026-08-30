@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils.ts'
  * `pane` is a target sized for a pane 220 pixels wide, and it is a variant
  * rather than a set of overrides at each call site so that every press on this
  * page is the same height. The default `sm` is 32 pixels tall and fine on a
- * page; in a narrow column beside a picker of eleven papers it eats the column.
+ * page; in a pane 220 pixels wide it eats the column.
  */
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",

@@ -24,15 +24,22 @@
  * it. That keeps one mechanism rather than two: the class is always the answer,
  * and the media query only ever decides what the class starts as.
  *
- * ## Container queries, not viewport breakpoints
+ * ## The width question this page no longer asks
  *
- * This page's normal case is a pane 220 to 400 pixels wide inside a canvas on a
- * monitor two thousand across. Every viewport breakpoint Tailwind ships would
- * therefore fire — `lg:` is true, `xl:` is true — and the page would lay itself
- * out for a screen it has three per cent of. So `<body>` is a named container
- * and everything that responds to width asks `@container pane`. The margin rail
- * is the sharpest case: whether there is room beside the text for one is a fact
- * about the pane and has nothing whatever to do with the window.
+ * There used to be a `@container pane (min-width: 700px)` here, and it decided
+ * three things: whether a margin rail was drawn, whether the gutter tags had a
+ * margin to sit in, and whether a note's text stayed in the reading flow. All
+ * three are gone, because the sheet is now a FIXED A4 page scaled bodily to the
+ * pane (see `reader/pages.ts`): its margins are a fixed fraction of itself, so
+ * there is always room for a gutter, and there is no layout left that depends
+ * on how wide the pane is. One less thing that can differ between two readers.
+ *
+ * `<body>` stays a named container anyway, and the rule stands for whatever is
+ * added next: this page's normal case is a pane 220 to 400 pixels wide inside a
+ * canvas on a monitor two thousand across, so every viewport breakpoint
+ * Tailwind ships would fire — `lg:` is true, `xl:` is true — and the page would
+ * lay itself out for a screen it has three per cent of. Anything that responds
+ * to width asks `@container pane`, never `md:`.
  *
  * ## Nothing overflows sideways, ever
  *
@@ -90,6 +97,15 @@
   --pencil: oklch(0.55 0.16 265);
   --mark: oklch(0.62 0.12 75);
   --code-bg: oklch(0 0 0 / 5%);
+
+  /* shadcn's sidebar tokens. Its own, so the sections panel is the same control
+     here that it is everywhere else on the canvas, and separate from `--card`
+     so a panel beside the paper can be told from a panel on top of it. */
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.94 0 0);
+  --sidebar-accent-foreground: oklch(0.145 0 0);
+  --sidebar-border: oklch(0.922 0 0);
 }
 
 /*
@@ -121,6 +137,12 @@
     --pencil: oklch(0.72 0.13 265);
     --mark: oklch(0.78 0.12 80);
     --code-bg: oklch(1 0 0 / 8%);
+
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 12%);
   }
 }
 
@@ -147,6 +169,12 @@
   --pencil: oklch(0.72 0.13 265);
   --mark: oklch(0.78 0.12 80);
   --code-bg: oklch(1 0 0 / 8%);
+
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 12%);
 }
 
 @theme inline {
@@ -170,6 +198,11 @@
   --color-paper-edge: var(--paper-edge);
   --color-pencil: var(--pencil);
   --color-mark: var(--mark);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
 
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
@@ -224,8 +257,14 @@
 @layer components {
   /* ---- The sheet ------------------------------------------------------- */
 
+  /*
+   * The sheet is A4, and its BOX is set in `reader/paginated.tsx` from the
+   * `PAGE` constants in `reader/pages.ts` — width, height, margins, body size
+   * and leading — because those same numbers decide where the pages break. Two
+   * copies of a page size is how a paginator ends up thinking forty lines fit a
+   * page that shows thirty-two. So this rule is only the sheet's LOOK.
+   */
   .sheet {
-    padding-inline: 1.25rem;
     background: var(--paper);
     color: var(--paper-foreground);
     box-shadow:
@@ -233,11 +272,42 @@
       0 10px 30px -18px rgb(0 0 0 / 45%);
   }
 
+  /* `inherit`, never a size of its own: the sheet sets the body size and every
+     rule inside it is in `em` of that, so the whole page scales as one thing. */
   .prose-reading {
     font-family: var(--font-reading);
-    font-size: 1rem;
-    line-height: 1.7;
+    font-size: inherit;
     font-variant-numeric: oldstyle-nums proportional-nums;
+  }
+
+  /* ---- The column the pages lie in ------------------------------------- */
+
+  /*
+   * The scroller, and the one number in this file that is about the PANE.
+   *
+   * A document reader scrolls, so something has to be the thing that scrolls,
+   * and it must be an element rather than the document: this page is framed,
+   * and a document that grew to thirty A4 pages would ask the host for a frame
+   * thirty pages tall — which either gets clamped, silently, or turns the
+   * CANVAS into the scrollbar for somebody else's paper.
+   *
+   * So the column is as tall as the pane minus the chrome above and below it,
+   * and the page's own height then stays about what the pane already is, which
+   * is what `resize` reports back. That is a fixed point rather than a loop.
+   * `dvh` and not `vh`, because on a phone-shaped viewport `vh` is the height
+   * the browser wishes it had.
+   *
+   * The floor is there for the pane nobody can read in anyway: below it the
+   * column would be shorter than its own scrollbar.
+   */
+  .reading-column {
+    height: max(12rem, calc(100dvh - 8rem));
+    padding-block: 0.5rem;
+    background: color-mix(in oklab, var(--foreground) 4%, transparent);
+    border-radius: var(--radius-md);
+    /* `contain: paint` so thirty absolutely-ordinary sheets do not each cost a
+       repaint of the ones above them while somebody scrolls. */
+    contain: paint;
   }
 
   /* ---- Gutter tags ----------------------------------------------------- */
@@ -264,133 +334,33 @@
   }
 
   /*
-   * There is no room for a gutter beside the text in a narrow pane, so the tag
-   * is not drawn there at all. It is not moved inline: a `¶` in the reading
-   * flow is a character in the argument, which is exactly the confusion the
-   * tags exist to prevent.
+   * Always drawn now. It sits inside the sheet's own left margin, which is a
+   * fixed fraction of a fixed A4 page rather than whatever the pane had left
+   * over — so there is no longer a width at which it is silently absent. It is
+   * never moved inline: a `¶` in the reading flow is a character in the
+   * argument, which is exactly the confusion the tags exist to prevent.
    */
   .gutter-tag {
-    display: none;
+    display: block;
   }
 
-  /* ---- Notes: the pin, and the text behind it -------------------------- */
-
-  .note-pin {
-    color: var(--mark);
-    font-size: 0.72em;
-    vertical-align: super;
-    line-height: 1;
-    padding: 0 0.15em;
-    border-radius: 3px;
-    cursor: pointer;
-  }
-  .note-pin:hover,
-  .note-pin[data-lit='true'] {
-    background: color-mix(in oklab, var(--mark) 22%, transparent);
-  }
+  /* ---- What the author wrote in the margin ----------------------------- */
 
   /*
-   * The inline fallback. Where there is no rail, the note's text follows its
-   * pin in the reading flow rather than vanishing behind it — a pin pointing at
-   * nothing is a silent loss, and the worst kind, because the page still looks
-   * complete.
+   * A `\todo{…}` the author left in the source, in the flow and visibly not the
+   * argument.
+   *
+   * It used to be a pin here and a card in a margin rail beside the page. The
+   * rail is gone — annotation is becoming a module of its own — and this is the
+   * fallback the rail always had for a narrow pane, promoted to the only
+   * presentation. The author's words are not lost, which is the half of the old
+   * arrangement that mattered.
    */
   .note-inline {
-    display: inline;
     color: var(--mark);
     background: color-mix(in oklab, var(--mark) 12%, transparent);
-    padding: 0.05rem 0.2rem;
+    padding: 0.05em 0.2em;
     border-radius: 3px;
-  }
-
-  /*
-   * The same fallback for a source comment, which is a paragraph rather than a
-   * phrase and so needs a block box.
-   *
-   * It is a class of its own rather than `.note-inline` plus Tailwind's
-   * `block`, and that is not fussiness: utilities sit in a later cascade layer
-   * than components, so a `block` on the element would beat the `display: none`
-   * that hides it beside the rail, and the note's text would then be printed
-   * twice on any pane wide enough to have one.
-   */
-  .note-inline-block {
-    display: block;
-  }
-
-  .note-card {
-    border-left: 3px solid var(--mark);
-    background: color-mix(in oklab, var(--paper-foreground) 4%, transparent);
-    transition:
-      background-color 160ms ease,
-      box-shadow 160ms ease;
-  }
-  .note-card[data-kind='comment'] {
-    border-left-color: var(--paper-edge);
-  }
-  .note-card:hover,
-  .note-card[data-lit='true'] {
-    background: color-mix(in oklab, var(--paper-foreground) 9%, transparent);
-    box-shadow: -6px 0 16px -12px var(--mark);
-  }
-
-  /*
-   * The leader line: the signature of the old reader. It connects a margin card
-   * to the exact text it marks, and draws itself only when that pair is active.
-   */
-  .leader-line {
-    position: absolute;
-    height: 1px;
-    background: repeating-linear-gradient(to right, var(--mark) 0 4px, transparent 4px 8px);
-    opacity: 0;
-    transform-origin: left center;
-    transform: scaleX(0);
-    transition:
-      opacity 180ms ease,
-      transform 240ms cubic-bezier(0.2, 0, 0, 1);
-    pointer-events: none;
-  }
-  .leader-line[data-lit='true'] {
-    opacity: 0.85;
-    transform: scaleX(1);
-  }
-
-  /* The rail itself is absent below the threshold — see the container query. */
-  .margin-rail {
-    display: none;
-  }
-}
-
-/*
- * The one width question this page asks, asked of the PANE.
- *
- * 700px is where a 300px rail plus a readable measure stop fighting each other,
- * measured rather than guessed: below it the rail would either crush the text
- * to forty characters or be too narrow to hold a sentence. Above it, the rail
- * appears and the notes come out of the reading flow; below it, the notes stay
- * inline exactly as they are now and the rail is not rendered at all.
- */
-@container pane (min-width: 700px) {
-  .margin-rail {
-    display: block;
-  }
-  /*
-   * Room in the sheet's own left margin for the gutter tags.
-   *
-   * They are positioned outside the text column, which is what makes them a
-   * gutter rather than a prefix; without this the column starts at the sheet's
-   * edge and every tag is drawn off the left of the page, present in the DOM
-   * and invisible. Added only where the tags are shown, so a narrow pane does
-   * not pay for a margin nothing is in.
-   */
-  .sheet {
-    padding-left: 3.75rem;
-  }
-  .note-inline,
-  .note-inline-block {
-    display: none;
-  }
-  .gutter-tag {
-    display: block;
   }
 }
 
@@ -401,8 +371,5 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-  .leader-line {
-    transform: scaleX(1);
   }
 }

@@ -42,7 +42,7 @@ describe('what this app claims about itself', () => {
        arrives on the greeting to every module whatever it declared. `epics:read`
        is here for the gap — which epics exist and have NO paper — which is
        invisible from a directory of papers. */
-    expect(MANIFEST.declares.uses).toEqual(['epics:read'])
+    expect(MANIFEST.declares.uses).toEqual([])
     expect(MANIFEST.declares.prompt).toBe(false)
   })
 

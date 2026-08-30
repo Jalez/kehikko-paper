@@ -21,10 +21,11 @@ import { Segments } from './segments.tsx'
  * selection, so a drag over the text cannot pick up a stray `¶` and put it in
  * the passage somebody meant to quote.
  *
- * It is not drawn at all below the pane width where a gutter fits — see
- * `index.css`. Moving it inline would put a `¶` in the reading flow, where it
- * is a character in the argument, which is exactly the confusion it exists to
- * prevent.
+ * It lives in the sheet's own left margin, which is a fixed fraction of a
+ * fixed A4 page rather than whatever the pane had left over — so unlike the
+ * version this replaces, there is no width at which it is silently not drawn.
+ * It is never moved inline: a `¶` in the reading flow is a character in the
+ * argument, which is exactly the confusion it exists to prevent.
  */
 const GUTTER: Record<Block['kind'], string> = {
   heading: '§',
@@ -57,13 +58,20 @@ export function anchorId(file: string, id: string): string {
 }
 
 const HEADING_TAG = ['h2', 'h2', 'h2', 'h3', 'h4', 'h5'] as const
+/*
+ * In `em`, not `rem`, and that is the fixed page rather than a preference. The
+ * sheet sets its own body size (`PAGE.fontSize`) and is then scaled bodily to
+ * the pane; a heading in `rem` would be sized off the ROOT, so it would keep
+ * its pixel size while the page around it shrank and a level-1 heading would
+ * end up taller than the sheet in a narrow pane.
+ */
 const HEADING_SIZE = [
-  'text-[1.5rem] mt-8 mb-4',
-  'text-[1.35rem] mt-8 mb-4',
-  'text-[1.15rem] mt-7 mb-3',
-  'text-[1.05rem] mt-6 mb-2',
-  'text-[1rem] mt-5 mb-2',
-  'text-[0.95rem] mt-4 mb-2',
+  'text-[1.75em] mt-[2em] mb-[0.8em]',
+  'text-[1.5em] mt-[2em] mb-[0.8em]',
+  'text-[1.25em] mt-[1.8em] mb-[0.6em]',
+  'text-[1.1em] mt-[1.5em] mb-[0.5em]',
+  'text-[1em] mt-[1.3em] mb-[0.4em]',
+  'text-[0.95em] mt-[1.1em] mb-[0.4em]',
 ]
 
 export interface BlockProps {
@@ -78,11 +86,9 @@ export interface BlockProps {
    * produces a 404 and the fallback box rather than somebody else's picture.
    */
   epic: string
-  lit: string | null
-  onNote: (key: string | null) => void
 }
 
-export function BlockRow({ block, epic, lit, onNote }: BlockProps) {
+export function BlockRow({ block, epic }: BlockProps) {
   return (
     <div className="block-row group relative" data-block-id={anchorId(block.file, block.id)}>
       <div
@@ -92,13 +98,12 @@ export function BlockRow({ block, epic, lit, onNote }: BlockProps) {
       >
         <span className="gutter-mark">{GUTTER[block.kind]}</span>
       </div>
-      <BlockBody block={block} epic={epic} lit={lit} onNote={onNote} />
+      <BlockBody block={block} epic={epic} />
     </div>
   )
 }
 
-function BlockBody({ block, epic, lit, onNote }: BlockProps) {
-  const seg = { file: block.file, blockId: block.id, lit, onNote }
+function BlockBody({ block, epic }: BlockProps) {
   const id = anchorId(block.file, block.id)
 
   switch (block.kind) {
@@ -106,7 +111,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
       const Tag = HEADING_TAG[Math.min(block.level, HEADING_TAG.length - 1)] ?? 'h3'
       return (
         <Tag id={id} className={cn('prose-reading font-semibold leading-tight', HEADING_SIZE[Math.min(block.level, 5)])}>
-          <Segments segments={block.segments} {...seg} />
+          <Segments segments={block.segments} />
         </Tag>
       )
     }
@@ -114,7 +119,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
     case 'paragraph':
       return (
         <p id={id} className="prose-reading my-[0.8em]">
-          <Segments segments={block.segments} {...seg} />
+          <Segments segments={block.segments} />
         </p>
       )
 
@@ -124,7 +129,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
         <Tag id={id} className={cn('prose-reading my-[0.8em] space-y-1 pl-6', block.ordered ? 'list-decimal' : 'list-disc')}>
           {block.items.map((item, i) => (
             <li key={i}>
-              <Segments segments={item} {...seg} />
+              <Segments segments={item} />
             </li>
           ))}
         </Tag>
@@ -150,7 +155,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
       return (
         <div
           id={id}
-          className="my-4 overflow-x-auto border-l-2 border-[var(--paper-edge)] py-1 pl-3 font-mono text-[0.82rem] whitespace-pre"
+          className="my-4 overflow-x-auto border-l-2 border-[var(--paper-edge)] py-1 pl-3 font-mono text-[0.88em] whitespace-pre"
         >
           {block.latex}
         </div>
@@ -165,7 +170,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
       return (
         <pre
           id={id}
-          className="my-4 overflow-x-auto rounded-md border border-[var(--paper-edge)] bg-[var(--code-bg)] p-3 font-mono text-[0.78rem] leading-relaxed [overflow-wrap:normal]"
+          className="my-4 overflow-x-auto rounded-md border border-[var(--paper-edge)] bg-[var(--code-bg)] p-3 font-mono text-[0.82em] leading-relaxed [overflow-wrap:normal]"
         >
           {block.raw}
         </pre>
@@ -178,8 +183,8 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
             <Graphic key={graphic} epic={epic} file={graphic} />
           ))}
           {block.caption.length > 0 && (
-            <figcaption className="mt-2 text-[0.8rem] leading-snug text-[var(--paper-muted)]">
-              <Segments segments={block.caption} {...seg} />
+            <figcaption className="mt-2 text-[0.85em] leading-snug text-[var(--paper-muted)]">
+              <Segments segments={block.caption} />
             </figcaption>
           )}
         </figure>
@@ -190,7 +195,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
         <figure id={id} className="my-6">
           {block.grid ? (
             <div className="overflow-x-auto rounded-md border border-[var(--paper-edge)]">
-              <table className="w-full min-w-full border-collapse text-[0.85rem] leading-snug">
+              <table className="w-full min-w-full border-collapse text-[0.9em] leading-snug">
                 <tbody>
                   {block.grid.rows.map((row, ri) => (
                     <tr key={ri} className={cn(row.ruleAbove && ri > 0 && 'border-t border-[var(--paper-edge)]')}>
@@ -203,7 +208,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
                             style={{ textAlign: cell.align }}
                             className={cn('px-2.5 py-1.5 align-top', row.isHeader && 'font-semibold')}
                           >
-                            <Segments segments={cell.segments} {...seg} />
+                            <Segments segments={cell.segments} />
                           </Cell>
                         )
                       })}
@@ -216,13 +221,13 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
             /* The parser refused to guess at an irregular body, and this shows
                what it refused to guess at. A confidently wrong table is worse
                than a listing somebody can read for themselves. */
-            <pre className="overflow-x-auto rounded-md border border-[var(--paper-edge)] bg-[var(--code-bg)] p-3 font-mono text-[0.75rem] [overflow-wrap:normal]">
+            <pre className="overflow-x-auto rounded-md border border-[var(--paper-edge)] bg-[var(--code-bg)] p-3 font-mono text-[0.8em] [overflow-wrap:normal]">
               {block.raw}
             </pre>
           )}
           {block.caption.length > 0 && (
-            <figcaption className="mt-2 text-[0.8rem] leading-snug text-[var(--paper-muted)]">
-              <Segments segments={block.caption} {...seg} />
+            <figcaption className="mt-2 text-[0.85em] leading-snug text-[var(--paper-muted)]">
+              <Segments segments={block.caption} />
             </figcaption>
           )}
         </figure>
@@ -233,39 +238,20 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
        * A comment run the author left in the source, which in these papers
        * carries the reasoning behind the section under it.
        *
-       * Where there is a rail it goes there, and what stays in the flow is the
-       * pin that anchors it. Where there is not, the text stays here, marked as
-       * not-the-argument so nobody mistakes one for prose.
+       * It stays in the flow, set apart by a rule and the muted colour so
+       * nobody mistakes it for prose. It used to leave a `%` pin here and send
+       * its words to a card in the margin rail; the rail is gone and the words
+       * stayed, which is the half of that arrangement worth keeping.
+       *
+       * `pre-wrap` keeps the author's own line breaks, which is the point of
+       * showing a comment at all — and it does NOT break a run with no spaces
+       * in it. Every roadmap paper's comments are prose, so that never showed;
+       * the thesis opens its files with `% ===============…` banner rules sixty
+       * characters wide, and without `anywhere` one of those widens the sheet.
        */
-      const key = `${block.file}#${block.id}#comment`
       return (
-        <div id={id} className="my-3">
-          <button
-            type="button"
-            data-note-key={key}
-            data-lit={lit === key ? 'true' : undefined}
-            className="note-pin"
-            title={block.text}
-            aria-label={`Source comment: ${block.text}`}
-            onMouseEnter={() => onNote(key)}
-            onMouseLeave={() => onNote(null)}
-            onFocus={() => onNote(key)}
-            onBlur={() => onNote(null)}
-            onClick={() => onNote(lit === key ? null : key)}
-          >
-            %
-          </button>
-          {/*
-           * `pre-wrap` keeps the author's own line breaks, which is the point
-           * of showing a comment at all — and it does NOT break a run with no
-           * spaces in it. Every roadmap paper's comments are prose, so that
-           * never showed; the thesis opens its files with
-           * `% ==============================…` banner rules sixty characters
-           * wide, and a 220px pane then scrolled sideways by four hundred
-           * pixels with nothing on screen looking wrong. `anywhere` breaks the
-           * rule and leaves ordinary sentences wrapping at spaces as before.
-           */}
-          <span className="note-inline-block ml-1 border-l-2 border-[var(--paper-edge)] pl-3 text-[0.82rem] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-[var(--paper-muted)]">
+        <div id={id} className="my-[0.8em]">
+          <span className="block border-l-2 border-[var(--paper-edge)] pl-3 text-[0.88em] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-[var(--paper-muted)]">
             {block.text}
           </span>
         </div>
@@ -276,7 +262,7 @@ function BlockBody({ block, epic, lit, onNote }: BlockProps) {
       return (
         <pre
           id={id}
-          className="my-4 overflow-x-auto rounded-md border border-[var(--paper-edge)] bg-[var(--code-bg)] p-3 font-mono text-[0.75rem] [overflow-wrap:normal]"
+          className="my-4 overflow-x-auto rounded-md border border-[var(--paper-edge)] bg-[var(--code-bg)] p-3 font-mono text-[0.8em] [overflow-wrap:normal]"
         >
           {block.raw}
         </pre>
@@ -322,7 +308,7 @@ const DRAWABLE = /\.(png|jpe?g|gif|webp)$/i
 function Graphic({ epic, file }: { epic: string; file: string }) {
   const [failed, setFailed] = useState(false)
   const box = (
-    <div className="rounded-md border border-dashed border-[var(--paper-edge)] px-3 py-4 text-center font-mono text-[0.75rem] break-all text-[var(--paper-muted)]">
+    <div className="rounded-md border border-dashed border-[var(--paper-edge)] px-3 py-4 text-center font-mono text-[0.8em] break-all text-[var(--paper-muted)]">
       figure: {file}
     </div>
   )
@@ -339,7 +325,7 @@ function Graphic({ epic, file }: { epic: string; file: string }) {
            overflow in a reading view is the bug this pane is measured for. */
         className="h-auto max-w-full rounded-md border border-[var(--paper-edge)] bg-white"
       />
-      <span className="font-mono text-[0.7rem] break-all text-[var(--paper-muted)]">{file}</span>
+      <span className="font-mono text-[0.75em] break-all text-[var(--paper-muted)]">{file}</span>
     </div>
   )
 }

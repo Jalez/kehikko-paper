@@ -3,26 +3,32 @@ import { fireEvent, render, screen } from '@testing-library/react'
 
 import { parseLatex } from '../latex/parse.ts'
 import type { Paper, PlacedBlock } from '../store.ts'
-import { notesOn, runs } from '../src/reader/notes.ts'
-import { paginate, pageOf, visible, weigh } from '../src/reader/pages.ts'
-import { PaginatedView } from '../src/reader/paginated.tsx'
+import { Screen, wordsFor } from '../src/app.tsx'
+import { epicFromUrl, type Sight } from '../src/use-paper.ts'
+import { CHARS_PER_LINE, COLUMN, LINES_PER_PAGE, PAGE, paginate, pageOf, visible, weigh } from '../src/reader/pages.ts'
+import { PaginatedView, type PaginatedProps } from '../src/reader/paginated.tsx'
 
 /**
  * The reader, checked where it is cheapest to check it.
  *
- * Three things this file is deliberately about, because they are the three the
- * rebuild had to restore and each has a way of going quietly wrong:
+ * Four things this file is deliberately about, because each has a way of going
+ * quietly wrong:
  *
- * - Pagination is a PURE FUNCTION of the block list. The failure it replaces —
- *   a measured pagination that re-packs itself when the pane moves — does not
- *   throw and does not log; it moves the reader to a different page, once, mid
- *   sentence. The only way to catch that is to assert the property.
- * - A note reaches the margin with its pin left behind in the text. Both halves
- *   matter: a card with no anchor cannot be pointed at, and a pin with no card
- *   is the silent loss `parse.ts` refuses to allow.
- * - The gutter tag names the block's KIND. It is the one piece of structural
- *   truth on the page and it is invisible until hover, which is exactly the
- *   sort of thing that gets deleted by accident.
+ * - **A page is a page.** The sheet is A4 and every number that decides where
+ *   the breaks fall comes from the same constants the sheet is drawn from. Two
+ *   copies of a page size do not fail; they produce a paginator that thinks
+ *   forty lines fit a page showing thirty-two, and nothing says so.
+ * - **Pagination is a property of the DOCUMENT.** The failure it replaces — a
+ *   pagination that re-packs itself when the pane moves — does not throw and
+ *   does not log; it moves the reader to a different page, once, mid sentence.
+ *   The only way to catch that is to assert the property.
+ * - **The sections are beside the paper, closed, and reopenable.** A sidebar
+ *   that cannot be reopened is a sidebar that ate the table of contents.
+ * - **Every page is in the DOM.** Nothing is virtualised, deliberately, and a
+ *   later change that virtualises silently would break find-in-page, a walk to
+ *   the end of the paper, and any anchor into a page nobody has scrolled to.
+ * - **The rail and the marks are gone, and the author's words are not.** The
+ *   dangerous version of removing a rail is the one where the notes go with it.
  */
 
 const SOURCE = [
@@ -55,12 +61,90 @@ function fixture(): Paper {
     figures: [],
     outline: blocks
       .filter((b) => b.kind === 'heading')
-      .map((b) => ({ id: b.id, level: b.kind === 'heading' ? b.level : 2, text: '' })),
+      .map((b, i) => ({ id: b.id, level: b.kind === 'heading' ? b.level : 2, text: `Section ${i + 1}` })),
     files: ['main.tex'],
   }
 }
 
-describe('pagination is derived from the block list', () => {
+/** The page readout — a `span`, deliberately, so it is found as one. */
+const readout = (r: { container: HTMLElement }) => r.container.querySelector('[data-page-readout]') as HTMLElement
+
+/** The view, with the props it actually takes. */
+function view(paper: Paper, walk: PaginatedProps['walk'] = null, ref = { current: null as HTMLElement | null }) {
+  return render(<PaginatedView paper={paper} walk={walk} rootRef={ref} />)
+}
+
+/**
+ * A recorder for the scrolls a component asks for.
+ *
+ * happy-dom has no layout, so a scroll cannot be observed by its effect. What
+ * CAN be asserted is the request — which element was asked to come into view,
+ * and whether it was asked smoothly — and that is the whole of what this
+ * component decides. Where the pixels end up is the browser's business and is
+ * measured in a browser.
+ */
+function watchScrolls() {
+  const asked: { el: Element; behavior?: string; block?: string }[] = []
+  const wasView = Element.prototype.scrollIntoView
+  const wasTo = Element.prototype.scrollTo
+  const wasBy = Element.prototype.scrollBy
+  Element.prototype.scrollIntoView = function (this: Element, arg?: unknown) {
+    const opts = (typeof arg === 'object' && arg !== null ? arg : {}) as { behavior?: string; block?: string }
+    asked.push({ el: this, ...opts })
+  }
+  Element.prototype.scrollTo = function (this: Element) {
+    asked.push({ el: this, block: 'to-top' })
+  }
+  Element.prototype.scrollBy = function (this: Element) {
+    asked.push({ el: this, block: 'by' })
+  }
+  return {
+    asked,
+    stop() {
+      Element.prototype.scrollIntoView = wasView
+      Element.prototype.scrollTo = wasTo
+      Element.prototype.scrollBy = wasBy
+    },
+  }
+}
+
+describe('the page is A4, and the paginator and the sheet agree about it', () => {
+  test('the page box has A4 proportions', () => {
+    /* 1 : √2, which is what makes A-series paper A-series paper. Within half a
+       per cent, because the box is rounded to whole CSS pixels. */
+    expect(Math.abs(PAGE.height / PAGE.width - Math.SQRT2)).toBeLessThan(0.005 * Math.SQRT2)
+  })
+
+  test('the line budget is derived from the page box and from nothing else', () => {
+    /* The assertion that matters is not the numbers; it is that they are a
+       FUNCTION of `PAGE`. A future edit that types a budget in by hand is an
+       edit that lets the sheet and the paginator drift apart, and this is the
+       line that stops it compiling into a silent disagreement. */
+    expect(COLUMN).toBe(PAGE.width - PAGE.marginX * 2)
+    expect(CHARS_PER_LINE).toBe(Math.floor(COLUMN / (PAGE.fontSize * PAGE.meanCharEm)))
+    expect(LINES_PER_PAGE).toBe(Math.floor((PAGE.height - PAGE.marginY * 2) / (PAGE.fontSize * PAGE.lineHeight)))
+  })
+
+  test('the measure is a readable one rather than an arithmetic accident', () => {
+    expect(CHARS_PER_LINE).toBeGreaterThan(55)
+    expect(CHARS_PER_LINE).toBeLessThan(100)
+    expect(LINES_PER_PAGE).toBeGreaterThan(25)
+  })
+
+  test('the sheet is drawn at the size the paginator packed for', () => {
+    const rendered = view(fixture())
+    const sheet = rendered.container.querySelector('section[aria-label^="Page"]') as HTMLElement
+    expect(sheet.style.width).toBe(`${PAGE.width}px`)
+    expect(sheet.style.minHeight).toBe(`${PAGE.height}px`)
+    expect(sheet.style.padding).toContain(`${PAGE.marginY}px`)
+    /* Scaled, not reflowed. A sheet without a transform is a sheet that got its
+       size from the pane after all. */
+    expect(sheet.style.transform).toMatch(/^scale\(/)
+    expect(sheet.style.transformOrigin).toBe('top left')
+  })
+})
+
+describe('pagination is a property of the document', () => {
   const paper = fixture()
 
   test('the same blocks give the same pages, every time', () => {
@@ -68,6 +152,35 @@ describe('pagination is derived from the block list', () => {
     const b = paginate(paper.blocks)
     expect(a.length).toBeGreaterThan(1)
     expect(a.map((p) => p.map((x) => x.id))).toEqual(b.map((p) => p.map((x) => x.id)))
+  })
+
+  test('nothing about the pane can reach the paginator', () => {
+    /*
+     * The property stated as a property rather than demonstrated at two widths,
+     * because a width is exactly what this function must not be able to see: it
+     * takes a block list and a line budget and there is no third thing to hand
+     * it. The browser-side proof — the same page count at 220px and at 1200px —
+     * is in the measurement notes on this change; this is the assertion that
+     * makes a regression a compile error rather than a resize.
+     */
+    expect(paginate(paper.blocks)).toEqual(paginate(paper.blocks, LINES_PER_PAGE))
+    /* The budget is the only thing besides the blocks that can change an
+       answer, and it comes from `PAGE` rather than from anything measured. */
+    expect(paginate(paper.blocks, LINES_PER_PAGE + 40).length).toBeLessThan(paginate(paper.blocks).length)
+  })
+
+  test('a resize does not move the reader, because the page count cannot change', () => {
+    const total = paginate(paper.blocks).length
+    const rendered = view(paper)
+    expect(readout(rendered).textContent).toBe(`1 / ${total}`)
+    /* A re-render is every re-render a resize would cause: the observer sets
+       state and React runs this component again. The readout must not move,
+       and no scroll may be asked for. */
+    const scrolls = watchScrolls()
+    rendered.rerender(<PaginatedView paper={paper} walk={null} rootRef={{ current: null }} />)
+    expect(readout(rendered).textContent).toBe(`1 / ${total}`)
+    expect(scrolls.asked.filter((a) => a.block !== 'to-top')).toEqual([])
+    scrolls.stop()
   })
 
   test('nothing a reader should see is dropped, and nothing they should not is kept', () => {
@@ -103,174 +216,222 @@ describe('pagination is derived from the block list', () => {
   })
 })
 
-describe('notes leave the reading flow and keep their anchor', () => {
+describe('the reading view scrolls, and there is nothing to press', () => {
   const paper = fixture()
 
-  test('a todonote becomes one note, with the pin taken off its text', () => {
-    const notes = notesOn(paper.blocks).filter((n) => n.kind === 'todo')
-    expect(notes.length).toBe(1)
-    expect(notes[0]?.text).toBe('this needs a citation')
-    expect(notes[0]?.text.includes('◆')).toBe(false)
+  test('every page of the paper is in the DOM', () => {
+    /*
+     * The anti-virtualisation assertion, and it is here because virtualising is
+     * the obvious next optimisation and its costs are invisible: a walk to the
+     * end of the paper does nothing, the browser's own find-in-page sees a
+     * fraction of the document, and an anchor into an unrendered page cannot be
+     * resolved. None of those throws. If this test is ever changed, the three
+     * of them need answers rather than a note.
+     */
+    const rendered = view(paper)
+    const total = paginate(paper.blocks).length
+    expect(total).toBeGreaterThan(1)
+    expect(rendered.container.querySelectorAll('[data-page]').length).toBe(total)
+    expect(rendered.container.querySelectorAll('section[aria-label^="Page"]').length).toBe(total)
   })
 
-  test('a source comment becomes a note too, because it is not the argument', () => {
-    const notes = notesOn(paper.blocks).filter((n) => n.kind === 'comment')
-    expect(notes.length).toBe(1)
-    expect(notes[0]?.text).toContain('carries the reasoning')
+  test('the whole paper is rendered, so find-in-page can see all of it', () => {
+    const rendered = view(paper)
+    /* Text from the FIRST page and text from the LAST, in one DOM. */
+    expect(rendered.container.textContent).toContain('A paper about paginating')
+    expect(rendered.container.textContent).toContain('A closing paragraph.')
   })
 
-  test('a note is keyed by its byte offset, so two walks over one block agree', () => {
-    const block = paper.blocks.find((b) => b.kind === 'paragraph' && 'segments' in b && b.segments.some((s) => s.styles.includes('todo')))
-    expect(block).toBeDefined()
-    const segments = 'segments' in block! ? block.segments : []
-    const first = runs('main.tex', block!.id, segments).find((r) => r.note)?.note
-    const second = runs('main.tex', block!.id, segments).find((r) => r.note)?.note
-    expect(first?.key).toBe(second!.key)
-    expect(first?.key).toMatch(/^main\.tex#[^#]+#\d+$/)
+  test('there is no page-turn control anywhere', () => {
+    const rendered = view(paper)
+    expect(screen.queryByLabelText('Next page')).toBeNull()
+    expect(screen.queryByLabelText('Previous page')).toBeNull()
+    const words = (rendered.container.textContent ?? '').toLowerCase()
+    expect(words).not.toContain('prev')
+    expect(words).not.toContain('next')
   })
 
-  test('adjacent todo segments are one note rather than several', () => {
-    /* `\todo{a \emph{stressed} word}` splits into three segments because the
-       emphasis is a style change. Three cards in the margin would read as three
-       separate remarks, which is a claim about the author nobody made. */
-    const parsed = parseLatex('\\begin{document}\nA line \\todo{a \\emph{stressed} word} here.\n\\end{document}', 'm.tex')
-    const blocks: PlacedBlock[] = parsed.blocks.map((b) => ({ ...b, file: 'm.tex' }))
-    expect(notesOn(blocks).filter((n) => n.kind === 'todo').length).toBe(1)
+  test('the page number is a readout and not something to press', () => {
+    const rendered = view(paper)
+    const total = paginate(paper.blocks).length
+    const badge = readout(rendered)
+    /* A number that looks pressable and is not is worse than no number. */
+    expect(badge.tagName.toLowerCase()).not.toBe('button')
+    expect(badge.closest('button')).toBeNull()
+    expect(badge.getAttribute('role')).toBe('status')
+    expect(badge.textContent).toBe(`1 / ${total}`)
+    expect(rendered.container.querySelector('[data-page]')).toBeTruthy()
   })
-})
 
-describe('the reading view', () => {
-  const paper = fixture()
+  test('the column is focusable, so the keys a document reader knows reach it', () => {
+    const rendered = view(paper)
+    const column = rendered.container.querySelector('.reading-column') as HTMLElement
+    expect(column.getAttribute('tabindex')).toBe('0')
+    expect(column.getAttribute('role')).toBe('region')
+  })
 
-  function show(page = 0, onPage: (n: number) => void = () => {}) {
+  test('a page key pressed outside the column is forwarded to it', () => {
+    /* The case the browser does not handle for free: the reader has just
+       pressed the sections trigger, so focus is on a button, and PageDown would
+       otherwise do nothing at all until somebody clicked the text. */
+    const rendered = view(paper)
+    const column = rendered.container.querySelector('.reading-column') as HTMLElement
+    const scrolls = watchScrolls()
+    fireEvent.keyDown(document.body, { key: 'PageDown' })
+    expect(scrolls.asked.some((a) => a.el === column && a.block === 'by')).toBe(true)
+    scrolls.stop()
+  })
+
+  test('a key meant for a field is left alone', () => {
+    view(paper)
+    const field = document.createElement('input')
+    document.body.appendChild(field)
+    const scrolls = watchScrolls()
+    fireEvent.keyDown(field, { key: 'PageDown' })
+    expect(scrolls.asked).toEqual([])
+    scrolls.stop()
+    field.remove()
+  })
+
+  test('the column is handed up, so a highlight can be resolved against it', () => {
+    /*
+     * `lib/selection.ts` reads the DOM under this element, and it is the COLUMN
+     * rather than one sheet because a selection can legitimately run from the
+     * bottom of one page to the top of the next.
+     */
     const ref = { current: null as HTMLElement | null }
-    return render(<PaginatedView paper={paper} page={page} onPage={onPage} lit={null} onLit={() => {}} sheetRef={ref} />)
-  }
-
-  test('the page indicator says which sheet of how many', () => {
-    show(0)
-    const pages = paginate(paper.blocks).length
-    expect(screen.getByText(`1 / ${pages}`)).toBeTruthy()
+    view(paper, null, ref)
+    expect(ref.current?.classList.contains('reading-column')).toBe(true)
+    expect(ref.current?.querySelectorAll('[data-src-start]').length).toBeGreaterThan(0)
   })
 
-  test('the title and byline are on the first sheet and only there', () => {
-    const first = show(0)
-    expect(first.container.textContent).toContain('A paper about paginating')
-    first.unmount()
-    const second = show(1)
-    expect(second.container.textContent).not.toContain('A paper about paginating')
-  })
-
-  test('next asks for the next page, and prev is refused on the first', () => {
-    const asked: number[] = []
-    show(0, (n) => asked.push(n))
-    fireEvent.click(screen.getByLabelText('Next page'))
-    expect(asked).toEqual([1])
-    expect((screen.getByLabelText('Previous page') as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  test('an arrow key turns the page too', () => {
-    const asked: number[] = []
-    show(1, (n) => asked.push(n))
-    /* Fired at the body rather than at `window` directly: the listener is on
-       the window so a reader who has just pressed Next does not have to click
-       back into the text, and a key pressed anywhere bubbles up to it. */
-    fireEvent.keyDown(document.body, { key: 'ArrowRight' })
-    /* Fired at the body rather than at `window` directly: the listener is on
-       the window so a reader who has just pressed Next does not have to click
-       back into the text, and a key pressed anywhere bubbles up to it. */
-    fireEvent.keyDown(document.body, { key: 'ArrowLeft' })
-    expect(asked).toEqual([2, 0])
-  })
-
-  test('re-rendering with the same props does not move the reader', () => {
-    const asked: number[] = []
-    const view = show(2, (n) => asked.push(n))
-    view.rerender(
+  test('a walk from outside scrolls to the block it found', () => {
+    const heading = paper.blocks.filter((b) => b.kind === 'heading')[1]!
+    const rendered = view(paper)
+    const scrolls = watchScrolls()
+    rendered.rerender(
       <PaginatedView
         paper={paper}
-        page={2}
-        onPage={(n) => asked.push(n)}
-        lit={null}
-        onLit={() => {}}
-        sheetRef={{ current: null }}
+        walk={{ file: heading.file, id: heading.id, nonce: 1 }}
+        rootRef={{ current: null }}
       />,
     )
-    expect(asked).toEqual([])
-    expect(screen.getByText(new RegExp(`^3 / `)).textContent).toContain('3 / ')
+    const target = document.getElementById(`b-${`${heading.file}-${heading.id}`.replace(/[^a-zA-Z0-9-]+/g, '-')}`)
+    expect(target).toBeTruthy()
+    expect(scrolls.asked.some((a) => a.el === target && a.block === 'center')).toBe(true)
+    scrolls.stop()
   })
 
-  test('a page out of range is clamped rather than drawn empty', () => {
-    show(999)
-    const pages = paginate(paper.blocks).length
-    expect(screen.getByText(`${pages} / ${pages}`)).toBeTruthy()
+  test('the same walk asked for twice moves twice', () => {
+    /* A nonce rather than value equality, because a reader who asks the host to
+       walk to the same reference again means it again. */
+    const heading = paper.blocks.filter((b) => b.kind === 'heading')[1]!
+    const rendered = view(paper)
+    const scrolls = watchScrolls()
+    for (const nonce of [1, 2]) {
+      rendered.rerender(
+        <PaginatedView paper={paper} walk={{ file: heading.file, id: heading.id, nonce }} rootRef={{ current: null }} />,
+      )
+    }
+    expect(scrolls.asked.filter((a) => a.block === 'center').length).toBe(2)
+    scrolls.stop()
   })
 })
 
-describe('the margin rail', () => {
+describe('the sections sit beside the paper and collapse to nothing', () => {
   const paper = fixture()
 
-  /**
-   * The rail placed against a real sheet.
-   *
-   * `sheetRef` matters more than it looks: the rail finds each card's anchor by
-   * querying the sheet for the pin carrying that note's key, and skips anything
-   * it cannot find rather than stacking it at the top. So a test that handed it
-   * a null ref would assert that an empty rail is empty, which is true of every
-   * possible implementation.
-   */
-  function railed() {
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const view = render(
-      <PaginatedView
-        paper={paper}
-        page={0}
-        onPage={() => {}}
-        lit={null}
-        onLit={() => {}}
-        sheetRef={{ current: null }}
-      />,
-      { container: host },
-    )
-    /* The sheet is written by the view itself, so point a second render at it
-       the way the app does: the first pass fills the ref, the second measures
-       against it. */
-    const sheet = host.querySelector('section[aria-label^="Page"]') as HTMLElement
-    view.rerender(
-      <PaginatedView
-        paper={paper}
-        page={0}
-        onPage={() => {}}
-        lit={null}
-        onLit={() => {}}
-        sheetRef={{ current: sheet }}
-      />,
-    )
-    return { view, host }
-  }
-
-  test('a note on this page gets a card, and the card carries the note’s words', () => {
-    const { host } = railed()
-    const rail = host.querySelector('aside.margin-rail')
-    expect(rail).toBeTruthy()
-    const cards = [...rail!.querySelectorAll('.note-card')].map((c) => c.textContent ?? '')
-    expect(cards.length).toBeGreaterThan(0)
-    expect(cards.join(' ')).toContain('carries the reasoning')
+  test('it is closed to start with, because a pane is 300 pixels wide', () => {
+    const rendered = view(paper)
+    const side = rendered.container.querySelector('[data-slot="sidebar"]') as HTMLElement
+    expect(side.getAttribute('data-state')).toBe('collapsed')
+    expect(side.className).toContain('w-0')
+    /* Closed AND out of the accessibility tree, so a screen reader is not read
+       a table of contents the page is not showing. */
+    expect(side.getAttribute('aria-hidden')).toBe('true')
   })
 
-  test('the pin stays in the text, so the card has something to point at', () => {
-    const { host } = railed()
-    const pins = host.querySelectorAll('section[aria-label^="Page"] [data-note-key]')
-    expect(pins.length).toBeGreaterThan(0)
-    const keys = [...host.querySelectorAll('.note-card')].length
-    expect(keys).toBeLessThanOrEqual(pins.length)
+  test('the trigger opens it and closes it again', () => {
+    const rendered = view(paper)
+    const side = () => rendered.container.querySelector('[data-slot="sidebar"]') as HTMLElement
+    fireEvent.click(screen.getByLabelText('Show sections'))
+    expect(side().getAttribute('data-state')).toBe('expanded')
+    expect(side().getAttribute('aria-hidden')).toBe('false')
+    fireEvent.click(screen.getByLabelText('Hide sections'))
+    expect(side().getAttribute('data-state')).toBe('collapsed')
   })
 
-  test('a card names what kind of note it is, never colour alone', () => {
-    const { host } = railed()
-    const words = host.querySelector('.note-card')?.textContent ?? ''
-    expect(/todo|source comment/.test(words)).toBe(true)
+  test('pressing a section scrolls that page into view, smoothly', () => {
+    const rendered = view(paper)
+    fireEvent.click(screen.getByLabelText('Show sections'))
+    const rows = [...rendered.container.querySelectorAll('[data-slot="sidebar-menu-button"]')] as HTMLElement[]
+    expect(rows.length).toBe(paper.outline.length)
+
+    const pages = paginate(paper.blocks)
+    const second = paper.blocks.filter((b) => b.kind === 'heading')[1]!
+    const on = pageOf(pages, second.file, second.id)
+    expect(on).toBeGreaterThan(0)
+
+    const scrolls = watchScrolls()
+    fireEvent.click(rows[1]!)
+    const wrap = rendered.container.querySelector(`[data-page="${on + 1}"]`)
+    /* A real scroll and a smooth one, so the reader sees where they landed
+       relative to the pages either side of it rather than being teleported. */
+    expect(scrolls.asked.some((a) => a.el === wrap && a.behavior === 'smooth' && a.block === 'start')).toBe(true)
+    scrolls.stop()
+  })
+
+  test('a section names the page it is on, so a press is not a leap in the dark', () => {
+    const rendered = view(paper)
+    fireEvent.click(screen.getByLabelText('Show sections'))
+    const rows = rendered.container.querySelectorAll('[data-slot="sidebar-menu-button"]')
+    expect(rows[0]?.textContent ?? '').toMatch(/p\d+$/)
+  })
+})
+
+describe('the rail is gone and the author’s words are not', () => {
+  const paper = fixture()
+
+  test('nothing draws a rail, a card, or a pin', () => {
+    const rendered = view(paper)
+    expect(rendered.container.querySelector('.margin-rail')).toBeNull()
+    expect(rendered.container.querySelector('.note-card')).toBeNull()
+    expect(rendered.container.querySelector('.note-pin')).toBeNull()
+    expect(rendered.container.querySelector('[data-note-key]')).toBeNull()
+    expect(rendered.container.textContent).not.toContain('No marks on this page')
+  })
+
+  test('a source comment is still on the page, in the flow', () => {
+    /* The dangerous version of removing a rail is the one where the notes go
+       with it. The comment run is the author's reasoning about the section
+       under it; losing it would be the silent loss this codebase spends the
+       most words refusing. */
+    expect(paginate(paper.blocks).flat().some((b) => b.kind === 'comment')).toBe(true)
+    const rendered = view(paper)
+    expect(rendered.container.textContent).toContain('carries the reasoning')
+  })
+
+  test('a todonote keeps its words and loses its pin glyph', () => {
+    const rendered = view(paper)
+    expect(rendered.container.textContent).toContain('this needs a citation')
+    /* The pin glyph was `parse.ts`'s anchor for a rail. With no rail it would
+       be a character in the middle of a sentence. */
+    expect(rendered.container.textContent).not.toContain('◆')
+    /* Still marked as not-the-argument, so nobody reads an author's aside as
+       something the paper claims. */
+    expect(rendered.container.querySelector('.note-inline')).toBeTruthy()
+  })
+
+  test('every rendered span still carries its source range', () => {
+    /* This is what a highlight is resolved against. A span without these is a
+       span whose text is silently unquotable. */
+    const rendered = view(paper)
+    const spans = rendered.container.querySelectorAll('[data-src-start]')
+    expect(spans.length).toBeGreaterThan(0)
+    for (const span of spans) {
+      expect(span.getAttribute('data-src-end')).toBeTruthy()
+      expect(['0', '1']).toContain(span.getAttribute('data-literal') ?? '')
+    }
   })
 })
 
@@ -278,27 +439,70 @@ describe('the gutter names the block kind', () => {
   const paper = fixture()
 
   test('a paragraph is ¶ and a heading is §', () => {
-    const ref = { current: null as HTMLElement | null }
-    const view = render(
-      <PaginatedView paper={paper} page={0} onPage={() => {}} lit={null} onLit={() => {}} sheetRef={ref} />,
-    )
-    const marks = [...view.container.querySelectorAll('.gutter-mark')].map((el) => el.textContent)
+    const rendered = view(paper)
+    const marks = [...rendered.container.querySelectorAll('.gutter-mark')].map((el) => el.textContent)
     expect(marks).toContain('§')
     expect(marks).toContain('¶')
     /* One tag per block on the sheet, so a reader hovering anywhere in the text
        always has one to read. */
-    expect(marks.length).toBe(view.container.querySelectorAll('[data-block-id]').length)
+    expect(marks.length).toBe(rendered.container.querySelectorAll('[data-block-id]').length)
   })
 
   test('every kind the parser can emit has a tag, including the ones nobody sees', () => {
-    /* The map is exhaustive over `Block["kind"]` by its type, and this is the
-       assertion that a kind added later cannot be given an empty string to keep
-       the compiler quiet. */
-    const view = render(
-      <PaginatedView paper={paper} page={0} onPage={() => {}} lit={null} onLit={() => {}} sheetRef={{ current: null }} />,
-    )
-    for (const el of view.container.querySelectorAll('.gutter-mark')) {
+    const rendered = view(paper)
+    for (const el of rendered.container.querySelectorAll('.gutter-mark')) {
       expect((el.textContent ?? '').length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('the screens that are not a paper', () => {
+  /**
+   * Three states this module can truthfully be in and one it is put in by
+   * having no host. They are the reason the picker could go without the page
+   * becoming dishonest: what was removed is the browsing, not the telling.
+   */
+  const cases: { sight: Sight; says: RegExp }[] = [
+    { sight: { at: 'no-epic' }, says: /No epic is open/ },
+    { sight: { at: 'no-paper', epic: 'unwritten' }, says: /This epic has no paper/ },
+    { sight: { at: 'unconfigured', why: 'nothing is set' }, says: /where the papers are/ },
+    { sight: { at: 'alone' }, says: /Nothing is framing this page/ },
+  ]
+
+  for (const { sight, says } of cases) {
+    test(`“${sight.at}” says what is true and offers no list`, () => {
+      const rendered = render(<Screen sight={sight} />)
+      expect(rendered.container.textContent ?? '').toMatch(says)
+      /* The sentence that used to send a reader to a list of every paper on
+         this machine. There is no list any more, so an offer of one would be a
+         dead end drawn in the space the paper goes. */
+      expect(rendered.container.textContent ?? '').not.toMatch(/papers on this machine|listed above|from the list/)
+    })
+  }
+
+  test('no screen is dressed as an error', () => {
+    for (const { sight } of cases) {
+      const [heading] = wordsFor(sight)
+      expect(heading).toBeTruthy()
+      expect(heading?.toLowerCase()).not.toContain('error')
+      expect(heading?.toLowerCase()).not.toContain('failed')
+    }
+  })
+})
+
+describe('an unframed page is told which epic by its address', () => {
+  test('one epic, or none, and never a list', () => {
+    expect(epicFromUrl('?epic=modes-are-modules')).toBe('modes-are-modules')
+    expect(epicFromUrl('?epic=%20')).toBe(null)
+    expect(epicFromUrl('')).toBe(null)
+    expect(epicFromUrl('?other=1')).toBe(null)
+  })
+
+  test('a hostile epic is passed on unchanged, for one door to refuse', () => {
+    /* Not sanitised here. `/api/paper` applies `SLUG` and refuses identically
+       whether or not the epic exists; a second shape check in the browser would
+       be a second place to keep in step with the first, and the first is the
+       one that matters. */
+    expect(epicFromUrl('?epic=../../etc/passwd')).toBe('../../etc/passwd')
   })
 })

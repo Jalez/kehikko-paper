@@ -8,8 +8,9 @@ export const VERSION = '1.0.0'
  *
  * The manifest is the smallest half of this program and the only half a host
  * ever reads. Everything else here works with nothing on the other end — open
- * `http://127.0.0.1:7870/app` in a browser and the whole reader is there, with
- * a picker in place of the host's canvas. So read this as a description of the
+ * `http://127.0.0.1:7870/app?epic=…` in a browser and the whole reader is
+ * there, the address saying what the canvas would. So read this as a
+ * description of the
  * ENRICHMENT, and of an unusually thin one: all this file really asks for is a
  * tab. What arrives through it — which epic the canvas is on — is not something
  * a module has to ask for at all.
@@ -32,18 +33,19 @@ export const VERSION = '1.0.0'
  *   `roadmap.context`, to every module, whatever it declared. So the paper on
  *   screen is drawn from this machine's own disk with nothing asked of anybody,
  *   and every state below is reachable with no host at all.
- * - **`epics:read` — declared, and the only capability asked for.** Not for the
- *   paper: for the gap. This app can see which epics HAVE a paper, because it
- *   is looking at the directory; it cannot see which epics EXIST, because a
- *   directory of papers is not a list of epics. `epics.list` closes that, and
- *   the difference is the whole reason this module is interesting to a reader —
- *   an epic aimed at a paper nobody has written yet is exactly the thing worth
- *   putting on screen, and it is invisible from here without asking.
+ * - **`uses` is empty, and `epics:read` was taken OUT of it.** It was declared
+ *   for one drawing: a list of every paper on this machine, with a muted line
+ *   under it naming the epics a host knew about that had no paper. That list is
+ *   gone — a pane shows the paper for the epic the canvas is on and nothing
+ *   else — and with it the only reader of `epics.list`.
  *
- *   It is enrichment and is drawn as enrichment. Refused, unanswered, or asked
- *   of a host that has never heard of the method, the picker is still every
- *   paper on this machine and the reader loses one muted line at the bottom of
- *   it. Nothing waits on the answer and nothing is blank until it arrives.
+ *   Removing the declaration rather than leaving it is the point. A capability
+ *   asked for and never used is a request a person has to grant, evaluate and
+ *   re-evaluate for a program that will not call the method; it makes this
+ *   module look like it wants a list of the epics, which is now false. The
+ *   protocol's rule is that a declaration is not a request and is not answered,
+ *   so nothing breaks either way — which is exactly why an unused one would
+ *   never be noticed, and exactly why it goes now rather than later.
  * - **`steps:read` — not declared.** A paper is prose. It argues for an
  *   arrangement; it does not track work, and a reader that drew a step rail
  *   beside the argument would be a second, worse Journeys.
@@ -146,7 +148,10 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   extensions: { emits: [], consumes: [] },
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
-    uses: ['epics:read'],
+    /* Empty, deliberately, and see the essay above: this app is handed the one
+       thing it needs — which epic is open — unbidden, on the greeting and on
+       every context, whatever it declared. */
+    uses: [],
     storage: true,
     prompt: false,
   },

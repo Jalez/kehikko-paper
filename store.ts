@@ -214,7 +214,7 @@ const MAIN = 'main.tex'
  */
 const MAX_TEX_BYTES = 4_000_000
 
-/** One epic's paper, as little as the picker needs to name it. */
+/** One epic's paper, as little as `list_papers` needs to name it. */
 export interface PaperBrief {
   epic: string
   /** `\title{…}` from the preamble, when it says one. Never invented. */

@@ -200,6 +200,12 @@ export function connect(id: string, events: HostEvents = {}, source: MessageSour
       events.onContext?.({
         epic: message.epic,
         project: message.project,
+        /* Added by protocol 0.8, and copied for the same reason as the three
+           below: this pane does not act on which FOLDER the canvas is standing
+           in — that is a later phase across every module — but a field dropped
+           here is a field the page believes the host never mentioned, and the
+           symptom of that is silence rather than an error. */
+        projectPath: message.projectPath,
         theme: message.theme,
         selection: message.selection,
         /* Added by protocol 0.6 and copied here for one reason: this app

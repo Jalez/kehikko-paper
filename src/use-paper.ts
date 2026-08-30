@@ -1,7 +1,7 @@
 import type { Goto } from 'roadmap-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { Paper, PaperBrief } from '../store.ts'
+import type { Paper } from '../store.ts'
 import { connect, type Host } from '../wire/host.ts'
 
 /**
@@ -24,7 +24,7 @@ import { connect, type Host } from '../wire/host.ts'
 export type Sight =
   /** Framed, and no greeting has arrived yet. Under a second. */
   | { at: 'listening' }
-  /** Nothing is framing this page. The picker is the whole navigation. */
+  /** Nothing is framing this page, and no `?epic=` was typed either. */
   | { at: 'alone' }
   /** A host is there and says no epic is open. */
   | { at: 'no-epic' }
@@ -35,7 +35,7 @@ export type Sight =
   /** Asking for one. */
   | { at: 'asking'; epic: string }
   /** Showing one. */
-  | { at: 'reading'; paper: Paper; because: 'context' | 'picked' }
+  | { at: 'reading'; paper: Paper }
   /** The fetch failed in a way none of the above describes. */
   | { at: 'broke'; why: string }
 
@@ -60,56 +60,37 @@ async function json(path: string): Promise<Record<string, unknown>> {
 }
 
 /**
- * Read one row of `epics.list` defensively.
+ * Which epic an unframed page was told to read.
  *
- * The protocol is explicit that a response is `unknown`: the host promised
- * nothing about this shape. A row with no usable name is not an epic this page
- * can say anything about and is left out.
+ * The one replacement for the picker, and deliberately not a replacement for
+ * the picker: it names ONE epic and cannot list any. With a host there this is
+ * never consulted — the canvas is the answer and two answers would be one too
+ * many. With no host there is otherwise nothing at all to go on, and a page
+ * that could only ever say "nothing is framing me" would be untestable from a
+ * browser as well as useless at a desk.
  *
- * Two shapes and two spellings are accepted, and neither is indecision. The
- * SHAPE, because the protocol's note on `epics.list` gives a floor for what an
- * answer must contain and never says what wraps it — measured against the host
- * in this workspace it is `{ epics: [...] }`, and a bare array is the other
- * obvious reading. A module that insisted on one would show an empty list
- * against half the hosts that exist while being technically correct, and would
- * do it silently, because `Array.isArray` on the wrong shape is `false` rather
- * than an error. The SPELLING, because the protocol renamed this material from
- * journeys to epics and hosts written against the older spelling answer with
- * `slug`. When no host in the field answers `slug`, that clause goes.
+ * Not validated here beyond being non-empty: `/api/paper` applies `SLUG` to
+ * whatever arrives and refuses identically whether or not the epic exists, so a
+ * second shape check in the browser would be a second place to keep in step
+ * with the first. A string typed into an address bar is exactly as untrusted as
+ * one off the wire and goes through the same door.
  */
-export function briefs(data: unknown): { epic: string; title: string }[] {
-  const rows = Array.isArray(data)
-    ? data
-    : data && typeof data === 'object' && Array.isArray((data as { epics?: unknown }).epics)
-      ? (data as { epics: unknown[] }).epics
-      : null
-  if (!rows) return []
-  const out: { epic: string; title: string }[] = []
-  for (const row of rows) {
-    if (typeof row !== 'object' || row === null) continue
-    const named = row as { epic?: unknown; slug?: unknown; title?: unknown }
-    const epic = typeof named.epic === 'string' ? named.epic : typeof named.slug === 'string' ? named.slug : ''
-    if (!epic) continue
-    out.push({ epic, title: typeof named.title === 'string' ? named.title : epic })
-  }
-  return out
+export function epicFromUrl(search: string): string | null {
+  const asked = new URLSearchParams(search).get('epic')?.trim()
+  return asked ? asked : null
 }
 
 export function usePaper(framed: boolean) {
   const [sight, setSight] = useState<Sight>(() => (framed ? { at: 'listening' } : { at: 'alone' }))
-  /** Every paper on this machine. Empty until `/api/papers` has answered. */
-  const [papers, setPapers] = useState<PaperBrief[]>([])
   /**
-   * Every epic the host will name, or null while nobody has answered.
+   * What this page says out loud, and it is now only ever an answer to a walk.
    *
-   * Three values and the third is doing the work: a list is what the host said,
-   * an empty list is a host saying there are no epics, and `null` is "nobody
-   * has been asked, or nobody answered". Only the first two are facts.
-   * Collapsing the last into the empty list would have this page state, in
-   * writing, that every epic has a paper — on the strength of a question that
-   * was never answered.
+   * It used to narrate the ordinary case as well — "this is the paper for the
+   * epic the canvas is on" — which told a reader what the pane header and the
+   * canvas had both already told them, in the space where the paper goes. A
+   * `roadmap.goto` is different in kind: the page turned and the reader did not
+   * turn it, so something has to say why.
    */
-  const [epics, setEpics] = useState<{ epic: string; title: string }[] | null>(null)
   const [said, setSaid] = useState('')
 
   const host = useRef<Host | null>(null)
@@ -157,22 +138,22 @@ export function usePaper(framed: boolean) {
   /**
    * Ask for one epic's paper.
    *
-   * Called from exactly two places — a context whose epic CHANGED, and a click
-   * on the picker — and never from a context that repeated.
+   * Called from exactly two places — a context whose epic CHANGED, and the
+   * `?epic=` an unframed page was opened with — and never from a context that
+   * repeated. There is no third caller now that the picker is gone, which is
+   * the point: one place decides which paper is on screen.
    */
-  const look = useCallback(async (epic: string, because: 'context' | 'picked') => {
+  const look = useCallback(async (epic: string) => {
     const mine = (asking.current += 1)
     setSight({ at: 'asking', epic })
     try {
       const body = await json(`/api/paper?epic=${encodeURIComponent(epic)}`)
       if (mine !== asking.current) return
       if (body.ok === true && body.paper) {
-        setSight({ at: 'reading', paper: body.paper as Paper, because })
-        setSaid(
-          because === 'context'
-            ? 'This is the paper for the epic the canvas is on.'
-            : 'You chose this paper; the canvas is somewhere else.',
-        )
+        setSight({ at: 'reading', paper: body.paper as Paper })
+        /* Nothing is said. The reader asked for a paper and is looking at one;
+           a sentence under it repeating that is a sentence in the way. */
+        setSaid('')
         return
       }
       if (body.configured === false) {
@@ -180,7 +161,7 @@ export function usePaper(framed: boolean) {
         return
       }
       setSight({ at: 'no-paper', epic })
-      setSaid(`Nothing here holds a paper for ${epic}.`)
+      setSaid('')
     } catch (e) {
       if (mine !== asking.current) return
       setSight({ at: 'broke', why: `The paper for ${epic} could not be read: ${(e as Error).message}` })
@@ -188,19 +169,26 @@ export function usePaper(framed: boolean) {
   }, [])
 
   /*
-   * The paper list is fetched immediately and unconditionally, framed or not.
+   * One question asked of this machine before anything else: has anybody said
+   * where the papers are?
    *
-   * It does not depend on a greeting — it is a fact about this machine — and
-   * asking for it first means the picker is populated by the time a context
-   * arrives, so a `no-epic` screen can already say how many papers are there
-   * instead of promising to find out.
+   * `/api/papers` also answers with every paper on this machine, and this page
+   * deliberately ignores that half of it. The door is not the page's to shrink
+   * — the MCP `list_papers` tool is the other caller and an agent asking "what
+   * papers are here" is a reasonable question for a program to ask — but a PANE
+   * showing a list of papers is what this pass removed, so the list is read and
+   * dropped rather than kept in a state nothing draws.
+   *
+   * Asked unconditionally, framed or not, and not waited for by anything. It
+   * matters because `unconfigured` is otherwise invisible until somebody opens
+   * an epic: a module pointed at no directory at all would sit there saying "no
+   * epic is open", which is true and is not the thing that is wrong.
    */
   useEffect(() => {
     let live = true
     json('/api/papers')
       .then((body) => {
         if (!live) return
-        setPapers(Array.isArray(body.papers) ? (body.papers as PaperBrief[]) : [])
         if (body.configured !== true) {
           setSight({
             at: 'unconfigured',
@@ -211,14 +199,30 @@ export function usePaper(framed: boolean) {
           })
         }
       })
-      .catch((e: unknown) => {
-        if (!live) return
-        setSight({ at: 'broke', why: `The list of papers could not be read: ${(e as Error).message}` })
+      .catch(() => {
+        /* Swallowed rather than shown. This is a probe for one boolean, and a
+           page that replaced a perfectly good paper with "the list of papers
+           could not be read" would be reporting the failure of a question
+           nobody asked. A paper that cannot be read still says so, in `look`. */
       })
     return () => {
       live = false
     }
   }, [])
+
+  /*
+   * With no host, the address bar is the only thing that can say which epic.
+   *
+   * Run once, on mount, and only when unframed. Framed, this is never consulted
+   * at all: the canvas is the answer, and a page that would take an epic from
+   * its own URL as well would have two answers to the one question this app
+   * cannot afford to be confused about.
+   */
+  useEffect(() => {
+    if (framed) return
+    const asked = epicFromUrl(window.location.search)
+    if (asked) void look(asked)
+  }, [framed, look])
 
   useEffect(() => {
     /**
@@ -254,10 +258,10 @@ export function usePaper(framed: boolean) {
 
       if (context.epic === null) {
         setSight({ at: 'no-epic' })
-        setSaid('The canvas is not on an epic.')
+        setSaid('')
         return
       }
-      void look(context.epic, 'context')
+      void look(context.epic)
     }
 
     /**
@@ -292,36 +296,8 @@ export function usePaper(framed: boolean) {
       else early.arrivals.push(arrival)
     }
 
-    /**
-     * Ask which epics exist, once, on the greeting.
-     *
-     * On the greeting rather than on every context, because the set of epics is
-     * not a fact about where the reader is standing, and re-asking it on each
-     * context would be one more request per selection change — the arithmetic
-     * that makes re-fetching the paper wrong, applied to a smaller answer.
-     *
-     * Every failure is the same failure and is swallowed: a host that refuses
-     * the capability, a host that never heard of `epics.list`, and a host that
-     * does not answer all leave `epics` null, and the picker then says nothing
-     * about a gap rather than saying there is none.
-     */
-    const askForEpics = () => {
-      host.current
-        ?.request('epics.list')
-        .then((data) => setEpics(briefs(data)))
-        .catch(() => {
-          /* Deliberately silent. This is enrichment, and a line complaining
-             about a permission this app was never promised is not something a
-             reader of a paper needs. */
-        })
-    }
-
     host.current = connect(ID, {
-      onHello: (context) => {
-        setSaid('A host greeted this page.')
-        held(context, true)
-        askForEpics()
-      },
+      onHello: (context) => held(context, true),
       onContext: (context) => held(context, false),
       onGoto: (message, answer) => goto.current(message, answer),
     })
@@ -346,7 +322,7 @@ export function usePaper(framed: boolean) {
   const resize = useCallback((height: number) => host.current?.resize(height), [])
 
   return useMemo(
-    () => ({ sight, papers, epics, said, setSaid, look, resize, goto }),
-    [sight, papers, epics, said, look, resize],
+    () => ({ sight, said, setSaid, resize, goto }),
+    [sight, said, resize],
   )
 }

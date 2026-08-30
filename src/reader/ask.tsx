@@ -2,7 +2,7 @@ import { Check, Copy, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button.tsx'
-import type { SourceSelection } from '@/lib/selection.ts'
+import type { Passage } from '@/use-selection.ts'
 
 /**
  * "Ask about this passage", rebuilt as a READ.
@@ -34,14 +34,6 @@ import type { SourceSelection } from '@/lib/selection.ts'
  * pretended to be exact would be the same lie the parser refuses to tell about
  * an irregular table.
  */
-
-export interface Passage extends SourceSelection {
-  /** Which `.tex` file the passage was found in, when it could be told. */
-  file: string | null
-  /** Viewport coordinates of the end of the selection. */
-  x: number
-  y: number
-}
 
 const WIDTH = 320
 const MARGIN = 12
