@@ -222,9 +222,10 @@ export function App() {
    * answering.
    *
    * `answer` is called exactly once on every path, including the one where
-   * nothing was found and the one where no paper is loaded. `wire/host.ts` has
-   * a backstop for a module that forgets; this does not intend to rely on it,
-   * and there is a test for the contract.
+   * nothing was found and the one where no paper is loaded.
+   * `roadmap-module-protocol/client` has a backstop for a module that forgets —
+   * 900ms here, which `use-paper.ts` passes explicitly — and this does not
+   * intend to rely on it; there is a test for the contract.
    */
   useEffect(() => {
     goto.current = (message, answer) => {

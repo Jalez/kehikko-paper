@@ -1,17 +1,38 @@
 import type { Goto, Passage } from 'roadmap-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { connect, type Connection } from 'roadmap-module-protocol/client'
+
 import type { Paper } from '../store.ts'
-import { connect, type Host } from '../wire/host.ts'
 
 /**
  * What this page can see, and the one place the wire and the papers meet.
  *
- * `reader/` knows about LaTeX and nothing about the wire. `wire/host.ts` knows
- * about the wire and nothing about papers. This hook is the only place the two
- * meet, and it is deliberately the only one — two places deciding which paper
- * is on screen would eventually disagree, and "which paper am I looking at" is
- * the one question this app cannot afford to be confused about.
+ * `reader/` knows about LaTeX and nothing about the wire.
+ * `roadmap-module-protocol/client` knows about the wire and nothing about
+ * papers. This hook is the only place the two meet, and it is deliberately the
+ * only one — two places deciding which paper is on screen would eventually
+ * disagree, and "which paper am I looking at" is the one question this app
+ * cannot afford to be confused about.
+ *
+ * ## What used to be underneath this
+ *
+ * `wire/host.ts` and `wire/mailbox.ts`, at the root of this repository — 435
+ * lines, near-identical to the copy every sibling module carried. They are one
+ * import now.
+ *
+ * The context was rebuilt field by field there, and this module's list was the
+ * most careful in the family: all nine fields, each with a paragraph arguing
+ * that copying a field it does not read costs a line while dropping one costs
+ * an afternoon. The argument was right and it is the wrong shape — a list that
+ * has to be kept complete is a list that will be incomplete at the next
+ * protocol release, and it was in three sibling modules that had written the
+ * same paragraph. Nothing starts or stops arriving here today, because the list
+ * happened to be current; what changed is that it can no longer fall behind.
+ *
+ * The `goto` backstop is passed explicitly as 900ms, this module's own number
+ * rather than the client's 500 — the option exists so adoption keeps each
+ * module's timing rather than unifying it on the way past.
  *
  * Every type imported from `../store.ts` comes in with `import type`, and that
  * is not a style preference. `store.ts` imports `node:fs`; a VALUE import of it
@@ -112,7 +133,7 @@ export function usePaper(framed: boolean) {
    */
   const [pointed, setPointed] = useState<Passage | null>(null)
 
-  const host = useRef<Host | null>(null)
+  const host = useRef<Connection | null>(null)
   const goto = useRef<GotoHandler>(() => {})
 
   /**
@@ -289,49 +310,58 @@ export function usePaper(framed: boolean) {
     }
 
     /**
-     * The connection is stored BEFORE anything acts on a greeting, and the
-     * order is a fixed bug rather than a style.
+     * The connection is stored BEFORE it is told to listen, and the order is a
+     * fixed bug rather than a style.
      *
-     * `connect` subscribes to the mailbox, and the mailbox replays what has
+     * `listen()` subscribes to the mailbox, and the mailbox replays what has
      * already arrived SYNCHRONOUSLY, inside that call. The greeting almost
      * always arrives before React mounts — that is the entire reason the
-     * mailbox exists — so `onHello` fires on this line, before `host.current`
-     * has been assigned. Anything the handler then tries to send goes nowhere,
-     * with no error and no timeout: in References this hung a page forever on
-     * "Asking about…", because no question was ever sent and so none could time
-     * out. Here the symptom would be a container that knows the epic and never asks
-     * the host which epics exist.
+     * mailbox exists — so `onHello` fires on that line. Anything a handler then
+     * tries to send before the assignment goes nowhere, with no error and no
+     * timeout: in References this hung a page forever on "Asking about…",
+     * because no question was ever sent and so none could time out. Here the
+     * symptom would be a container that knows the epic and never asks the host
+     * which epics exist.
      *
      * Worse, it works often enough to look fine — when the host happens to
      * greet after this effect returns, the assignment has already happened. A
      * race whose good outcome is the common one is the kind that ships.
      *
-     * So anything that fires too early is held and delivered the moment the
-     * assignment is done, in order.
+     * What stood here was a queue that caught the too-early arrivals and
+     * replayed them in order once the assignment was done. `connect` and
+     * `listen` are two calls now, so the ordering is three plain lines.
      */
-    type Arrival = [context: { epic: string | null; theme?: string }, greeting: boolean]
-    let ready = false
-    /* A box rather than a bare `let`, and only because of the compiler: this is
-       assigned inside a callback `connect` invokes, which the flow analysis
-       cannot see. */
-    const early: { arrivals: Arrival[] } = { arrivals: [] }
-    const held = (...arrival: Arrival) => {
-      if (ready) arrived(...arrival)
-      else early.arrivals.push(arrival)
-    }
-
-    host.current = connect(ID, {
-      onHello: (context) => held(context, true),
-      onContext: (context) => held(context, false),
-      onGoto: (message, answer) => goto.current(message, answer),
-    })
-    ready = true
-    for (const arrival of early.arrivals) arrived(...arrival)
-    early.arrivals.length = 0
+    const live = connect(
+      ID,
+      {
+        /**
+         * The greeting, and the second thing it carries.
+         *
+         * `state` is whatever the host is keeping for this module. The copy of
+         * the wire that stood in this repository declared `onHello` with one
+         * parameter, so the value was parsed off the greeting and then had
+         * nowhere to go. It is named and ignored here rather than absent: this
+         * page declares no `state:keep` and holds nothing worth keeping, and
+         * the point is that a page which later wants it finds the plumbing
+         * instead of rediscovering that the host had been sending it.
+         */
+        onHello: (context, _kept) => arrived(context, true),
+        onContext: (context) => arrived(context, false),
+        onGoto: (message, answer) => goto.current(message, answer),
+      },
+      /* 900ms, this module's own number rather than the client's 500. A walk
+         into a paper may have to wait for a paper to load and lay out before it
+         can honestly say whether the reference is in it. */
+      { gotoBackstop: 900 },
+    )
+    host.current = live
+    live.listen()
 
     return () => {
-      host.current?.stop()
-      host.current = null
+      live.stop()
+      /* Cleared only if it is still ours: under StrictMode the second mount has
+         already assigned its own connection by the time some cleanups run. */
+      if (host.current === live) host.current = null
     }
   }, [look])
 
