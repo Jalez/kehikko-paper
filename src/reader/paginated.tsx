@@ -82,8 +82,34 @@ import { PAGE, pageOf, paginate } from './pages.ts'
  * point at.
  */
 
-/** Air between one sheet and the next, in screen pixels. */
-const GAP = 14
+/**
+ * Air between one sheet and the next, in the PAGE's own units.
+ *
+ * It was 14 and it was in SCREEN pixels, which made it the one thing in this
+ * view that did not shrink with the container — and therefore the one thing
+ * that grew, visually, every time somebody made the container narrower. The
+ * wrapper's height is already `sheetHeight * scale`, so the gap's share of a
+ * page was measured at:
+ *
+ *   1100px container  scale 1.000  page 1123px  gap 14px  = 1.25% of a page
+ *    460px container  scale 0.549  page  617px  gap 14px  = 2.27%
+ *    220px container  scale 0.247  page  278px  gap 14px  = 5.04%
+ *
+ * Four times the separation at the width where the pages are smallest and most
+ * need to read as one document. That is what turned a stack of sheets into a
+ * list of cards, and it is what the owner was looking at when they said there
+ * was "quite a bit of space between the A4s".
+ *
+ * So it is a page-relative quantity now, scaled with everything else, and
+ * smaller: ten page-pixels is a little under one per cent of A4, which is about
+ * what a PDF viewer leaves between two sheets. `MIN_GAP` is a screen-pixel
+ * floor, because below about three pixels the shadow under one sheet touches
+ * the edge of the next and two pages read as one long one — and "show whole A4
+ * pages" is not much use if a reader cannot see where one ends.
+ */
+const GAP = 10
+/** The gap never closes below this many real pixels, however small the scale. */
+const MIN_GAP = 3
 
 export interface PaginatedProps {
   paper: Paper
@@ -150,6 +176,8 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
   const [at, setAt] = useState(0)
 
   const scale = room > 0 ? Math.min(1, room / PAGE.width) : 1
+  /* In screen pixels, from a page-relative constant — see the essay on `GAP`. */
+  const gap = Math.max(MIN_GAP, Math.round(GAP * scale))
 
   /**
    * Which sheet the reader is on, told to whoever asked.
@@ -424,7 +452,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
               className="overflow-hidden"
               style={{
                 height: Math.ceil((heights[i] ?? PAGE.height) * scale),
-                marginBottom: i === pages.length - 1 ? 0 : GAP,
+                marginBottom: i === pages.length - 1 ? 0 : gap,
               }}
               data-page={i + 1}
             >

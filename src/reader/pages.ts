@@ -67,8 +67,34 @@ export const PAGE = {
    * which is the thing this file must never do — a paginator that measured
    * would be a paginator that re-packs when a font finishes loading, which is
    * the failure this file exists to end.
+   *
+   * It was 0.5, which was a guess at a serif rather than a measurement of THIS
+   * one, and the guess was 8% too wide. Every paragraph in the thesis and in
+   * one roadmap paper was measured as drawn — 74 of them, six lines or longer
+   * so the partial last line does not dominate — and the median came out at
+   * 96.5 characters to a full line against the 88 this arithmetic assumed.
+   * Range 88.7 to 105.3, which is the spread of English prose and not of the
+   * face. `dev/measure-pages.mjs` is the probe; the calibration run is in its
+   * comment.
+   *
+   * Being wrong in this direction is not neutral. Charging a paragraph more
+   * lines than it draws makes the packer break a page early, and an early break
+   * is the whole of what a reader sees as "a huge gap": measured over the
+   * thesis's 51 sheets, the mean blank on a page nothing had asked for was 471
+   * pixels of a 979-pixel text area — nearly half of every sheet, with the worst
+   * at 919. This constant is the largest single part of that, and with it and
+   * the air below corrected the same thesis packs onto 45 sheets with a mean of
+   * 387. The rest is what greedy packing costs when a paragraph cannot be split
+   * across a break, and splitting one would need the run-time measurement this
+   * file exists to refuse.
+   *
+   * It is still deliberately an ESTIMATE and not a promise. The median is the
+   * right calibration for a page with several paragraphs on it, where the
+   * errors cancel; a single unusually dense paragraph is now charged a line or
+   * two short, which `paginate` already survives — a block that runs over gets
+   * a sheet taller than A4 rather than being clipped.
    */
-  meanCharEm: 0.5,
+  meanCharEm: 0.46,
 } as const
 
 /** The type column, in pixels. */
@@ -79,6 +105,32 @@ export const CHARS_PER_LINE = Math.floor(COLUMN / (PAGE.fontSize * PAGE.meanChar
 
 /** Lines of type that fit between the head and foot margins. */
 export const LINES_PER_PAGE = Math.floor((PAGE.height - PAGE.marginY * 2) / (PAGE.fontSize * PAGE.lineHeight))
+
+/**
+ * The title and the byline at the top of sheet one, in lines.
+ *
+ * `SheetPage` draws a masthead on the first sheet — the paper's title, the
+ * author and the epic — and until now it was drawn WITHOUT being weighed. So
+ * the first page of every paper was packed as though a hundred and sixty
+ * pixels of it were empty, and the only reason that was survivable is that a
+ * first page which runs over is allowed to grow rather than clip. It stopped
+ * being survivable as soon as the rest of the weights got tighter: the first
+ * sheet of `a-green-gate-means-something` came out 1140 pixels tall against
+ * A4's 1123, which is a sheet that is visibly not the same size as the ones
+ * under it.
+ *
+ * Seven lines is the masthead measured on the longest title on this machine —
+ * the thesis's, which wraps to two lines: 133 pixels of type and a 30-pixel
+ * `mb-[2em]`, 163 in all, against a 24-pixel line. A one-line title spends
+ * about four, so this over-reserves by three lines on most papers. That is the
+ * deliberate direction: a first page an inch short is a page, and a first page
+ * that has grown past A4 is a bug somebody can see.
+ *
+ * A constant rather than a measurement for the reason every number in this file
+ * is one — and it cannot be derived from the block list, because the title is
+ * `paper.title`, which is not a block.
+ */
+export const MASTHEAD = 7
 
 const textOf = (segments: { text: string }[]): string => segments.map((s) => s.text).join('')
 
@@ -136,15 +188,39 @@ export function visible(b: PlacedBlock): boolean {
  * sheet's height for a normal plot. Three lines was calibrated for a page that
  * was however tall the container was, where being wrong about a figure cost nothing
  * because the sheet stretched. On a fixed sheet it costs an overrun.
+ *
+ * ## The air is measured now, and it used to be doubled
+ *
+ * The numbers added to `lines()` below are the block's MARGINS expressed in
+ * lines, and they were round numbers picked to be safe. Safe in one direction
+ * only: the CSS in `blocks.tsx` draws a paragraph with `my-[0.8em]`, which is
+ * twelve pixels top and twelve bottom, and two paragraphs in a row COLLAPSE to
+ * twelve — half of a twenty-four-pixel line. It was charged a whole one. A
+ * level-one heading was charged five lines of air, 120 pixels, against a
+ * measured footprint of 99 pixels for the whole heading including its own type.
+ *
+ * Every one of these is now the drawn value, read off the rendered thesis with
+ * `getComputedStyle` and divided by the leading (`dev/measure-pages.mjs`):
+ *
+ *   level ≤ 1 (22.5px type)  margin 45 + 18, whole block 99px = 4.1 lines
+ *   level 2   (18.75px type) margin 34 + 11, whole block 75px = 3.1 lines
+ *   level ≥ 3 (16.5px type)  margin 25 +  8, whole block 59px = 2.5 lines
+ *   paragraph                12px collapsed                   = 0.5 line
+ *
+ * They are fractions, and that is not sloppiness: `paginate` sums them against
+ * a budget of forty, so half a line is a real quantity and rounding each block
+ * up to a whole one is exactly the over-charge being removed. Nothing here
+ * measures the DOM at run time — these are constants like every other number in
+ * this file, they just happen to be right now.
  */
 export function weigh(b: PlacedBlock): number {
   switch (b.kind) {
     case 'heading':
       /* A heading is one or two lines of much larger type plus the air above
          it, and the air is most of the cost. */
-      return lines(textOf(b.segments).length) + (b.level <= 1 ? 5 : 3)
+      return lines(textOf(b.segments).length) + (b.level <= 1 ? 3.1 : b.level === 2 ? 2.1 : 1.5)
     case 'paragraph':
-      return lines(textOf(b.segments).length) + 1
+      return lines(textOf(b.segments).length) + 0.5
     case 'list':
       return b.items.reduce((n, item) => n + lines(textOf(item).length), 0) + 1
     case 'figure':
@@ -163,6 +239,29 @@ export function weigh(b: PlacedBlock): number {
 }
 
 /**
+ * The air ABOVE a block, which it does not get when it is first on a sheet.
+ *
+ * `index.css` sets `margin-top: 0` on whatever the sheet draws first, because a
+ * heading's top margin separates it from the paragraph before it and there is
+ * no paragraph before it at the top of a page. This is the same fact stated to
+ * the packer, so that the space the page gets back is space the page is allowed
+ * to fill rather than blank that appears at the foot instead.
+ *
+ * The one rule that keeps this honest: it must be a fact about the BLOCK and
+ * its position in the packing, never about anything drawn. It is the measured
+ * `margin-top` from `blocks.tsx` divided by the leading, and nothing else.
+ *
+ * Only headings are worth stating. A paragraph's twelve pixels collapse against
+ * its neighbour's anyway, so the half-line it is charged is what it costs
+ * whether it is first or not.
+ */
+function topAir(b: PlacedBlock): number {
+  if (b.kind !== 'heading') return 0
+  /* 45px, 33.75px and 24.75px against a 24px line. */
+  return b.level <= 1 ? 1.9 : b.level === 2 ? 1.4 : 1
+}
+
+/**
  * The block list, packed into sheets.
  *
  * A block heavier than a whole sheet gets a sheet of its own and is allowed to
@@ -177,6 +276,9 @@ export function weigh(b: PlacedBlock): number {
  * rule kept here, because a heading stranded at the foot of a page with its
  * section beginning overleaf is the single break that makes a reader think the
  * page they are on is the end of something.
+ *
+ * Sheet one is `MASTHEAD` lines shorter than the rest, because the title is
+ * drawn on it and something has to pay for that.
  */
 export function paginate(blocks: readonly PlacedBlock[], budget = LINES_PER_PAGE): PlacedBlock[][] {
   const shown = blocks.filter(visible)
@@ -185,16 +287,25 @@ export function paginate(blocks: readonly PlacedBlock[], budget = LINES_PER_PAGE
   const pages: PlacedBlock[][] = []
   let page: PlacedBlock[] = []
   let used = 0
+  /* Room on the sheet being packed. The masthead is only on the first one. */
+  let room = Math.max(1, budget - MASTHEAD)
 
   for (const b of shown) {
     const cost = weigh(b)
-    if (page.length && used + cost > budget) {
+    if (page.length && used + cost > room) {
       pages.push(page)
       page = []
       used = 0
+      room = budget
     }
+    /* First on the sheet, so its top margin is not drawn — see `topAir`. The
+       discount is taken after the break decision and not before it: a block
+       that does not fit on this page has to start the next one whether or not
+       it would be cheaper there, and asking the cheaper question first is how a
+       packer ends up with two answers for one block. */
+    const first = page.length === 0
     page.push(b)
-    used += cost
+    used += first ? cost - topAir(b) : cost
   }
   if (page.length) pages.push(page)
 

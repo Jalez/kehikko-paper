@@ -466,6 +466,49 @@
    */
 }
 
+/*
+ * Nothing carries its air onto the top of a sheet.
+ *
+ * A heading's `mt-[2em]` is the space that separates a section from the
+ * paragraph BEFORE it. When the packer puts that heading first on a page there
+ * is no paragraph before it — there is a page break, which is a far larger
+ * separator already — and the margin becomes dead space between the sheet's own
+ * head margin and the first word on it.
+ *
+ * Measured on the thesis before this rule: thirty-three of its fifty-one sheets
+ * began with a heading, and their first ink sat 106 to 117 pixels below the
+ * sheet's edge against the 72 pixels of `PAGE.marginY` the page is supposed to
+ * have. A sheet beginning with a paragraph sat at 84, because `my-[0.8em]` did
+ * the same thing more quietly. So every sheet in the document carried between
+ * 12 and 45 pixels of blank at its top that nothing had asked for — and the top
+ * of a page is precisely where a reader reads unexplained space as the page
+ * having been pushed down out of its container.
+ *
+ * It is unasked-for in the arithmetic as well: `pages.ts` charges a heading for
+ * its air wherever it lands, so this margin was space the paginator had already
+ * spent somewhere else.
+ *
+ * ## Why this rule is outside every layer
+ *
+ * The margins it overrides are Tailwind utilities (`mt-[2em]`, `my-[0.8em]`),
+ * which live in the `utilities` layer, and `utilities` is declared after
+ * `components` — so the same rule written in `@layer components` above loses on
+ * layer order no matter how specific it is. That was tried first and measured:
+ * the sheets still began at 106. An unlayered rule beats every layered one,
+ * which is the honest way to say "this is the last word on the top of a sheet"
+ * without `!important` on a dozen selectors.
+ *
+ * `> *` rather than a list of tags, because a block body is one of a dozen
+ * elements and a list is a list somebody will forget to extend. The gutter tag
+ * is excluded because it is absolutely positioned off a `top` rather than a
+ * margin — naming it costs one clause and saves the next reader working out
+ * whether it mattered.
+ */
+.sheet > :first-child,
+.sheet > .block-row:first-child > *:not(.gutter-tag) {
+  margin-top: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

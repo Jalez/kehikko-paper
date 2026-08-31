@@ -5,7 +5,17 @@ import { parseLatex } from '../latex/parse.ts'
 import type { Paper, PlacedBlock } from '../store.ts'
 import { Screen, wordsFor } from '../src/app.tsx'
 import { epicFromUrl, type Sight } from '../src/use-paper.ts'
-import { CHARS_PER_LINE, COLUMN, LINES_PER_PAGE, PAGE, paginate, pageOf, visible, weigh } from '../src/reader/pages.ts'
+import {
+  CHARS_PER_LINE,
+  COLUMN,
+  LINES_PER_PAGE,
+  MASTHEAD,
+  PAGE,
+  paginate,
+  pageOf,
+  visible,
+  weigh,
+} from '../src/reader/pages.ts'
 import { PaginatedView, type PaginatedProps } from '../src/reader/paginated.tsx'
 
 /**
@@ -206,6 +216,57 @@ describe('pagination is a property of the document', () => {
 
   test('every block weighs at least one line, so no page can hold all of a long paper', () => {
     for (const block of paper.blocks.filter(visible)) expect(weigh(block)).toBeGreaterThanOrEqual(1)
+  })
+
+  test('the first sheet is packed shorter, because the title is drawn on it', () => {
+    /*
+     * The masthead — title, author, epic — is drawn by `SheetPage` on sheet one
+     * and is not a block, so nothing weighed it and the first page was packed
+     * as though 163 pixels of it were empty. That does not throw: the sheet
+     * grows past A4 instead, and a first page taller than every page under it
+     * is a kind of wrong a reader can see and cannot name. Measured, on
+     * `a-green-gate-means-something`: 1140 pixels against A4's 1123.
+     *
+     * Asserted as a property rather than against a page count, because the
+     * count is a fact about this fixture and the property is not.
+     */
+    const first = paginate(paper.blocks)[0]!
+    expect(first.length).toBeGreaterThan(1)
+    const spent = first.reduce((n, b) => n + weigh(b), 0)
+    /* Two lines of slack: the block that opens a sheet is not charged for the
+       top margin it is not drawn with (see `topAir`), and the largest of those
+       discounts is a chapter heading's 45 pixels. */
+    expect(spent).toBeLessThanOrEqual(LINES_PER_PAGE - MASTHEAD + 2)
+  })
+
+  test('a heading that opens a sheet is not charged for air it is not drawn with', () => {
+    /*
+     * `index.css` sets `margin-top: 0` on whatever a sheet draws first, because
+     * a heading's top margin separates it from the paragraph before it and at
+     * the top of a page there is no paragraph before it. `topAir` says the same
+     * thing to the packer, and the two have to agree: space the page gets back
+     * on screen but not in the arithmetic simply moves to the foot of the sheet
+     * as blank, which is the whole of what the owner reported as a huge gap.
+     *
+     * Thirty identical chapter headings make the discount observable without
+     * any measurement: each weighs 4.1 lines, so a budget charging every one of
+     * them full air fits nine to a sheet, and one that lets the first go
+     * without its 45 pixels fits ten.
+     */
+    const heads = Array.from({ length: 30 }, (_, i) => ({
+      kind: 'heading' as const,
+      id: `h-${i}`,
+      level: 1,
+      segments: [{ kind: 'text' as const, text: 'A section' }],
+      srcStart: i * 10,
+      srcEnd: i * 10 + 9,
+      file: 'main.tex',
+    })) as unknown as PlacedBlock[]
+    const packed = paginate(heads)
+    expect(packed.flat().length).toBe(heads.length)
+    const perPage = Math.floor(LINES_PER_PAGE / weigh(heads[0]!))
+    /* Not page one, which is short by the masthead — any page after it. */
+    expect(packed[1]!.length).toBeGreaterThan(perPage)
   })
 
   test('a block can be found on the page it was packed onto', () => {
