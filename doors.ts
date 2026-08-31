@@ -1,14 +1,5 @@
 import { ID, MANIFEST, VERSION } from './manifest.ts'
-import {
-  isEpic,
-  listPapers,
-  papersDir,
-  readFigure,
-  readPaper,
-  readSource,
-  thesisRoot,
-  type PaperRoot,
-} from './store.ts'
+import { isEpic, keepsPapers, listPapers, projectOf, readFigure, readPaper, readSource } from './store.ts'
 
 /**
  * Every door this app answers on that is not the page itself.
@@ -63,6 +54,36 @@ import {
  * resolved path underneath it — see the two fences in `store.ts` — because "read
  * the open epic's paper" turning into "read anything on this disk" is the real
  * hazard on a read-only server.
+ *
+ * ## Every door here now names a project, and none of them defaults one
+ *
+ * A paper lives in the project it is about — `<project>/data/papers/<epic>/`,
+ * or wherever that project's `.kehikot/paper/papers.json` says — so "which
+ * paper" is not answerable without "whose". Every read takes a `project` and
+ * nothing here supplies a default. The available defaults are each wrong in a
+ * way that is silent: `process.cwd()` is THIS MODULE's directory; "the only
+ * project that has papers" is right until there are two; a compiled-in path is
+ * the line that made the program this was extracted from one person's app. The
+ * environment variables this replaces were a fourth, and their failure was
+ * measured rather than imagined — see the essay at the head of `store.ts`.
+ *
+ * The page is told which project by the host, in `roadmap.context.projectPath`,
+ * and sends it with every request. An unframed page carries `?project=` in its
+ * own URL, beside the `?epic=` it already had. An agent over MCP is told
+ * nothing and must say, and is refused with a sentence when it does not. From
+ * this file's side all three are a string in a request and none of them is
+ * trusted further than `projectOf` will resolve it. This is the argument
+ * Journeys makes at the head of its own `doors.ts`, and the reason it is
+ * repeated verbatim in shape is that a second module quietly reaching a
+ * different conclusion is how a convention stops being one.
+ *
+ * The widening is worth saying out loud: this door used to read one directory
+ * an operator had named in the environment, and now reads a directory named in
+ * a request. That is the same posture every other module in this family already
+ * has, and the fence around it is the same one — loopback, plus the fact that
+ * nothing is a root unless it holds a `main.tex` where a project's own layout
+ * or its own pointer file says one is. Pointing this at somebody's home
+ * directory yields nothing, because a home directory is not a paper.
  */
 
 /* ------------------------------------------------------------------ *
@@ -76,6 +97,8 @@ import {
 
 const MAX_SLUG = 80
 const MAX_PATH = 200
+/** As long as a path may be, matching the protocol's own `LIMITS.PATH`. */
+const MAX_PROJECT = 4096
 
 function str(value: unknown, max: number): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value).slice(0, max)
@@ -107,19 +130,60 @@ const ok = (body: unknown): Reply => ({ status: 200, body })
 const bad = (why: string, status = 400): Reply => ({ status, body: { ok: false, error: why } })
 
 /**
- * The sentence this app says when it has not been told where to look.
+ * The sentence this app says when nobody has said which project.
  *
  * One string, used by the page, by `/api/papers` and by every MCP tool, because
  * a person reading it in a terminal and a person reading it in a container are
  * looking at the same problem and should be given the same instruction. It says
- * what to set rather than that something is unset: "no papers directory" is a
- * fact somebody can do nothing with.
+ * what to do rather than that something is missing: "no project" is a fact
+ * somebody can do nothing with.
+ *
+ * It replaced a sentence naming three environment variables, and the change is
+ * the whole of this pass in one paragraph — where a paper is is a fact about a
+ * project, not about a shell.
  */
-const UNCONFIGURED =
-  'This app has not been told where the papers are. Set KEHIKKO_PAPERS_DIR to the directory holding one ' +
-  'folder per epic, or KEHIKKO_ROADMAP_DIR to a roadmap checkout. For a single document that is not part of ' +
-  'a roadmap — a thesis, with its own main.tex at the top of its own repository — set KEHIKKO_THESIS_DIR to ' +
-  'that directory instead, or as well. Then restart it.'
+const NOWHERE =
+  'No project is open, so there is nowhere to look for a paper. A paper lives in the project it is about: ' +
+  'data/papers/<epic>/main.tex by default, or wherever that project’s .kehikot/paper/papers.json says. Open a ' +
+  'project on the canvas, or pass one — `project` on the MCP door, `?project=` in this page’s own URL.'
+
+/**
+ * What to say about a project that is open and holds no paper for an epic.
+ *
+ * Two different sentences, because they are two different things to do next.
+ * A project with `data/papers/` or a `.kehikot/` in it is a project this app
+ * understands and simply has no paper for THIS epic — write one, or accept that
+ * this epic is not about a paper. A project with neither has never been set up
+ * for papers at all, and the answer is the layout rather than the file.
+ *
+ * The distinction is the same one `/api/papers` has always drawn between "there
+ * are no papers here" and "nobody said where to look": an app that offers one
+ * sentence for both has told somebody the opposite of the truth half the time.
+ */
+function noPaper(epic: string | null, project: string): string {
+  if (keepsPapers(project)) {
+    return epic === null ? `${project} holds no papers yet.` : `no paper for "${epic}" in ${project}`
+  }
+  return (
+    `${project} keeps no papers. This app looks in data/papers/<epic>/main.tex, and reads ` +
+    '.kehikot/paper/papers.json for any epic whose paper is somewhere else — `{"papers":{"thesis":"."}}` for a ' +
+    'project that IS one paper.'
+  )
+}
+
+/**
+ * The project a caller named, resolved — or a refusal saying to name one.
+ *
+ * Refused rather than defaulted, for the reasons at the head of this file. The
+ * two failures are answered with the same sentence on purpose: "you did not say
+ * which project" and "the project you named is not a folder on this machine"
+ * are distinguishable by a caller who can already look at the disk, and this
+ * door will not be the thing that tells them which of two paths exists.
+ */
+function projectArg(value: unknown): { project: string } | { error: string } {
+  const project = projectOf(str(value, MAX_PROJECT))
+  return project === null ? { error: NOWHERE } : { project }
+}
 
 /* ------------------------------------------------------------------ *
  * The MCP door
@@ -130,25 +194,17 @@ interface ToolCall {
 }
 
 /**
- * Where this process may read, as one question with one answer.
+ * The `project` argument, spelled once for all three tools.
  *
- * There are two roots now — the papers directory and, optionally, one thesis —
- * and every door below needs both. Asking separately in seven places is how one
- * door ends up handling one root and not the other, and that failure is not a
- * crash: it is a tool answering "nobody has told me where to look" while the
- * page beside it is showing the paper. `configured` is the disjunction for
- * exactly that reason — somebody who set only `KEHIKKO_THESIS_DIR` has
- * configured this app perfectly well.
+ * It is required on every one of them, and the description says what a host
+ * would put in `roadmap.context.projectPath` because that is the string an
+ * agent is most likely to be able to find. A tool whose project were optional
+ * would be a tool with a default, and the head of this file is about why there
+ * is no default that is not silently wrong.
  */
-function where(): { dir: string | null; thesis: PaperRoot | null; configured: boolean } {
-  const dir = papersDir()
-  const thesis = thesisRoot()
-  return { dir, thesis, configured: dir !== null || thesis !== null }
-}
-
-/** The places this process is reading from, for a sentence in a refusal. */
-function places(w: { dir: string | null; thesis: PaperRoot | null }): string {
-  return [w.dir, w.thesis?.dir].filter(Boolean).join(' and ') || 'nowhere'
+const PROJECT_ARG = {
+  type: 'string',
+  description: 'Absolute path of the project folder — the same path a host puts in roadmap.context.projectPath',
 }
 
 /**
@@ -173,15 +229,16 @@ function places(w: { dir: string | null; thesis: PaperRoot | null }): string {
 const TOOLS: Record<string, { description: string; schema: object; run: ToolCall }> = {
   list_papers: {
     description:
-      'Every epic on this machine that has a paper, with the title the paper gives itself and how many .tex ' +
+      'Every epic in one project that has a paper, with the title the paper gives itself and how many .tex ' +
       'files it is assembled from. Start here — an epic with no paper is simply absent from this list, which ' +
-      'is not the same as an epic that does not exist.',
-    schema: { type: 'object', properties: {} },
-    run() {
-      const w = where()
-      if (!w.configured) return UNCONFIGURED
-      const all = listPapers(w.dir, w.thesis)
-      if (!all.length) return `No papers under ${places(w)}.`
+      'is not the same as an epic that does not exist. Papers are per project: this lists the one you name and ' +
+      'has no way to ask about any other.',
+    schema: { type: 'object', properties: { project: PROJECT_ARG }, required: ['project'] },
+    run(args) {
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const all = listPapers(named.project)
+      if (!all.length) return noPaper(null, named.project)
       return all.map((p) => `${p.epic}\t${p.files} file(s)\t${p.title ?? '(no \\title)'}`).join('\n')
     },
   },
@@ -194,18 +251,18 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       'read_source before editing.',
     schema: {
       type: 'object',
-      properties: { epic: { type: 'string', description: 'e.g. modes-are-modules' } },
-      required: ['epic'],
+      properties: { project: PROJECT_ARG, epic: { type: 'string', description: 'e.g. modes-are-modules' } },
+      required: ['project', 'epic'],
     },
     run(args) {
       const epic = str(args.epic, MAX_SLUG)
       if (!isEpic(epic)) return 'that is not an epic name'
-      const w = where()
-      if (!w.configured) return UNCONFIGURED
-      const paper = readPaper(epic, w.dir, w.thesis)
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const paper = readPaper(epic, named.project)
       if (!paper) {
-        const known = listPapers(w.dir, w.thesis).map((p) => p.epic).join(', ')
-        return `no paper for "${epic}" here. Known: ${known}`
+        const known = listPapers(named.project).map((p) => p.epic).join(', ')
+        return known ? `no paper for "${epic}" there. Known: ${known}` : noPaper(epic, named.project)
       }
       const lines: string[] = [`# ${paper.title ?? paper.epic}`, '']
       for (const block of paper.blocks) {
@@ -243,20 +300,21 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
     schema: {
       type: 'object',
       properties: {
+        project: PROJECT_ARG,
         epic: { type: 'string' },
         file: { type: 'string', description: 'e.g. main.tex or chapters/wire.tex. Defaults to main.tex.' },
       },
-      required: ['epic'],
+      required: ['project', 'epic'],
     },
     run(args) {
       const epic = str(args.epic, MAX_SLUG)
       if (!isEpic(epic)) return 'that is not an epic name'
-      const w = where()
-      if (!w.configured) return UNCONFIGURED
-      const paper = readPaper(epic, w.dir, w.thesis)
-      if (!paper) return `no paper for "${epic}" here`
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const paper = readPaper(epic, named.project)
+      if (!paper) return noPaper(epic, named.project)
       const file = str(args.file, MAX_PATH) || 'main.tex'
-      const source = readSource(epic, file, w.dir, w.thesis)
+      const source = readSource(epic, file, named.project)
       if (source === null) {
         return `"${epic}" does not name a file called "${file}". It is made of: ${paper.files.join(', ')}`
       }
@@ -361,34 +419,34 @@ export function answer(
   }
 
   if (path === '/api/papers' && method === 'GET') {
-    const dir = papersDir()
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
     /*
-     * `configured` and `papers` are separate fields rather than one empty list,
-     * because "there are no papers here" and "nobody has said where to look"
-     * are two different sentences and the page shows different screens for
-     * them. Collapsing them is the exact failure the host's own holdings code
-     * is written to avoid: an app that says "no epics" and quietly means "I was
-     * not configured" has told somebody the opposite of the truth.
-     */
-    const thesis = thesisRoot()
-    /*
-     * `configured` is true if EITHER root was named, not only the first.
+     * Three fields rather than one list, because an empty list is three
+     * different sentences and the page draws a different screen for each.
      *
-     * The second root made this a real bug rather than a nicety: somebody with
-     * only `KEHIKKO_THESIS_DIR` set has configured this app perfectly well, and
-     * a `configured: false` beside a non-empty `papers` list would put the
-     * page's "nobody has told me where to look" screen in front of a reader
-     * whose thesis is sitting right there in the list. `dir` stays exactly what
-     * it was — the papers directory or null — because the page prints it in the
-     * unconfigured screen, and inventing a directory there would be worse than
-     * printing none.
+     *  - `project: null` — nobody has said which project. Not a fault: it is
+     *    where a page starts before a host greets it, and where an unframed
+     *    page stays until somebody puts `?project=` in the URL.
+     *  - `project` set, `keeps: false` — the project is open and has never been
+     *    set up for papers: no `data/papers/`, no `.kehikot/`. The answer is a
+     *    layout, not a missing file.
+     *  - `project` set, `keeps: true`, `papers: []` — an ordinary project that
+     *    has no papers yet, which is a true and unremarkable thing to say.
+     *
+     * Collapsing any two of these is the failure the host's own holdings code
+     * is written to avoid: an app that says "no papers" and quietly means "I
+     * was not told where to look" has told somebody the opposite of the truth.
+     *
+     * `project` is echoed back RESOLVED rather than as it arrived, because the
+     * page prints it, and a page printing the string it sent proves only that
+     * it can remember its own arguments. What is useful on screen is the
+     * directory this server actually looked in.
      */
     return ok({
       ok: true,
-      configured: dir !== null || thesis !== null,
-      dir,
-      thesis: thesis?.dir ?? null,
-      papers: listPapers(dir, thesis),
+      project,
+      keeps: keepsPapers(project),
+      papers: listPapers(project),
     })
   }
 
@@ -398,10 +456,14 @@ export function answer(
        distinguished "no such paper" from "not an epic name" would be a way to
        enumerate what is on this disk. */
     if (!isEpic(epic)) return bad('that is not an epic name')
-    const w = where()
-    if (!w.configured) return { status: 503, body: { ok: false, error: UNCONFIGURED, configured: false } }
-    const paper = readPaper(epic, w.dir, w.thesis)
-    if (!paper) return bad(`no paper for "${epic}" under ${places(w)}`, 404)
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    /* 409 rather than 404: there is no answer to "is there a paper for this
+       epic" until there is a project to have one in. A 404 would be a claim
+       about a directory this app has not been shown. Journeys says the same
+       thing at the same door, in the same words, for the same reason. */
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+    const paper = readPaper(epic, project)
+    if (!paper) return bad(noPaper(epic, project), 404)
     return ok({ ok: true, paper })
   }
 
@@ -427,7 +489,13 @@ export function answer(
     if (!isEpic(epic)) return bad('that is not an epic name')
     const file = str(query.get('file'), MAX_PATH)
     if (!file) return bad('which figure')
-    const figure = readFigure(epic, file)
+    /* The project rides on the `<img src>` the reader's browser fetches, the
+       same as on every other read. It has to: a figure is confined to its
+       paper's root and there is no root without a project. This is the door
+       that used to work with no project at all — because there was a directory
+       in the environment — and the one where forgetting to pass it would look
+       like every image in a paper being broken. */
+    const figure = readFigure(epic, file, projectOf(str(query.get('project'), MAX_PROJECT)))
     /* One refusal for "no such paper", "the paper does not name that file" and
        "this app will not serve that kind of file", for the reason every other
        refusal here is undifferentiated: a reply that distinguished them would
@@ -440,8 +508,7 @@ export function answer(
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const file = str(query.get('file'), MAX_PATH) || 'main.tex'
-    const w = where()
-    const source = readSource(epic, file, w.dir, w.thesis)
+    const source = readSource(epic, file, projectOf(str(query.get('project'), MAX_PROJECT)))
     if (source === null) return bad('that paper does not name a file by that name', 404)
     return ok({ ok: true, epic, file, source })
   }

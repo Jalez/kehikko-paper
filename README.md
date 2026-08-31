@@ -4,8 +4,8 @@ The paper an epic is aimed at, read as prose rather than as LaTeX.
 
 An app: a page, a reader over a directory of `.tex` files, and an MCP door. A
 host may frame it and then it follows whichever epic the canvas is on — but
-nothing here needs one. Open `http://127.0.0.1:7870/app?epic=thesis` and the
-whole reader is there, reading that one paper off this machine.
+nothing here needs one. Open `http://127.0.0.1:7870/app?project=/path/to/thesis&epic=thesis`
+and the whole reader is there, reading that one paper off this machine.
 
 It shows **the paper for the epic the canvas is on, and nothing else**. There is
 no list of the other papers, no margin rail, and no sentence under the page
@@ -13,7 +13,7 @@ explaining which paper it is: the container header already carries this module's
 and the canvas already says which epic it is on.
 
 ```bash
-KEHIKKO_PAPERS_DIR=~/Projects/roadmap/data/papers ./run.sh   # 7870
+./run.sh                # 7870, and there is nothing to configure
 bun run register        # tell a host on this machine where this answers
 bun test
 bun run typecheck
@@ -21,54 +21,66 @@ bun run typecheck
 
 ## Where the papers come from
 
-Environment variables, and no default:
+**The open project.** A paper lives in the project it is about, and the project
+is the one the host names in `roadmap.context.projectPath` — the same
+convention notes, checklist and journeys already keep. There is nothing to set.
 
-| Variable              | Means                                                    |
-| --------------------- | -------------------------------------------------------- |
-| `KEHIKKO_PAPERS_DIR`  | the directory holding one folder per epic                 |
-| `KEHIKKO_ROADMAP_DIR` | a roadmap checkout; `data/papers` under it is used        |
-| `KEHIKKO_THESIS_DIR`  | ONE document: a `main.tex` at the top of its own tree     |
-| `KEHIKKO_THESIS_EPIC` | the slug that document answers to. Default `thesis`       |
-| `PORT`                | 7870 by default                                           |
-| `ROADMAP_ORIGIN`      | who may frame this page; the local host by default        |
+| Where                                    | Means                                        |
+| ---------------------------------------- | -------------------------------------------- |
+| `<project>/data/papers/<epic>/main.tex`  | the default, found by looking                |
+| `<project>/.kehikot/paper/papers.json`   | the exceptions, one line per epic            |
+| `PORT`                                   | 7870 by default                              |
+| `ROADMAP_ORIGIN`                         | who may frame this page; the local host by default |
 
-None of the first three set is an ordinary state with a screen of its own,
-saying what to set. It is deliberately not an error and deliberately not a
-default path: the program this was extracted from had `../05_drafts/thesis_latex`
-compiled into it, which is the line that made it one person's app rather than a
-module.
+A paper is that directory's `main.tex`, plus whatever it `\include`s. Nothing
+is cached: the file is opened on every read, so a paper edited in an editor is
+the paper the next read shows.
 
-A paper is `<papers>/<epic>/main.tex`, plus whatever it `\include`s. Nothing is
-cached: the file is opened on every read, so a paper edited in an editor is a
-paper the next read shows.
+No project is an ordinary state with a screen of its own, and it is deliberately
+not an error and deliberately not a guess. The program this was extracted from
+had `../05_drafts/thesis_latex` compiled into it, which is the line that made it
+one person's app rather than a module.
 
-### Why a thesis is a second root and not a thirteenth subdirectory
+### The pointer file, for a project whose paper is somewhere else
 
-`KEHIKKO_PAPERS_DIR` names a directory of directories. A thesis is not shaped
-like that: `main.tex` sits at the top of its own repository with `chapters/`,
-`figures/`, a `.cls` and a `references.bib` beside it, and it is the only thing
-in there. There is no parent full of siblings to point at.
+```json
+{ "papers": { "thesis": "." } }
+```
 
-The three ways of forcing it into the existing model are each worse than a
-variable. Pointing `KEHIKKO_PAPERS_DIR` at the thesis's parent makes every
-unrelated sibling folder a candidate epic and — worse — makes the confinement
-root the parent, so `\include{../other/…}` would resolve *inside* the root and
-be served: the fence still doing its job, and the job having become the wrong
-one. Symlinking the thesis into `data/papers/thesis` works, and works by asking
-the author to put a link to their thesis inside the roadmap's own data directory
-so that this app did not have to grow a variable. Copying it in is the one thing
-the essay at the top of `store.ts` exists to forbid.
+One entry per epic; the value is a path **relative to the project root**. `"."`
+means the paper IS the project, which is the thesis case: `main.tex` at the top
+of its own repository with `chapters/`, `figures/`, a `.cls` and a
+`references.bib` beside it, and no `data/papers` anywhere.
 
-So: a second root, **confined separately**, with its own slug. `roots()` is
-where the two meet, and the meeting is a list rather than a merge — nothing
-resolves a path against more than the one root it belongs to, and a path outside
-every root is refused. A slug that exists under both loses in the thesis root,
-so an existing paper keeps working and the new variable is the one that visibly
-does nothing.
+This is what `KEHIKKO_THESIS_DIR` used to be, and it is better on every axis
+that mattered. It is per-project rather than per-shell, so it travels with the
+repository it is about; it is versioned with the person's own work; and it
+cannot go missing when somebody restarts this module from a different terminal —
+which is exactly what happened to the variable, after which this app answered,
+correctly and uselessly, that nothing on this machine held a paper for the
+thesis.
 
-The slug from the environment goes through the same `SLUG` check as one from a
-URL. A variable is set by somebody standing closer, not by somebody more
-trustworthy.
+A malformed or missing file means "this project declares no exceptions". It is
+hand-edited, so a stray comma must degrade to the default rather than to a page
+that will not draw. A value pointing out of the project is refused by `confine`,
+not by the parser, and a directory with no `main.tex` in it is not a root.
+
+An exception **wins** over a `data/papers/<epic>/` that happens to exist. The
+directory was found by looking; the pointer is a sentence somebody wrote on
+purpose, and when they disagree the one with an author behind it is the answer.
+
+### One project at a time, and each confined to itself
+
+Every door takes a project and none of them defaults one — `process.cwd()` is
+this module's own directory, and "the only project with papers" is right until
+there are two. The page is told by the host; an unframed page is told by its own
+URL (`/app?project=/abs/path&epic=thesis`); an agent at `/mcp` passes `project`
+and is refused with a sentence if it does not.
+
+The confinement root is the **paper's** directory, not the project's, so one
+epic's `\include` cannot reach into the next epic's paper or into the rest of
+somebody's repository. See `confine` in `store.ts`, which resolves the parent of
+a path that does not exist rather than trusting a lexical prefix.
 
 ## What it does
 

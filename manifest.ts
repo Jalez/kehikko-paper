@@ -189,7 +189,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   mcp: {
     url: '/mcp',
     transport: 'http',
-    about: 'The papers on this machine: which epics have one, and the prose or the raw source of any section.',
+    /* "In a project" and not "on this machine", because that is the shape of
+       the door now: every tool takes a project and none of them can be asked
+       about the disk. An `about` still promising a machine-wide list would have
+       an agent call `list_papers` with no project and read the refusal as a
+       fault in the module. */
+    about: 'The papers in a project: which epics have one, and the prose or the raw source of any section.',
   },
   extensions: { emits: [], consumes: [] },
   declares: {

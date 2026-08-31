@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -18,13 +18,27 @@ import { ID } from '../manifest.ts'
  * comment cannot fail.
  */
 
-const root = mkdtempSync(join(tmpdir(), 'kehikko-paper-doors-'))
-const papers = join(root, 'papers')
+/*
+ * Two projects, because every door here takes one and the interesting failures
+ * are all about being asked the right question against the wrong project.
+ *
+ * These used to be two environment variables — a papers directory and a thesis
+ * directory — set in `beforeAll` and deleted in `afterAll`. They are two
+ * project layouts now, which is a better fixture for the same reason it is a
+ * better design: a test that reaches into `process.env` is testing the shell
+ * this process was started in, and that is not where a paper lives.
+ */
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'kehikko-paper-doors-')))
+
+/** A project of the ordinary shape: papers under `data/papers`, nothing else. */
+const roadmap = join(root, 'roadmap')
+/** A project that IS one paper, which needs the pointer file to be found. */
+const thesis = join(root, 'thesis')
 
 beforeAll(() => {
-  mkdirSync(join(papers, 'a-paper'), { recursive: true })
+  mkdirSync(join(roadmap, 'data', 'papers', 'a-paper'), { recursive: true })
   writeFileSync(
-    join(papers, 'a-paper', 'main.tex'),
+    join(roadmap, 'data', 'papers', 'a-paper', 'main.tex'),
     [
       '\\title{Something argued}',
       '\\begin{document}',
@@ -35,12 +49,15 @@ beforeAll(() => {
       '\\end{document}',
     ].join('\n'),
   )
-  /* A second root, of the shape a thesis actually has: one document at the top
-     of its own directory with a `figures/` folder beside it, rather than a
-     subdirectory of a directory of papers. */
-  mkdirSync(join(root, 'thesis', 'figures'), { recursive: true })
+  /* The shape a thesis actually has: one document at the top of its own
+     repository with a `figures/` folder beside it, rather than a subdirectory
+     of a directory of papers. One line in `.kehikot/paper/papers.json` is the
+     whole of what `KEHIKKO_THESIS_DIR` used to be. */
+  mkdirSync(join(thesis, 'figures'), { recursive: true })
+  mkdirSync(join(thesis, '.kehikot', 'paper'), { recursive: true })
+  writeFileSync(join(thesis, '.kehikot', 'paper', 'papers.json'), JSON.stringify({ papers: { thesis: '.' } }))
   writeFileSync(
-    join(root, 'thesis', 'main.tex'),
+    join(thesis, 'main.tex'),
     [
       '\\title{A thesis}',
       '\\begin{document}',
@@ -51,15 +68,11 @@ beforeAll(() => {
       '\\end{document}',
     ].join('\n'),
   )
-  writeFileSync(join(root, 'thesis', 'figures', 'plot.png'), PNG)
-  writeFileSync(join(root, 'thesis', 'figures', 'private.png'), PNG)
-  process.env.KEHIKKO_PAPERS_DIR = papers
-  process.env.KEHIKKO_THESIS_DIR = join(root, 'thesis')
+  writeFileSync(join(thesis, 'figures', 'plot.png'), PNG)
+  writeFileSync(join(thesis, 'figures', 'private.png'), PNG)
 })
 
 afterAll(() => {
-  delete process.env.KEHIKKO_PAPERS_DIR
-  delete process.env.KEHIKKO_THESIS_DIR
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -69,6 +82,10 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const get = (path: string, query = '') => answer('GET', path, new URLSearchParams(query), null)
 const post = (path: string, body: Record<string, unknown> | null) =>
   answer('POST', path, new URLSearchParams(), body)
+
+/** A query with a project on it, since every read door now needs one. */
+const inProject = (project: string, query = '') =>
+  query ? `${query}&project=${encodeURIComponent(project)}` : `project=${encodeURIComponent(project)}`
 
 describe('there is no write path', () => {
   /*
@@ -107,23 +124,72 @@ describe('the ordinary doors', () => {
     expect(get('/healthz')?.body).toMatchObject({ ok: true, id: ID })
   })
 
-  test('the paper list says whether anybody has configured this', () => {
-    /* Two fields, not one empty list. "No papers here" and "nobody said where to
-       look" are different sentences and the page draws different screens. */
-    const body = get('/api/papers')?.body as {
-      configured: boolean
+  test('the paper list is one project’s, and says which', () => {
+    /* It used to be every paper on this machine, across two configured roots.
+       There is no such list any more and there should never have been one: a
+       container is standing in a project, and papers from a project nobody is
+       looking at are somebody else's material drawn under this project's name. */
+    const body = get('/api/papers', inProject(roadmap))?.body as {
+      project: string | null
+      keeps: boolean
       papers: { epic: string }[]
     }
-    expect(body.configured).toBe(true)
-    /* Both roots, in one list, because this is the answer to "what papers are on
-this machine" — the MCP `list_papers` tool's question — and not a
-       list of the variables that were set. Which root a paper came from is this
-       file's business and never the reader's. */
-    expect(body.papers.map((p) => p.epic).sort()).toEqual(['a-paper', 'thesis'])
+    expect(body.project).toBe(roadmap)
+    expect(body.keeps).toBe(true)
+    expect(body.papers.map((p) => p.epic)).toEqual(['a-paper'])
+
+    const other = get('/api/papers', inProject(thesis))?.body as { papers: { epic: string }[] }
+    expect(other.papers.map((p) => p.epic)).toEqual(['thesis'])
+  })
+
+  test('three emptinesses, told apart rather than collapsed into one list', () => {
+    /*
+     * The distinction the host's own holdings code is built around, and the one
+     * this door has always drawn: an app that says "no papers" and quietly
+     * means "nobody told me where to look" has told somebody the opposite of
+     * the truth. There is one more of these than there used to be, because
+     * "this project was never set up for papers" and "this project has none
+     * yet" are also different things to do next.
+     */
+    const nowhere = get('/api/papers')?.body as { project: string | null; keeps: boolean }
+    expect(nowhere.project).toBeNull()
+    expect(nowhere.keeps).toBe(false)
+
+    const bare = join(root, 'bare')
+    mkdirSync(bare, { recursive: true })
+    const unset = get('/api/papers', inProject(bare))?.body as { project: string | null; keeps: boolean }
+    expect(unset.project).toBe(bare)
+    expect(unset.keeps).toBe(false)
+
+    const empty = join(root, 'empty-roadmap')
+    mkdirSync(join(empty, 'data', 'papers'), { recursive: true })
+    const nonePlease = get('/api/papers', inProject(empty))?.body as {
+      keeps: boolean
+      papers: unknown[]
+    }
+    expect(nonePlease.keeps).toBe(true)
+    expect(nonePlease.papers).toEqual([])
+  })
+
+  test('a paper asked for with no project is 409, not 404', () => {
+    /* There is no answer to "is there a paper for this epic" until there is a
+       project to have one in. A 404 would be a claim about a directory this app
+       has not been shown. */
+    const reply = get('/api/paper', 'epic=a-paper')
+    expect(reply?.status).toBe(409)
+    expect((reply?.body as { project: string | null }).project).toBeNull()
+  })
+
+  test('a paper cannot be read through the wrong project', () => {
+    /* The property the two-root arrangement had to keep and the two-project one
+       still does: nothing resolves against a root it does not belong to. The
+       slug is right, the paper exists on this disk, and the answer is still no. */
+    expect(get('/api/paper', inProject(thesis, 'epic=a-paper'))?.status).toBe(404)
+    expect(get('/api/paper', inProject(roadmap, 'epic=thesis'))?.status).toBe(404)
   })
 
   test('one paper comes back parsed, with its chapters in reading order', () => {
-    const body = get('/api/paper', 'epic=a-paper')?.body as {
+    const body = get('/api/paper', inProject(roadmap, 'epic=a-paper'))?.body as {
       ok: boolean
       paper: { title: string; outline: { text: string }[] }
     }
@@ -133,14 +199,14 @@ this machine" — the MCP `list_papers` tool's question — and not a
   })
 
   test('an epic with no paper is a 404 and not an empty document', () => {
-    expect(get('/api/paper', 'epic=nothing-here')?.status).toBe(404)
+    expect(get('/api/paper', inProject(roadmap, 'epic=nothing-here'))?.status).toBe(404)
   })
 
   test('a name that is not an epic name is refused the same way whatever exists', () => {
     /* Identical refusals, so the door cannot be used to enumerate what is on
        this disk by timing or by wording. */
-    const a = get('/api/paper', 'epic=' + encodeURIComponent('../../etc/passwd'))
-    const b = get('/api/paper', 'epic=' + encodeURIComponent('Not A Slug'))
+    const a = get('/api/paper', inProject(roadmap, 'epic=' + encodeURIComponent('../../etc/passwd')))
+    const b = get('/api/paper', inProject(roadmap, 'epic=' + encodeURIComponent('Not A Slug')))
     expect(a?.status).toBe(400)
     expect(a?.body).toEqual(b?.body as object)
   })
@@ -171,7 +237,7 @@ describe('the MCP door', () => {
       jsonrpc: '2.0',
       id: 3,
       method: 'tools/call',
-      params: { name: 'read_paper', arguments: { epic: 'a-paper' } },
+      params: { name: 'read_paper', arguments: { project: roadmap, epic: 'a-paper' } },
     })
     const text = (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
     expect(text).toContain('The claim, in a sentence.')
@@ -183,10 +249,44 @@ describe('the MCP door', () => {
       jsonrpc: '2.0',
       id: 4,
       method: 'tools/call',
-      params: { name: 'read_source', arguments: { epic: 'a-paper' } },
+      params: { name: 'read_source', arguments: { project: roadmap, epic: 'a-paper' } },
     })
     const text = (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
     expect(text).toContain('\\begin{document}')
+  })
+
+  test('every tool refuses without a project rather than guessing one', () => {
+    /*
+     * The refusal is the feature. Each available default is silently wrong —
+     * `process.cwd()` is this module's own directory, "the only project with
+     * papers" is right until there are two — and a tool that guessed would
+     * answer confidently about a paper nobody asked for.
+     */
+    for (const name of ['list_papers', 'read_paper', 'read_source']) {
+      const reply = post('/mcp', {
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'tools/call',
+        params: { name, arguments: { epic: 'a-paper' } },
+      })
+      const text = (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
+      expect(text).toContain('No project is open')
+    }
+  })
+
+  test('list_papers answers about the project it was given and no other', () => {
+    const ask = (project: string) => {
+      const reply = post('/mcp', {
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'tools/call',
+        params: { name: 'list_papers', arguments: { project } },
+      })
+      return (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
+    }
+    expect(ask(roadmap)).toContain('a-paper')
+    expect(ask(roadmap)).not.toContain('thesis')
+    expect(ask(thesis)).toContain('thesis')
   })
 
   test('a notification is answered with nothing at all', () => {
@@ -214,7 +314,7 @@ describe('the figure door', () => {
    */
 
   test('a raster the paper named comes back as bytes with a type, not as JSON', () => {
-    const reply = get('/api/figure', 'epic=thesis&file=figures%2Fplot.png')
+    const reply = get('/api/figure', inProject(thesis, 'epic=thesis&file=figures%2Fplot.png'))
     expect(reply?.status).toBe(200)
     expect(reply?.body).toBeNull()
     expect(reply?.binary?.type).toBe('image/png')
@@ -225,7 +325,7 @@ describe('the figure door', () => {
     /* The check that stops this being a file server. `figures/private.png`
        exists, is a PNG, and is inside the root; it is refused because the paper
        does not name it. */
-    const reply = get('/api/figure', 'epic=thesis&file=figures%2Fprivate.png')
+    const reply = get('/api/figure', inProject(thesis, 'epic=thesis&file=figures%2Fprivate.png'))
     expect(reply?.status).toBe(404)
     expect(reply?.binary).toBeUndefined()
   })
@@ -236,14 +336,14 @@ describe('the figure door', () => {
       'epic=thesis&file=main.tex',
       'epic=thesis',
     ]) {
-      const reply = get('/api/figure', query)
+      const reply = get('/api/figure', inProject(thesis, query))
       expect(reply?.binary).toBeUndefined()
       expect(reply?.status).toBeGreaterThanOrEqual(400)
     }
   })
 
   test('an epic name that is not one is refused before any filesystem call', () => {
-    expect(get('/api/figure', 'epic=..%2F..&file=figures%2Fplot.png')?.status).toBe(400)
+    expect(get('/api/figure', inProject(thesis, 'epic=..%2F..&file=figures%2Fplot.png'))?.status).toBe(400)
   })
 
   test('one root cannot be asked for the other root’s figure', () => {
@@ -251,6 +351,6 @@ describe('the figure door', () => {
        directory and names no figures at all; asking for the thesis's figure
        under its slug must not resolve, because a union of roots is exactly what
        a second root must not become. */
-    expect(get('/api/figure', 'epic=a-paper&file=figures%2Fplot.png')?.status).toBe(404)
+    expect(get('/api/figure', inProject(roadmap, 'epic=a-paper&file=figures%2Fplot.png'))?.status).toBe(404)
   })
 })

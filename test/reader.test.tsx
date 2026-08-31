@@ -535,8 +535,13 @@ describe('the screens that are not a paper', () => {
    */
   const cases: { sight: Sight; says: RegExp }[] = [
     { sight: { at: 'no-epic' }, says: /No epic is open/ },
-    { sight: { at: 'no-paper', epic: 'unwritten' }, says: /This epic has no paper/ },
-    { sight: { at: 'unconfigured', why: 'nothing is set' }, says: /where the papers are/ },
+    { sight: { at: 'no-paper', epic: 'unwritten', why: '' }, says: /This epic has no paper/ },
+    /* `unconfigured` was here, saying "nobody has said where the papers are" —
+       a sentence about environment variables. There are none: a paper is in the
+       project, so the only way to have nowhere to look is to have no project,
+       and that is a state a reader passes through rather than a fault they have
+       to go and repair. */
+    { sight: { at: 'no-project', why: '' }, says: /No project is open/ },
     { sight: { at: 'alone' }, says: /Nothing is framing this page/ },
   ]
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { connect, type Connection } from 'roadmap-module-protocol/client'
 
 import type { Paper } from '../store.ts'
+import { json, standIn, standingIn } from './api.ts'
 
 /**
  * What this page can see, and the one place the wire and the papers meet.
@@ -49,10 +50,28 @@ export type Sight =
   | { at: 'alone' }
   /** A host is there and says no epic is open. */
   | { at: 'no-epic' }
-  /** An epic is open and this machine holds no paper for it. */
-  | { at: 'no-paper'; epic: string }
-  /** Nobody has told this program where the papers are. */
-  | { at: 'unconfigured'; why: string }
+  /**
+   * An epic is open and its project holds no paper for it.
+   *
+   * `why` rides along because the sentence is worth nothing without the
+   * directory in it. "There is no paper for this epic" used to be a claim about
+   * the whole machine; it is now a claim about one project, and naming that
+   * project is the difference between a reader shrugging at it and a reader
+   * noticing they are standing somewhere they did not mean to be. The server
+   * composes it, because the server is the only one that knows whether the
+   * project keeps papers at all — see `noPaper` in `doors.ts`.
+   */
+  | { at: 'no-paper'; epic: string; why: string }
+  /**
+   * Nobody has said which project, so there is nowhere to look.
+   *
+   * This replaced `unconfigured`, which meant "no environment variable is set"
+   * — a sentence about the shell that started this process. What it describes
+   * is a different kind of thing now: not a misconfiguration somebody has to go
+   * and repair, but the ordinary condition of a canvas with no project open,
+   * which a reader passes through several times a day.
+   */
+  | { at: 'no-project'; why: string }
   /** Asking for one. */
   | { at: 'asking'; epic: string }
   /** Showing one. */
@@ -65,19 +84,30 @@ export type GotoHandler = (goto: Goto, answer: (found: boolean, why?: string) =>
 const ID = 'roadmap.paper'
 
 /**
- * Fetches are relative, and that is load-bearing.
+ * Which project an unframed page was told to stand in.
  *
- * `/api/paper` and not `http://127.0.0.1:7870/api/paper`. The page is served at
- * `/app` by the same process that answers these, so a relative path is a fact
- * about where this document came from; an absolute one would be this file's
- * guess about a port, and a wrong guess is a page that works when developed and
- * not when somebody runs it on another one.
+ * The companion to `epicFromUrl` and it arrived for the same reason. A paper
+ * now lives in a project, so a page with no host has to be told two things
+ * rather than one, and the address bar is still the only thing that can say
+ * either. `?project=/abs/path&epic=some-slug` is a page opened at a desk; with
+ * a host there neither is consulted, because the canvas is the answer and two
+ * answers would be one too many.
+ *
+ * This is the fallback that replaced `KEHIKKO_PAPERS_DIR`, and it is a better
+ * one on every axis that mattered: it names the project rather than a directory
+ * of papers, it is per-page rather than per-shell, it cannot go missing when
+ * somebody restarts the module from a different terminal, and it is the same
+ * string in the same request that the framed page and an agent at `/mcp` both
+ * send — one path through the server rather than two.
+ *
+ * Not validated here beyond being non-empty. `projectOf` on the other side
+ * demands an absolute path that resolves to a directory and refuses everything
+ * else identically; a second opinion in the browser would be a second rule to
+ * keep in step with the first.
  */
-async function json(path: string): Promise<Record<string, unknown>> {
-  const response = await fetch(path, { headers: { accept: 'application/json' } })
-  const body: unknown = await response.json()
-  if (!body || typeof body !== 'object') throw new Error('that answer was not a document')
-  return body as Record<string, unknown>
+export function projectFromUrl(search: string): string | null {
+  const asked = new URLSearchParams(search).get('project')?.trim()
+  return asked ? asked : null
 }
 
 /**
@@ -166,6 +196,24 @@ export function usePaper(framed: boolean) {
   const standingOn = useRef<string | null | undefined>(undefined)
 
   /**
+   * Which project the last context put this page in.
+   *
+   * Three values for the same reason `standingOn` has three, and one extra
+   * consequence: this is the field that changes WHICH STORE the page is
+   * reading. Every other field in a context changes what is drawn out of one
+   * project; a new `projectPath` means a different directory, a different set
+   * of papers, and a different answer to every question already asked.
+   *
+   * So a project that changed forces the epic to be re-read even when the epic
+   * did not change. Epic slugs are short, lower-case and hand-picked — `thesis`
+   * and `wire` are real ones — and a second project plausibly uses the same
+   * word for something else. "You are already showing this" is only true within
+   * one project, and believing it across two draws the wrong paper under the
+   * right name with nothing on screen saying so.
+   */
+  const standingInRef = useRef<string | null | undefined>(undefined)
+
+  /**
    * Which question is the current one.
    *
    * Epics switch faster than a slow disk answers, and without this the answer
@@ -185,9 +233,20 @@ export function usePaper(framed: boolean) {
    */
   const look = useCallback(async (epic: string) => {
     const mine = (asking.current += 1)
+    /* Asked before the fetch rather than after the refusal. With no project
+       there is nothing to ask, and firing a request that can only ever come
+       back 409 puts a red line in the network tab on every load for a state
+       that is ordinary — a canvas with no project open. Journeys had exactly
+       this, as a 404 on every render for an epic it held no journey for, and
+       the noise sent people hunting a broken fetch that did not exist. */
+    if (standingIn() === null) {
+      setSight({ at: 'no-project', why: '' })
+      setSaid('')
+      return
+    }
     setSight({ at: 'asking', epic })
     try {
-      const body = await json(`/api/paper?epic=${encodeURIComponent(epic)}`)
+      const body = await json('/api/paper', { epic })
       if (mine !== asking.current) return
       if (body.ok === true && body.paper) {
         setSight({ at: 'reading', paper: body.paper as Paper })
@@ -196,11 +255,15 @@ export function usePaper(framed: boolean) {
         setSaid('')
         return
       }
-      if (body.configured === false) {
-        setSight({ at: 'unconfigured', why: String(body.error ?? '') })
+      /* `project: null` in a refusal is the server saying it was given no
+         project — which can only mean this page's own idea of where it stands
+         disagreed with what it sent, so the page's state is what is wrong and
+         the paper is not the thing to report on. */
+      if (body.project === null) {
+        setSight({ at: 'no-project', why: String(body.error ?? '') })
         return
       }
-      setSight({ at: 'no-paper', epic })
+      setSight({ at: 'no-paper', epic, why: String(body.error ?? '') })
       setSaid('')
     } catch (e) {
       if (mine !== asking.current) return
@@ -209,57 +272,44 @@ export function usePaper(framed: boolean) {
   }, [])
 
   /*
-   * One question asked of this machine before anything else: has anybody said
-   * where the papers are?
+   * The probe that used to run here is gone, and its absence is the change.
    *
-   * `/api/papers` also answers with every paper on this machine, and this page
-   * deliberately ignores that half of it. The door is not the page's to shrink
-   * — the MCP `list_papers` tool is the other caller and an agent asking "what
-   * papers are here" is a reasonable question for a program to ask — but a PANE
-   * showing a list of papers is what this pass removed, so the list is read and
-   * dropped rather than kept in a state nothing draws.
+   * It asked `/api/papers` on mount, unconditionally, to find out whether
+   * anybody had set the environment variables — because `unconfigured` was
+   * otherwise invisible until somebody opened an epic, and a module pointed at
+   * no directory would sit there saying "no epic is open", which was true and
+   * was not the thing that was wrong.
    *
-   * Asked unconditionally, framed or not, and not waited for by anything. It
-   * matters because `unconfigured` is otherwise invisible until somebody opens
-   * an epic: a module pointed at no directory at all would sit there saying "no
-   * epic is open", which is true and is not the thing that is wrong.
+   * There is nothing to probe for any more. Where a paper is is a fact about
+   * the open project, so the question "is this app configured" has no answer
+   * that is not also the answer to "which project is open" — and that arrives
+   * in the context, from the host, without being asked. A probe fired before
+   * any context could only ever report on a project this page had not been told
+   * about yet.
+   *
+   * `/api/papers` still exists and is still worth having: `list_papers` on the
+   * MCP door is its caller, and an agent asking what papers a project holds is
+   * a reasonable question for a program to ask. The page simply is not one of
+   * its callers now.
    */
-  useEffect(() => {
-    let live = true
-    json('/api/papers')
-      .then((body) => {
-        if (!live) return
-        if (body.configured !== true) {
-          setSight({
-            at: 'unconfigured',
-            why:
-              'This app reads papers out of directories named by environment variables, and none of ' +
-              'KEHIKKO_PAPERS_DIR, KEHIKKO_ROADMAP_DIR or KEHIKKO_THESIS_DIR is set for the process ' +
-              'serving this page.',
-          })
-        }
-      })
-      .catch(() => {
-        /* Swallowed rather than shown. This is a probe for one boolean, and a
-           page that replaced a perfectly good paper with "the list of papers
-           could not be read" would be reporting the failure of a question
-           nobody asked. A paper that cannot be read still says so, in `look`. */
-      })
-    return () => {
-      live = false
-    }
-  }, [])
 
   /*
-   * With no host, the address bar is the only thing that can say which epic.
+   * With no host, the address bar is the only thing that can say where we are.
    *
-   * Run once, on mount, and only when unframed. Framed, this is never consulted
-   * at all: the canvas is the answer, and a page that would take an epic from
-   * its own URL as well would have two answers to the one question this app
-   * cannot afford to be confused about.
+   * Two things rather than one, and `project` is set BEFORE the epic is asked
+   * for — `look` reads the standing project to decide whether there is anything
+   * to ask at all, so the other order is a page that says "no project" and then
+   * quietly does not retry.
+   *
+   * Run once, on mount, and only when unframed. Framed, neither is consulted:
+   * the canvas is the answer, and a page taking a project from its own URL as
+   * well would have two answers to the one question this app cannot afford to
+   * be confused about — with the URL's answer being the stale one, since it
+   * cannot change when the host moves the canvas to another project.
    */
   useEffect(() => {
     if (framed) return
+    standIn(projectFromUrl(window.location.search))
     const asked = epicFromUrl(window.location.search)
     if (asked) void look(asked)
   }, [framed, look])
@@ -274,7 +324,10 @@ export function usePaper(framed: boolean) {
      * on the greeting, which is a bug that only shows on the first paint and
      * therefore in front of somebody.
      */
-    const arrived = (context: { epic: string | null; theme?: string; passage?: Passage | null }, greeting: boolean) => {
+    const arrived = (
+      context: { epic: string | null; projectPath?: string | null; theme?: string; passage?: Passage | null },
+      greeting: boolean,
+    ) => {
       /* The theme is a fact about the document rather than about any part of
          it, so it goes on the root element. `light` is set explicitly as well
          as `dark`, so a host asking for light on a machine set to dark actually
@@ -296,13 +349,40 @@ export function usePaper(framed: boolean) {
          forgotten everything. In StrictMode this effect is torn down and set up
          again on purpose, and the replayed greeting must not be deduplicated
          against state the teardown has already discarded. */
-      if (greeting) standingOn.current = undefined
+      if (greeting) {
+        standingOn.current = undefined
+        standingInRef.current = undefined
+      }
 
-      if (context.epic === standingOn.current) return
+      /*
+       * The project is applied FIRST, and it invalidates the epic.
+       *
+       * `standIn` is what every later fetch and every `<img src>` on this page
+       * is built from, so it has to be current before anything is asked. And a
+       * project that moved makes "you are already showing this epic" false even
+       * when the epic did not move, for the reason on `standingInRef`: the same
+       * slug in a different project is a different paper.
+       *
+       * A trimmed empty string is `null` rather than a project. A host that
+       * sends `projectPath: ""` is a host saying it has no folder, and treating
+       * that as a path would send `project=` on every request for the server to
+       * refuse one query at a time.
+       */
+      const project =
+        typeof context.projectPath === 'string' && context.projectPath.trim() ? context.projectPath.trim() : null
+      const relocated = standingInRef.current !== project
+      standingInRef.current = project
+      if (relocated) standIn(project)
+
+      if (!relocated && context.epic === standingOn.current) return
       standingOn.current = context.epic
 
       if (context.epic === null) {
-        setSight({ at: 'no-epic' })
+        /* Both absent is one situation and not two, and the project is the half
+           worth saying. "No epic is open" invites somebody to open one; with no
+           project there is still nowhere to read when they do, and they would
+           have opened an epic to watch the same empty container. */
+        setSight(project === null ? { at: 'no-project', why: '' } : { at: 'no-epic' })
         setSaid('')
         return
       }

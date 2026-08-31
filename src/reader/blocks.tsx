@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import type { Block } from '../../latex/parse.ts'
 import type { PlacedBlock } from '../../store.ts'
+import { apiUrl } from '../api.ts'
 import { cn } from '@/lib/utils.ts'
 import { Marked, Segments } from './segments.tsx'
 
@@ -335,7 +336,12 @@ function Graphic({ epic, file }: { epic: string; file: string }) {
   return (
     <div className="flex flex-col items-center gap-1">
       <img
-        src={`/api/figure?epic=${encodeURIComponent(epic)}&file=${encodeURIComponent(file)}`}
+        /* Built by `apiUrl` rather than by hand, because a figure is confined
+           to its paper's root and there is no root without a project. This URL
+           is the one place on the page where forgetting that would not look
+           like a missing project: it would look like every image in the paper
+           being broken, with the prose around them perfectly correct. */
+        src={apiUrl('/api/figure', { epic, file })}
         alt={file}
         loading="lazy"
         onError={() => setFailed(true)}

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { confine, isEpic, listPapers, papersDir, readPaper, readSource } from '../store.ts'
+import { confine, isEpic, listPapers, readPaper, readSource } from '../store.ts'
 
 /**
  * The store, which is a reader over somebody else's directory.
@@ -15,10 +15,20 @@ import { confine, isEpic, listPapers, papersDir, readPaper, readSource } from '.
  * for them.
  */
 
-const root = mkdtempSync(join(tmpdir(), 'kehikko-paper-'))
+/*
+ * The project, realpath'd, and the papers where a project keeps them by
+ * default.
+ *
+ * `realpathSync` because `store.ts` resolves the project on the way in and
+ * every fence measures against the result — on macOS `tmpdir()` is under
+ * `/var`, which is a symlink to `/private/var`, and a fixture left unresolved
+ * would make every comparison in this file fail for a reason that has nothing
+ * to do with what is being tested.
+ */
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'kehikko-paper-')))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-const papers = join(root, 'papers')
+const papers = join(root, 'data', 'papers')
 mkdirSync(join(papers, 'good-epic', 'chapters'), { recursive: true })
 writeFileSync(
   join(papers, 'good-epic', 'main.tex'),
@@ -48,37 +58,29 @@ mkdirSync(join(papers, 'empty-epic'), { recursive: true })
 writeFileSync(join(root, 'secret.tex'), 'this must never be served')
 
 describe('where the papers come from', () => {
-  test('an unset environment is not an empty directory', () => {
+  test('no project is not an empty project', () => {
     /* The distinction the host's own holdings code is built around: an app that
-       says "no papers" and quietly means "I was not configured" has told
-       somebody the opposite of the truth. */
-    expect(papersDir({})).toBeNull()
+       says "no papers" and quietly means "nobody told me where to look" has
+       told somebody the opposite of the truth. `test/roots.test.ts` covers the
+       three answers this splits into; here it is only that the two ends of it
+       do not collapse. */
     expect(listPapers(null)).toEqual([])
+    expect(listPapers(root).map((p) => p.epic)).toEqual(['good-epic'])
   })
 
-  test('KEHIKKO_PAPERS_DIR points straight at it', () => {
-    expect(papersDir({ KEHIKKO_PAPERS_DIR: papers })).toBe(papers)
-  })
-
-  test('KEHIKKO_ROADMAP_DIR is accepted and data/papers appended', () => {
-    const roadmap = join(root, 'roadmap')
-    mkdirSync(join(roadmap, 'data', 'papers'), { recursive: true })
-    expect(papersDir({ KEHIKKO_ROADMAP_DIR: roadmap })).toBe(join(roadmap, 'data', 'papers'))
-  })
-
-  test('a directory that is not there is refused rather than reported', () => {
-    expect(papersDir({ KEHIKKO_PAPERS_DIR: join(root, 'nope') })).toBeNull()
+  test('a project that is not a folder on this machine reads nothing', () => {
+    expect(listPapers(join(root, 'nope'))).toEqual([])
   })
 })
 
 describe('listing', () => {
   test('only epics that actually have a main.tex are listed', () => {
-    const all = listPapers(papers)
+    const all = listPapers(root)
     expect(all.map((p) => p.epic)).toEqual(['good-epic'])
   })
 
   test('the title is the paper’s own and is never invented', () => {
-    const [first] = listPapers(papers)
+    const [first] = listPapers(root)
     expect(first?.title).toBe('A paper with a title')
     expect(first?.files).toBe(2)
   })
@@ -86,7 +88,7 @@ describe('listing', () => {
 
 describe('reading one', () => {
   test('chapters are folded into reading order where the include sat', () => {
-    const paper = readPaper('good-epic', papers)!
+    const paper = readPaper('good-epic', root)!
     const headings = paper.outline.map((h) => h.text)
     expect(headings).toEqual(['The first thing', 'The second thing'])
     expect(paper.files).toEqual(['main.tex', 'chapters/second.tex'])
@@ -99,7 +101,7 @@ describe('reading one', () => {
      * its own terms finds no definition, falls back to "drop the wrapper, keep
      * the argument", and renders `gh#42` as the bare number `42`.
      */
-    const paper = readPaper('good-epic', papers)!
+    const paper = readPaper('good-epic', root)!
     const text = paper.blocks
       .filter((b) => b.file === 'chapters/second.tex' && b.kind === 'paragraph')
       .flatMap((b) => ('segments' in b ? b.segments : []))
@@ -112,13 +114,13 @@ describe('reading one', () => {
     /* The block counter used to run for the life of the process, so a second
        read renumbered every heading and a link a reader had in front of them
        scrolled nowhere. */
-    const a = readPaper('good-epic', papers)!
-    const b = readPaper('good-epic', papers)!
+    const a = readPaper('good-epic', root)!
+    const b = readPaper('good-epic', root)!
     expect(a.blocks.map((x) => `${x.file}:${x.id}`)).toEqual(b.blocks.map((x) => `${x.file}:${x.id}`))
   })
 
   test('an epic with no paper is null rather than an empty paper', () => {
-    expect(readPaper('empty-epic', papers)).toBeNull()
+    expect(readPaper('empty-epic', root)).toBeNull()
   })
 })
 
@@ -134,7 +136,7 @@ describe('the two fences', () => {
     '',
   ])('%p is not an epic name', (attempt) => {
     expect(isEpic(attempt)).toBe(false)
-    expect(readPaper(attempt, papers)).toBeNull()
+    expect(readPaper(attempt, root)).toBeNull()
   })
 
   test('an include that climbs out of the paper’s directory reads nothing', () => {
@@ -145,9 +147,9 @@ describe('the two fences', () => {
     mkdirSync(join(papers, 'climber'), { recursive: true })
     writeFileSync(
       join(papers, 'climber', 'main.tex'),
-      '\\begin{document}\n\\include{../../secret}\n\\end{document}',
+      '\\begin{document}\n\\include{../../../secret}\n\\end{document}',
     )
-    const paper = readPaper('climber', papers)!
+    const paper = readPaper('climber', root)!
     expect(paper.files).toEqual(['main.tex'])
     const raw = JSON.stringify(paper)
     expect(raw).not.toContain('this must never be served')
@@ -159,7 +161,7 @@ describe('the two fences', () => {
     mkdirSync(join(papers, 'linker'), { recursive: true })
     writeFileSync(join(papers, 'linker', 'main.tex'), '\\begin{document}\n\\include{away}\n\\end{document}')
     symlinkSync(join(root, 'secret.tex'), join(papers, 'linker', 'away.tex'))
-    const paper = readPaper('linker', papers)!
+    const paper = readPaper('linker', root)!
     expect(JSON.stringify(paper)).not.toContain('this must never be served')
   })
 
@@ -168,10 +170,10 @@ describe('the two fences', () => {
        filesystem, so "what does the paper say" cannot become "what is lying
        around next to it". */
     writeFileSync(join(papers, 'good-epic', 'scratch.tex'), 'notes to self')
-    expect(readSource('good-epic', 'main.tex', papers)).toContain('\\title{A paper with a title}')
-    expect(readSource('good-epic', 'chapters/second.tex', papers)).toContain('The second thing')
-    expect(readSource('good-epic', 'scratch.tex', papers)).toBeNull()
-    expect(readSource('good-epic', '../secret.tex', papers)).toBeNull()
+    expect(readSource('good-epic', 'main.tex', root)).toContain('\\title{A paper with a title}')
+    expect(readSource('good-epic', 'chapters/second.tex', root)).toContain('The second thing')
+    expect(readSource('good-epic', 'scratch.tex', root)).toBeNull()
+    expect(readSource('good-epic', '../secret.tex', root)).toBeNull()
   })
 })
 

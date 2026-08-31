@@ -1,7 +1,10 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { basename, dirname, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+
+import { KEHIKOT_DIR, moduleFile } from 'roadmap-module-protocol'
 
 import { findMacros, parseLatex, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
+import { ID } from './manifest.ts'
 
 /**
  * The papers on this machine, and the one rule about where they may come from.
@@ -21,30 +24,74 @@ import { findMacros, parseLatex, type Block, type Macro, type ParsedDocument } f
  * lunch, with every symptom of a working app, which is the failure this
  * codebase has spent the most time on.
  *
- * ## The directory is named by the environment, and never by this file
+ * ## The papers are in the project, and the project is named by the host
  *
- * `KEHIKKO_PAPERS_DIR` points straight at the directory holding one
- * subdirectory per epic. `KEHIKKO_ROADMAP_DIR` is accepted as well and
- * `data/papers` is appended to it, because that is the variable the host in
- * this workspace already reads and pointing two programs at one roadmap should
- * not take two answers to the same question.
+ * This used to be two environment variables. `KEHIKKO_PAPERS_DIR` named a
+ * directory of directories, one per epic; `KEHIKKO_THESIS_DIR` named a second
+ * root holding a single document, because a thesis has no parent full of
+ * sibling papers to point at. Both are gone, and what replaced them is the
+ * convention every other module in this workspace already keeps: the material
+ * lives in the PROJECT the host says is open, and the module derives its
+ * location from `roadmap.context.projectPath` rather than from the shell that
+ * happened to start it.
  *
- * Neither set is a real state with its own screen and not an error: this
- * program starts, serves, and says it has not been told where to look. The
- * alternative — a default path compiled into the module — was in the program
- * this was extracted from (`../05_drafts/thesis_latex`) and is exactly the line
- * that made it one person's app rather than a module.
+ * Three things were wrong with the variables, and only the third is about
+ * taste:
+ *
+ *  1. **They are one restart from gone.** `KEHIKKO_THESIS_DIR` vanished on a
+ *     restart during a refactor, and this app answered — correctly, and
+ *     uselessly — that nothing on this machine held a paper for the thesis.
+ *     Every layer reported truthfully and the thesis simply disappeared. The
+ *     defaults in `run.sh` were written to paper over that, which put one
+ *     person's home directory in a module's start script.
+ *  2. **They are per-machine where the fact is per-project.** Which directory
+ *     holds a project's paper is a fact about that project, belongs in it, and
+ *     travels with it. A shell variable is a fact about a terminal.
+ *  3. **This was the one module in the family that never read `projectPath`.**
+ *     Notes, checklist and journeys all locate themselves from the open
+ *     project; paper did not, so it was the only container on a canvas that
+ *     could be showing another project's material and have no way to know.
+ *
+ * ## Where a paper is, in two rules
+ *
+ * **The default is `<project>/data/papers/<epic>/`.** That is exactly the shape
+ * the roadmap project already has, so it needs no configuration at all — the
+ * arrangement `KEHIKKO_PAPERS_DIR` was pointed at is now simply the default,
+ * found by looking rather than by being told.
+ *
+ * **The exceptions live in `<project>/.kehikot/paper/papers.json`.** For a
+ * thesis, the paper IS the project: `main.tex` at the top of its own
+ * repository, `chapters/` beside it, and no `data/papers` anywhere. One line in
+ * that file — `"thesis": "."` — says so, in the project it is about, versioned
+ * with the person's own work rather than with their shell. `.kehikot/<module>/`
+ * is where every module in this family keeps what it knows about a project, and
+ * paper had never joined the convention.
+ *
+ * ## What is NOT here: a default project
+ *
+ * `null` in, nothing out. No `process.cwd()`, which is this module's own
+ * directory; no "the only project that has papers", which is right until there
+ * are two; no compiled-in path, which is the line that made the program this
+ * was extracted from one person's app. A module with no project has nowhere to
+ * read, that is an ordinary state, and the page has a screen for it. The
+ * protocol package's `kehikotDir` makes this argument first and this file is
+ * not going to reach a different conclusion.
  */
-export function papersDir(env: Record<string, string | undefined> = process.env): string | null {
-  const direct = env.KEHIKKO_PAPERS_DIR
-  if (direct) return existsSync(direct) ? resolve(direct) : null
-  const roadmap = env.KEHIKKO_ROADMAP_DIR
-  if (roadmap) {
-    const guess = join(roadmap, 'data', 'papers')
-    return existsSync(guess) ? resolve(guess) : null
-  }
-  return null
-}
+
+/**
+ * Where a project keeps its papers unless it says otherwise.
+ *
+ * Not under `.kehikot/`, and the difference is the whole point of this module.
+ * `.kehikot/<module>/` is a program's working material in somebody's
+ * repository. A paper is the opposite: it is the thing the person is writing,
+ * with its own history, and moving it into a dot-directory named after this app
+ * would be exactly the "second place where the paper lives" the essay above
+ * refuses. So `.kehikot/paper/` holds a POINTER and never a paper.
+ */
+const PAPERS_DIR = 'data/papers'
+
+/** The file that names the exceptions. `moduleFile` decides where it sits. */
+const POINTERS = 'papers'
 
 /** A directory holding one paper: a `main.tex` and whatever it includes. */
 export interface PaperRoot {
@@ -55,95 +102,188 @@ export interface PaperRoot {
 }
 
 /**
- * A second readable root, naming ONE paper rather than a directory of them.
+ * The project as this app names it to itself: absolute, real, a directory — or
+ * `null`, which is the ordinary state of no project being open.
  *
- * ## Why this is a second source and not a thirteenth subdirectory
+ * Realpath'd, because everything downstream compares against it. `confine`
+ * measures a resolved path against a resolved root, and a root left as whatever
+ * string arrived would make every comparison on this machine's `/tmp` — which
+ * is `/private/tmp` — fail for a reason nobody could see from either side.
  *
- * `KEHIKKO_PAPERS_DIR` names a directory of directories: one per epic, each
- * with a `main.tex` inside. A thesis on this machine is not shaped like that.
- * It is a single document — `main.tex`, `chapters/`, `figures/`, a `.cls` and a
- * `references.bib` — living in a repository of its own with its own history,
- * and it is the ONLY thing in that repository. There is no parent directory
- * full of siblings to point at.
+ * Refused rather than guessed at when it is relative: a relative project path
+ * would resolve against whatever directory this module was started in, which is
+ * this module's own source tree, and the reader would be served the paper app's
+ * repository under the name of their project.
  *
- * The three ways to force it into the existing model are all worse than a
- * second variable:
- *
- *  - Point `KEHIKKO_PAPERS_DIR` at the thesis's parent (`05_drafts/`). That
- *    makes every unrelated sibling folder a candidate epic and, worse, makes
- *    the confinement root the parent — so `\include{../thesis_latex/…}` from a
- *    neighbouring folder would resolve INSIDE the root and be served. The fence
- *    would still be doing its job and the job would have become the wrong one.
- *  - Symlink the thesis into `data/papers/thesis`. `confine` realpaths the
- *    root, so this works — and it works by asking the author to put a link to
- *    their thesis inside the roadmap's own data directory, which is a change to
- *    somebody else's repository made so that this app did not have to grow a
- *    variable.
- *  - Copy it in. That is the one thing the essay at the top of this file exists
- *    to forbid.
- *
- * So: a second root, confined separately, with its own slug. `roots()` below is
- * where the two meet, and the meeting is a list rather than a merge — nothing
- * resolves a path against more than the one root it belongs to.
- *
- * The slug defaults to `thesis` and is overridable, because a canvas whose epic
- * is called something else should be able to say so, and because two people
- * with two theses on one machine is not this app's problem to have an opinion
- * about. It goes through `isEpic` like everything else: a slug from the
- * environment is no more trustworthy than a slug from a URL, it just arrives
- * from somebody standing closer.
+ * `null` for every refusal, with no distinction between "no project", "not
+ * absolute" and "there is nothing there". This app is read-only and answers on
+ * loopback; a caller who can tell those apart can ask this door which
+ * directories exist on the disk, one question at a time.
  */
-export function thesisRoot(env: Record<string, string | undefined> = process.env): PaperRoot | null {
-  const dir = env.KEHIKKO_THESIS_DIR
-  if (!dir) return null
-  const epic = env.KEHIKKO_THESIS_EPIC ?? 'thesis'
-  if (!isEpic(epic)) return null
-  if (!existsSync(join(dir, MAIN))) return null
-  return { epic, dir: resolve(dir) }
+export function projectOf(projectPath: string | null | undefined): string | null {
+  if (typeof projectPath !== 'string') return null
+  const raw = projectPath.trim()
+  if (!raw || !isAbsolute(raw)) return null
+  try {
+    const real = realpathSync(raw)
+    return statSync(real).isDirectory() ? real : null
+  } catch {
+    return null
+  }
 }
 
 /**
- * Every root this process may read, papers directory first.
+ * The exceptions this project declares, as a map from epic to directory.
  *
- * The order matters exactly once: if somebody sets `KEHIKKO_THESIS_EPIC` to a
- * slug that also exists under the papers directory, the papers directory wins
- * and the thesis becomes unreachable rather than shadowing something. A
- * collision is a misconfiguration either way; this way the thing that was
- * already there keeps working, and the new variable is the one that visibly
- * does nothing.
+ * ## The shape, and why it is this small
+ *
+ *     { "papers": { "thesis": "." } }
+ *
+ * One object, one entry per epic, the value a path RELATIVE TO THE PROJECT
+ * ROOT. `"."` means the paper is the project itself, which is the thesis case
+ * and the case this file was written for. A top-level `papers` key rather than
+ * a bare map because a document with a named field can grow a second one
+ * without every reader having to guess which shape it is looking at, and
+ * because that is how the sibling modules spell their own files.
+ *
+ * A relative path and never an absolute one. An absolute path in here would be
+ * a per-machine fact written into a file that travels with a repository — the
+ * exact failure the environment variables had, moved somewhere it would also be
+ * committed and shared with everybody who clones it.
+ *
+ * ## Malformed is empty, and is never an error
+ *
+ * No file, unreadable file, not JSON, not an object, values that are not
+ * strings: all of them mean this project declares no exceptions. That is a
+ * deliberate refusal to have an error state here. The file is hand-editable by
+ * design, and a typo in it must degrade to "the default applies" rather than to
+ * a page that will not draw — a module that answered a stray comma with a
+ * broken container would have made the pointer file more dangerous than the
+ * variables it replaced.
+ *
+ * What is NOT tolerated is a path leaving the project. Every value goes through
+ * `confine` against the project root, so a `"../../etc"` in a file somebody
+ * committed cannot turn this door into a reader of the disk. That check is in
+ * `roots()` below, where the root it is measured against is already resolved.
  */
-export function roots(
-  dir: string | null = papersDir(),
-  thesis: PaperRoot | null = thesisRoot(),
-): PaperRoot[] {
+export function pointers(project: string | null): Record<string, string> {
+  const path = project === null ? null : moduleFile(project, ID, POINTERS)
+  if (path === null) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return {}
+  }
+  if (!parsed || typeof parsed !== 'object') return {}
+  const named = (parsed as { papers?: unknown }).papers
+  if (!named || typeof named !== 'object') return {}
+  const out: Record<string, string> = {}
+  for (const [epic, where] of Object.entries(named as Record<string, unknown>)) {
+    /* `isEpic` on the key as well as on everything else. This one arrives from
+       a file rather than from a request, which makes it no more trustworthy —
+       it is joined onto nothing, but it becomes a slug the page and the wire
+       both carry, and a key this app accepted that a host would refuse is a
+       paper nothing can ever point at. */
+    if (!isEpic(epic) || typeof where !== 'string' || !where.trim()) continue
+    out[epic] = where.trim()
+  }
+  return out
+}
+
+/**
+ * Every root this project offers, exceptions first.
+ *
+ * ## The exception wins, and that is the opposite of the old rule
+ *
+ * When the two roots were environment variables, a collision went to the papers
+ * directory: the thing already there kept working and the newer variable was
+ * the one that visibly did nothing. That was right for two variables set by the
+ * same person in the same shell, where neither is more deliberate than the
+ * other.
+ *
+ * It is wrong here. `data/papers/<epic>/` is found by LOOKING — a directory
+ * that happens to exist, possibly left behind by a checkout — and a pointer is
+ * a sentence somebody wrote down about this project on purpose. When the two
+ * disagree, the one with an author behind it wins, or the file is not an
+ * exceptions file. There is nothing silent about it either way: the pointer is
+ * a line in a file in their own repository.
+ *
+ * ## Every root is confined and resolved before it is a root
+ *
+ * `confine(project, …)` for a pointer, so a value in that file cannot name a
+ * directory outside the project; `confine(dir, entry)` for a discovered one,
+ * which is also what resolves a symlinked epic directory to what it really is.
+ * Both matter for the same reason: every later `confine` inside a root compares
+ * against the string this function returned, so a root that was not resolved
+ * here is a fence measuring against a path the filesystem does not agree with.
+ *
+ * A root with no `main.tex` under it is not a root. That is what makes an
+ * abandoned `data/papers/some-epic/` an epic with no paper rather than an epic
+ * whose paper this app failed to render, and it is what stops `"."` in a
+ * pointer file from making every project a paper.
+ */
+export function roots(project: string | null): PaperRoot[] {
+  if (project === null) return []
   const out: PaperRoot[] = []
   const seen = new Set<string>()
-  if (dir) {
+
+  for (const [epic, where] of Object.entries(pointers(project))) {
+    const dir = confine(project, where)
+    if (!dir || seen.has(epic)) continue
+    if (!existsSync(join(dir, MAIN))) continue
+    seen.add(epic)
+    out.push({ epic, dir })
+  }
+
+  const papers = confine(project, PAPERS_DIR)
+  if (papers) {
     let entries: string[] = []
     try {
-      entries = readdirSync(dir)
+      entries = readdirSync(papers)
     } catch {
       entries = []
     }
     for (const entry of entries.sort()) {
       if (!isEpic(entry) || seen.has(entry)) continue
-      const root = confine(dir, entry)
-      if (!root) continue
+      const dir = confine(papers, entry)
+      if (!dir) continue
       seen.add(entry)
-      out.push({ epic: entry, dir: root })
+      out.push({ epic: entry, dir })
     }
   }
-  if (thesis && !seen.has(thesis.epic)) {
-    /* Confined against ITSELF, which is what `confine(root, '.')` asks: does
-       this directory resolve, through every symlink on the way, to itself. A
-       `KEHIKKO_THESIS_DIR` that is a symlink is fine — it is the person who
-       started this program naming a place. What is not fine is skipping the
-       realpath, because every later `confine` inside this root compares
-       against it. */
-    const real = confine(thesis.dir, '.')
-    if (real) out.push({ epic: thesis.epic, dir: real })
-  }
-  return out
+  /* Sorted at the end rather than by construction, because the two sources are
+     read in precedence order and that is not the order anybody wants to read a
+     list in. A list that reordered itself between two calls looks like a page
+     flickering. */
+  return out.sort((a, b) => (a.epic < b.epic ? -1 : a.epic > b.epic ? 1 : 0))
+}
+
+/**
+ * Whether this project is somewhere this app could find a paper at all.
+ *
+ * Used for one sentence on the page: "there is no paper for this epic" and
+ * "this project keeps no papers" are different things to tell somebody, and an
+ * empty list cannot tell them apart. It is deliberately not a fence — `roots()`
+ * above returns nothing for a project with neither of these, so nothing hangs
+ * on the answer.
+ */
+export function keepsPapers(project: string | null): boolean {
+  if (project === null) return false
+  return existsSync(join(project, PAPERS_DIR)) || existsSync(join(project, KEHIKOT_DIR))
+}
+
+/**
+ * The one root an epic's paper is in, or null.
+ *
+ * A helper rather than three copies of `roots(project).find(…)`, because the
+ * three readers below must agree about which directory an epic means. Two of
+ * them disagreeing would not be a crash: it would be `read_source` opening a
+ * file out of one paper while the page beside it renders another, both of them
+ * answering confidently.
+ */
+function rootFor(epic: string, project: string | null): string | null {
+  return roots(project).find((r) => r.epic === epic)?.dir ?? null
 }
 
 /**
@@ -352,13 +492,14 @@ export interface Paper {
  *
  * Sorted by slug so the list is stable between calls. A picker that reordered
  * itself on every read looks like a page that is flickering.
+ *
+ * Per project, and with no default. `listPapers(null)` is an empty list and
+ * never "every paper on this machine": there is no such thing any more, and
+ * there was never a caller who wanted one.
  */
-export function listPapers(
-  dir: string | null = papersDir(),
-  thesis: PaperRoot | null = thesisRoot(),
-): PaperBrief[] {
+export function listPapers(project: string | null): PaperBrief[] {
   const out: PaperBrief[] = []
-  for (const root of roots(dir, thesis)) {
+  for (const root of roots(project)) {
     const main = confine(root.dir, MAIN)
     if (!main || !existsSync(main)) continue
     let source: string
@@ -459,13 +600,9 @@ function includeTargets(source: string): string[] {
  * a sentence a reader can act on; silently skipping it would present a paper
  * with a hole in it as a complete one.
  */
-export function readPaper(
-  epic: string,
-  dir: string | null = papersDir(),
-  thesis: PaperRoot | null = thesisRoot(),
-): Paper | null {
+export function readPaper(epic: string, project: string | null): Paper | null {
   if (!isEpic(epic)) return null
-  const root = roots(dir, thesis).find((r) => r.epic === epic)?.dir
+  const root = rootFor(epic, project)
   if (!root) return null
   const main = confine(root, MAIN)
   if (!main || !existsSync(main)) return null
@@ -628,19 +765,14 @@ export interface Figure {
  *     have written it into their own paper — but this is a typo threat model
  *     more than a hostile one, and the fence costs a line.
  */
-export function readFigure(
-  epic: string,
-  file: string,
-  dir: string | null = papersDir(),
-  thesis: PaperRoot | null = thesisRoot(),
-): Figure | null {
-  const paper = readPaper(epic, dir, thesis)
+export function readFigure(epic: string, file: string, project: string | null): Figure | null {
+  const paper = readPaper(epic, project)
   if (!paper) return null
   if (!paper.figures.includes(file)) return null
   const dot = file.lastIndexOf('.')
   const type = dot === -1 ? undefined : IMAGE_TYPES[file.slice(dot).toLowerCase()]
   if (!type) return null
-  const root = roots(dir, thesis).find((r) => r.epic === epic)?.dir
+  const root = rootFor(epic, project)
   if (!root) return null
   const path = confine(root, file)
   if (!path) return null
@@ -662,16 +794,11 @@ export function readFigure(
  * including a scratch file the author never included, and "what does the paper
  * say" would quietly become "what is lying around next to it".
  */
-export function readSource(
-  epic: string,
-  file: string,
-  dir: string | null = papersDir(),
-  thesis: PaperRoot | null = thesisRoot(),
-): string | null {
-  const paper = readPaper(epic, dir, thesis)
+export function readSource(epic: string, file: string, project: string | null): string | null {
+  const paper = readPaper(epic, project)
   if (!paper) return null
   if (!paper.files.includes(file)) return null
-  const root = roots(dir, thesis).find((r) => r.epic === epic)?.dir
+  const root = rootFor(epic, project)
   if (!root) return null
   const path = confine(root, file)
   if (!path) return null

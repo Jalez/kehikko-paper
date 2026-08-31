@@ -409,8 +409,8 @@ export function wordsFor(sight: Sight): string[] {
     case 'alone':
       return [
         'Nothing is framing this page',
-        'No host is here to say which epic is open. Put ?epic=… in the address and that epic’s paper is read ' +
-          'straight off this machine.',
+        'No host is here to say which project is open or which epic. Put ?project=/path/to/project&epic=… in the ' +
+          'address and that epic’s paper is read straight off this machine.',
       ]
     case 'no-epic':
       return [
@@ -420,16 +420,24 @@ export function wordsFor(sight: Sight): string[] {
     case 'no-paper':
       return [
         'This epic has no paper',
-        `Nothing on this machine holds a paper for “${sight.epic}”. That is not a failure to read one — there is no ` +
-          'folder for it, or the folder has no main.tex in it.',
+        /* The server's own sentence when there is one, because only the server
+           knows whether the project has never been set up for papers or simply
+           has none for this epic — and those are two different things to do
+           next. The fallback is for the case where the fetch answered without
+           one, which is not a state worth a screen of its own. */
+        sight.why ||
+          `That project holds no paper for “${sight.epic}”. That is not a failure to read one — there is no folder ` +
+            'for it, or the folder has no main.tex in it.',
       ]
-    case 'unconfigured':
+    case 'no-project':
       return [
-        'Nobody has said where the papers are',
-        sight.why,
-        'Start it again with KEHIKKO_PAPERS_DIR=…/data/papers ./run.sh and this page fills in. For a ' +
-          'single document with its own main.tex — a thesis rather than a roadmap — KEHIKKO_THESIS_DIR=… ' +
-          'names it instead, or as well.',
+        'No project is open',
+        sight.why ||
+          'A paper lives in the project it is about, so there is nowhere to look until one is open. Open a project ' +
+            'on the canvas and the paper for whichever epic is open appears here.',
+        'This is where the papers are looked for: <project>/data/papers/<epic>/main.tex. If a project’s paper is ' +
+          'somewhere else — a thesis, where the paper IS the project — .kehikot/paper/papers.json inside it says ' +
+          'so, one line per epic: {"papers":{"thesis":"."}}.',
       ]
     case 'asking':
       return ['Reading…', `Opening the paper for “${sight.epic}”.`]

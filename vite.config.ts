@@ -10,7 +10,6 @@ import { defineConfig, type Plugin } from 'vite'
 import { MANIFEST, answer, type Reply } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { page } from './page/document.ts'
-import { listPapers, papersDir, thesisRoot } from './store.ts'
 
 /**
  * Every door this app answers on, served by the one process that serves the
@@ -55,36 +54,32 @@ function doors(): Plugin {
     name: 'paper-doors',
     configureServer(server) {
       /*
-       * Say at startup what this program can see.
+       * Say at startup where this program looks — which is no longer a place.
        *
-       * Not decoration. The one configuration mistake this app can make is
-       * being pointed at the wrong directory, and the symptom is a page that
-       * loads perfectly and says every epic has no paper — a working app
-       * reporting an empty world. Printing the directory and the count at the
-       * moment somebody starts it turns a confusing afternoon into a line they
-       * already read.
+       * There used to be two directories here, read from the environment, and
+       * this block printed each with a count of what it found. The one
+       * configuration mistake the app could make was being pointed at the
+       * wrong directory, and the symptom was a page that loaded perfectly and
+       * said every epic had no paper: a working app reporting an empty world.
+       * A line at startup turned a confusing afternoon into something somebody
+       * had already read.
+       *
+       * That mistake is not available any more, because there is nothing to
+       * configure — a paper is found in the project the host says is open, and
+       * this process does not know which project that is until a request names
+       * one. So the line says the RULE rather than a path, and there is no
+       * count to print because there is nothing yet to count.
+       *
+       * It is still printed, and still at startup, because the failure it
+       * guards has inverted: the person to save an afternoon for now is the one
+       * who set `KEHIKKO_PAPERS_DIR` in a shell profile months ago and cannot
+       * see why it has stopped doing anything.
        */
-      const dir = papersDir()
-      const thesis = thesisRoot()
-      if (!dir && !thesis) {
-        server.config.logger.warn(
-          'paper: no papers directory. Set KEHIKKO_PAPERS_DIR (or KEHIKKO_ROADMAP_DIR) and restart; the app ' +
-            'will serve and say so on its own page until then.',
-        )
-      } else {
-        /* Each root printed on its own line, because the failure this log
-           exists to catch is being pointed at the wrong place, and a total
-           that folded two roots into one number would hide exactly the case
-           where one of them found nothing. */
-        if (dir) server.config.logger.info(`paper: reading ${listPapers(dir, null).length} paper(s) from ${dir}`)
-        if (thesis) server.config.logger.info(`paper: reading "${thesis.epic}" from ${thesis.dir}`)
-        if (!dir && thesis) {
-          server.config.logger.info(
-            'paper: KEHIKKO_PAPERS_DIR is unset, so the thesis is the only paper here. That is a ' +
-              'configuration and not a fault; the picker will show one entry.',
-          )
-        }
-      }
+      server.config.logger.info(
+        'paper: papers come from the open project — <project>/data/papers/<epic>/main.tex, or wherever that '
+          + 'project’s .kehikot/paper/papers.json says. KEHIKKO_PAPERS_DIR and KEHIKKO_THESIS_DIR are gone, and '
+          + 'are ignored if they are still set.',
+      )
 
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://127.0.0.1')

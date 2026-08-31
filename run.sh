@@ -31,24 +31,27 @@
 #   - `cd` to this script's own directory, so `page/` and `latex/` are found
 #     however this was invoked.
 #
-# ## The one thing this program needs told
+# ## This program needs nothing told
 #
-# `KEHIKKO_PAPERS_DIR`, or `KEHIKKO_ROADMAP_DIR` with `data/papers` under it.
-# There is deliberately no default: the app this was extracted from had one
-# compiled in (`../05_drafts/thesis_latex`), which is the line that made it one
-# person's program rather than a module. Unset, this still starts, still serves,
-# and says on its own page what to set — a misconfiguration that announces
-# itself is worth far more than one that renders an empty world convincingly.
+# It used to need two variables. `KEHIKKO_PAPERS_DIR` named a directory of
+# directories, one per epic; `KEHIKKO_THESIS_DIR` named a second root holding a
+# single document, because a thesis has no parent full of sibling papers to
+# point at. Both are gone.
 #
-# `KEHIKKO_THESIS_DIR` is a SECOND root and names one document rather than a
-# directory of them: a `main.tex` at the top of its own repository, with
-# `chapters/`, `figures/` and a `references.bib` beside it. That is the shape
-# `../05_drafts/thesis_latex` actually has, and it is why the compiled-in
-# default could not simply become a compiled-in `KEHIKKO_PAPERS_DIR` — the
-# thesis has no parent directory full of sibling papers to point at. Setting it
-# is still somebody's decision, made outside this file; the essay on
-# `thesisRoot` in `store.ts` says why it is a variable and not a symlink.
-# `KEHIKKO_THESIS_EPIC` renames the slug it answers to; it defaults to `thesis`.
+# A paper now lives in the project it is about — `<project>/data/papers/<epic>/`
+# by default, or wherever that project's `.kehikot/paper/papers.json` says — and
+# the project is the one the host names in every context it sends. So there is
+# nothing for this script to export and nothing for somebody to remember.
+#
+# The block that used to sit at the bottom of this file, defaulting both
+# variables to paths under `$HOME`, is gone with them. It was written after a
+# real failure — the module was restarted during a refactor, lost both roots,
+# and answered correctly and uselessly that nothing on this machine held a paper
+# for the thesis — and the fix it applied was to put one person's home directory
+# into a module's start script. The variables were the bug; the defaults were a
+# bandage on it. What replaced both is a per-project file that travels with the
+# repository it is about and cannot be lost by starting this from a different
+# terminal.
 #
 # It does NOT register a module that had none. Registration is a deliberate act
 # by a person — see `register.ts` — and a start script that quietly wrote into
@@ -81,48 +84,6 @@ cd "$(dirname "$0")"
 if [ ! -d node_modules ]; then
   echo "installing…" >&2
   bun install >&2
-fi
-
-# ---------------------------------------------------------------------------
-# Where the papers are.
-#
-# These were documented above and defaulted nowhere, which meant they lived only
-# in whichever shell first started this module. That is not a theory: the module
-# was restarted during a refactor, lost both roots, and answered — correctly and
-# uselessly — that nothing on this machine holds a paper for the thesis. Every
-# layer reported truthfully and the thesis simply vanished from view.
-#
-# It is the same failure the host had with KEHIKKO_ROADMAP_DIR, in a second
-# module, for the same reason: a variable with no default is a variable one
-# restart away from being gone.
-#
-# So the defaults live here, in the script that starts this module, and an
-# explicit value still wins. Both are checked for what actually makes them a
-# root — a directory of papers, and a main.tex — rather than merely existing, so
-# a moved folder says so at startup instead of at read time.
-if [ -z "${KEHIKKO_PAPERS_DIR:-}" ] && [ -z "${KEHIKKO_ROADMAP_DIR:-}" ] \
-   && [ -d "$HOME/Projects/roadmap/data/papers" ]; then
-  KEHIKKO_PAPERS_DIR="$HOME/Projects/roadmap/data/papers"
-fi
-if [ -z "${KEHIKKO_THESIS_DIR:-}" ] \
-   && [ -f "$HOME/Claude/Projects/CS-DEGREE/05_drafts/thesis_latex/main.tex" ]; then
-  KEHIKKO_THESIS_DIR="$HOME/Claude/Projects/CS-DEGREE/05_drafts/thesis_latex"
-fi
-export KEHIKKO_PAPERS_DIR KEHIKKO_THESIS_DIR
-
-# Said out loud, at start, in the terminal somebody is looking at — because the
-# alternative is finding out from a page that says there is no paper, twenty
-# minutes later, and blaming the page.
-if [ -n "${KEHIKKO_PAPERS_DIR:-}" ]; then
-  echo "paper: papers from $KEHIKKO_PAPERS_DIR" >&2
-fi
-if [ -n "${KEHIKKO_THESIS_DIR:-}" ]; then
-  echo "paper: thesis from $KEHIKKO_THESIS_DIR (epic \"${KEHIKKO_THESIS_EPIC:-thesis}\")" >&2
-fi
-
-if [ -z "${KEHIKKO_PAPERS_DIR:-}" ] && [ -z "${KEHIKKO_ROADMAP_DIR:-}" ] && [ -z "${KEHIKKO_THESIS_DIR:-}" ]; then
-  echo "paper: no papers root and no thesis root — neither was set and neither default is on this machine." >&2
-  echo "paper: starting anyway; the page will say so rather than pretending there are no papers." >&2
 fi
 
 exec bunx vite
