@@ -135,7 +135,7 @@ export interface PaginatedProps {
    * paper is `main.tex` plus its chapters, and bytes 4120–4380 exist in every
    * one of them.
    */
-  mark: { file: string; from: number; to: number } | null
+  mark: { file: string; id: string; from: number; to: number } | null
   /**
    * The element every rendered page lives in, handed up so `lib/selection.ts`
    * can resolve a highlight against it. The view owns the element; the app owns
@@ -529,7 +529,7 @@ function SheetPage({
   count: number
   paper: Paper
   blocks: readonly PlacedBlock[]
-  mark: { file: string; from: number; to: number } | null
+  mark: { file: string; id: string; from: number; to: number } | null
   scale: number
   room: number
   keep: (el: HTMLElement | null) => void

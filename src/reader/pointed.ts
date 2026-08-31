@@ -37,8 +37,28 @@ import { visible } from './pages.ts'
 export type Pointed =
   /** Nothing is pointing, or the passage names no range and no page worth moving to. */
   | { at: 'nowhere' }
-  /** In this paper, and pointed INTO it: turn to this block and mark the range. */
-  | { at: 'here'; file: string; id: string; mark: { file: string; from: number; to: number }; said: string }
+  /**
+   * In this paper, and pointed INTO it: turn to this block and mark the range.
+   *
+   * The mark carries the resolved block's `id` as well as the range, and the
+   * two are not the same claim. The range says which SPANS to paint and is the
+   * passage exactly as it arrived — never widened, so a paragraph is not washed
+   * in colour because a sentence in it was pointed at. The id says which BLOCK
+   * the pointing landed on, which is the only way the margin rule can be drawn
+   * on a block that draws none of the source in the range: a comment run, a
+   * `\todo{}` whose words this module lifts out, a passage in the preamble.
+   * Without it those passages walked the reader somewhere and then showed
+   * nothing at all when they arrived — measured on twenty-three of the
+   * fifty-eight notes in the thesis, and the whole of the "it does not
+   * highlight the exact part" complaint.
+   */
+  | {
+      at: 'here'
+      file: string
+      id: string
+      mark: { file: string; id: string; from: number; to: number }
+      said: string
+    }
   /**
    * In this paper, and not pointed into it — a document is open and no range
    * was named. Nothing to mark, nowhere to turn, nothing to say. Kept apart
@@ -144,7 +164,7 @@ export function fileOf(paper: Paper, path: string): string | null {
 }
 
 /**
- * The block a byte range starts in, or the file's first drawn block.
+ * The block a byte range sits in, or the nearest one this sheet actually draws.
  *
  * Overlap rather than containment, because a passage recorded against a comment
  * run or a whole paragraph routinely begins a byte or two outside the block a
@@ -152,20 +172,47 @@ export function fileOf(paper: Paper, path: string): string | null {
  * the words are now, which need not line up with a block boundary at all.
  *
  * `visible` is applied first so this can never turn to something the sheet does
- * not draw. A passage inside the preamble — which this module folds away, and
- * which Notes has stopped lifting for the same reason — lands on the first
- * block of the file instead of on nothing, which is the honest place to put
- * somebody who asked to be shown a part of the document that is not shown.
+ * not draw.
+ *
+ * ## The fallback was "the last block in the file", and it was measured wrong
+ *
+ * A third of the passages this module is pointed at name source it does not
+ * draw, and that is not an edge case — it is the ordinary case. The notes
+ * container lifts a note out of every comment run, `pages.ts` drops every
+ * `comment` block, and the two together mean a note about the four lines of
+ * reasoning above a section names bytes with no block on them at all. On the
+ * thesis this was measured against — `dev/measure-marked.mjs` — nineteen of the
+ * twenty-three comment notes and four preamble ones, twenty-three of
+ * fifty-eight, missed every block.
+ *
+ * Every one of them fell through to `here[here.length - 1]`, so pressing a note
+ * about the top of a chapter walked the reader to the LAST paragraph of that
+ * chapter — pages away, in the right file, with nothing marked when they got
+ * there, because the block a mark is drawn on has to overlap the range and that
+ * one never does. The essay above this function used to say a preamble passage
+ * "lands on the first block of the file", which is what a person would want and
+ * was never what the code did.
+ *
+ * So the fallback is the nearest drawn block instead, and "nearest" leans
+ * forward: the first block that starts at or after the range, and only failing
+ * that the last one before it. Leaning forward is not a tie-break, it is how
+ * these files are written — a comment run and a `\todo{}` sit ABOVE the prose
+ * they are about, so the block after them is the thing they are about and the
+ * block before them is the previous subject. It also makes the sentence above
+ * true again: a preamble passage now lands on the first drawn block, because
+ * every block in the file starts after the preamble.
  */
 export function blockFor(paper: Paper, file: string, range: { from: number; to: number } | null): PlacedBlock | null {
   const here = paper.blocks.filter((b) => b.file === file && visible(b))
   if (!here.length) return null
   if (!range) return here[0] ?? null
   const hit = here.find((b) => b.srcStart < range.to && range.from < b.srcEnd)
-  /* Past the end of everything drawn — the last block is the nearest true
-     answer, and it is a real one rather than a guess: a range after every
-     block is after the last of them. */
-  return hit ?? here[here.length - 1] ?? null
+  if (hit) return hit
+  /* Blocks arrive in source order, so the first one starting after the range is
+     the one just below it. Past the end of everything drawn there is none, and
+     the last block is then the nearest true answer rather than a guess: a range
+     after every block is after the last of them. */
+  return here.find((b) => b.srcStart >= range.to) ?? here[here.length - 1] ?? null
 }
 
 /**
@@ -235,7 +282,7 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
     at: 'here',
     file: block.file,
     id: block.id,
-    mark: { file: block.file, ...range },
+    mark: { file: block.file, id: block.id, ...range },
     said: `Something pointed at ${file}, bytes ${range.from}–${range.to}. It is marked below.`,
   }
 }

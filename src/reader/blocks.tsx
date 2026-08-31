@@ -94,15 +94,33 @@ export interface BlockProps {
    * — and passed down through a context from here, so that every rendered span
    * inside this block gets it without six call sites having to remember.
    */
-  mark?: { from: number; to: number } | null
+  mark?: { id: string; from: number; to: number } | null
 }
 
 export function BlockRow({ block, epic, mark = null }: BlockProps) {
-  /* Narrowed to this block before it is supplied. A block the mark does not
-     touch gets `null`, which is the same value every unmarked block gets, so
-     the context does not change identity for the whole page every time one
-     paragraph is highlighted. */
-  const here = mark && block.srcStart < mark.to && mark.from < block.srcEnd ? mark : null
+  /*
+   * Narrowed to this block before it is supplied. A block the mark does not
+   * touch gets `null`, which is the same value every unmarked block gets, so
+   * the context does not change identity for the whole page every time one
+   * paragraph is highlighted.
+   *
+   * Two ways to be touched, and the second is not a widening of the first. A
+   * block whose source OVERLAPS the range holds some of the words pointed at. A
+   * block that IS the one `pointedAt` resolved to holds the place — which is
+   * the only thing left to say when the range names source this module draws
+   * none of: a comment run, a `\todo{}` whose words are lifted out, anything in
+   * the preamble. That was measured on the thesis and it is not rare:
+   * twenty-three of its fifty-eight notes point at exactly that kind of range,
+   * and before the id was carried here every one of them turned the page and
+   * then drew nothing at all when it arrived.
+   *
+   * The range itself is unchanged either way. The spans inside a block marked
+   * the second way stay unpainted, so the rule in the margin is the whole of
+   * what is claimed — "the thing you pointed at is here" — rather than a
+   * paragraph washed in colour because something near it was pointed at.
+   */
+  const overlaps = mark !== null && block.srcStart < mark.to && mark.from < block.srcEnd
+  const here = mark && (overlaps || block.id === mark.id) ? mark : null
   return (
     <div
       className="block-row group relative"

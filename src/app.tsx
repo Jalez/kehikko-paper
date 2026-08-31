@@ -85,7 +85,7 @@ export function App() {
    * them together would either re-scroll the reader every render or drop the
    * highlight the moment they scrolled away from it.
    */
-  const [mark, setMark] = useState<{ file: string; from: number; to: number } | null>(null)
+  const [mark, setMark] = useState<{ file: string; id: string; from: number; to: number } | null>(null)
   /**
    * Whether what this container is showing came from somebody else, untouched since.
    *

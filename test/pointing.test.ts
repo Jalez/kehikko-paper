@@ -95,6 +95,36 @@ describe('which block a byte range lands in', () => {
     expect(blockFor(paper, 'chapters/bridge.tex', { from: 5000, to: 5100 })?.id).toBe('para-2')
   })
 
+  test('a range on source this container draws none of lands on the block BELOW it', () => {
+    /*
+     * The ordinary case rather than an edge one, and it was answered wrong.
+     *
+     * Bytes 40–100 of this file are drawn by nothing: a comment run, which
+     * `pages.ts` folds away and out of which the notes container lifts a note. The
+     * fallback used to be "the last block in the file", so pressing a note
+     * about the top of a chapter walked the reader to its final paragraph —
+     * nineteen of the twenty-three comment notes in the thesis this was
+     * measured on, plus four more in a preamble. A comment run sits ABOVE what
+     * it is about, so the block below it is the subject and the block above it
+     * is the previous one.
+     */
+    expect(blockFor(paper, 'chapters/bridge.tex', { from: 45, to: 90 })?.id).toBe('para-1')
+  })
+
+  test('a passage in the preamble lands on the file’s first drawn block', () => {
+    /* Which is what this function's own essay has always claimed and what it
+       did not do: every block in a file starts after that file's preamble, so
+       the first one below the range is the first one there is. */
+    const withBody = {
+      ...paper,
+      blocks: [
+        ...paper.blocks,
+        block({ id: 'head-m', kind: 'heading', file: 'main.tex', srcStart: 200, srcEnd: 240, level: 1, segments: [] }),
+      ],
+    } as unknown as Paper
+    expect(blockFor(withBody, 'main.tex', { from: 0, to: 90 })?.id).toBe('head-m')
+  })
+
   test('a file whose only block is the preamble has nothing this container draws', () => {
     /* `main.tex` here holds a folded preamble and nothing else. Notes stopped
        lifting that region for the same reason this container never draws it. */
@@ -108,8 +138,27 @@ describe('what this container does about a passage', () => {
     expect(answer.at).toBe('here')
     if (answer.at !== 'here') return
     expect(answer.id).toBe('para-2')
-    expect(answer.mark).toEqual({ file: 'chapters/bridge.tex', from: 420, to: 460 })
+    expect(answer.mark).toEqual({ file: 'chapters/bridge.tex', id: 'para-2', from: 420, to: 460 })
     expect(answer.said).toContain('420')
+  })
+
+  test('the mark names the block as well as the range, and the range is never widened', () => {
+    /*
+     * The two halves of a mark answer two different questions, and a passage
+     * naming source this container draws none of only has an answer to the second.
+     *
+     * `id` is which block the pointing landed on, so `BlockRow` can draw its
+     * rule in the margin — "the thing you pointed at is here" — for a comment
+     * run, a lifted `\todo{}`, or a preamble. The range stays exactly as it
+     * arrived so that no span inside that block is painted: a paragraph washed
+     * in colour because something near it was pointed at would be this module
+     * claiming to have found words it did not find.
+     */
+    const answer = pointedAt(paper, at({ from: 45, to: 90 }))
+    expect(answer.at).toBe('here')
+    if (answer.at !== 'here') return
+    expect(answer.id).toBe('para-1')
+    expect(answer.mark).toEqual({ file: 'chapters/bridge.tex', id: 'para-1', from: 45, to: 90 })
   })
 
   test('a passage with no range marks nothing AND turns nowhere', () => {
