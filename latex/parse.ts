@@ -169,6 +169,92 @@ const SYMBOL_CMDS: Record<string, string> = {
 };
 
 /**
+ * Accent escapes, held as combining marks rather than as finished letters.
+ *
+ * ## The fault this exists to fix, which was the worst kind
+ *
+ * There was no rule here at all. `\"a` was read as a command named `"`, nothing
+ * recognised it, and the unknown-bare-command fallback at the bottom of
+ * `parseInline` applied: drop the command, keep what follows. So the owner's
+ * thesis said `tiivistelm\"a` and the reading column said `tiivistelma`.
+ *
+ * That is worse than rendering the source would have been, and the ranking
+ * matters because it is what decides the fallback below. `tiivistelm\"a` on
+ * screen is visibly unrendered markup — ugly, and self-announcing. `tiivistelma`
+ * is a Finnish word with its umlaut quietly removed, indistinguishable from the
+ * author misspelling their own language. This document is a Finnish/English
+ * thesis, so that is not an edge case for its author; it is most of the Finnish.
+ *
+ * ## Why marks and `normalize`, rather than a table of finished letters
+ *
+ * The obvious spelling is a map from `\"a` to `ä`, and it needs a row for every
+ * letter every accent can sit on: `\"a \"e \"i \"o \"u \"y \"A …` is seven rows
+ * for one accent before anybody writes a Czech name. This thesis's bibliography
+ * already needs s-caron and c-acute, so the long tail is not hypothetical.
+ *
+ * A combining mark plus `String.prototype.normalize("NFC")` is the whole table
+ * in fifteen rows, and it is the Unicode standard's own answer to this question
+ * rather than this file's. Where no precomposed character exists the result
+ * stays decomposed, which is still the right letter and still renders — a far
+ * better answer than the escape.
+ *
+ * NFC and not NFD, and the reason is `src/reader/pages.ts` rather than
+ * typography: sheets are packed from the LENGTH of a block's rendered text, so
+ * a decomposed `a` + U+0308 would charge two characters of line for a letter
+ * drawn as one, and every accented word in the document would push the page
+ * break a little further than it should.
+ *
+ * ## Two kinds of key, which the scan has to tell apart
+ *
+ * A non-letter accent binds tight: `\"a` is complete, because `"` can never be
+ * part of a command name and `readCommandName` therefore stops after one
+ * character. A letter-named one cannot — `\v` is a caron and `\vspace` is not —
+ * so those are only read as accents when the whole name is the single letter,
+ * which greedy name reading already guarantees, and when something follows that
+ * can actually be accented.
+ *
+ * ## Shared with the notes module by copy, deliberately
+ *
+ * `notes/readable.ts` in `kehikko-notes` carries this same table and says so.
+ * It was written from THIS file's `CHAR_ESCAPES` and `STYLE_CMDS` and found
+ * this gap on the way past. Neither imports the other: modules meet through the
+ * host or not at all, and a cross-module import for a hundred lines of pure
+ * text handling would buy a hidden dependency at the price of a duplication
+ * nobody can see. Copied, the failure mode of drift is two texts that read
+ * slightly differently side by side — visible, and explicable. Imported, it
+ * would be a channel neither manifest declares.
+ */
+const ACCENT_MARKS: Record<string, string> = {
+  '"': "̈", "'": "́", "`": "̀", "^": "̂", "~": "̃",
+  "=": "̄", ".": "̇",
+  u: "̆", v: "̌", H: "̋", r: "̊",
+  c: "̧", k: "̨", d: "̣", b: "̱",
+};
+
+/**
+ * The dotless letters, which exist only to be accented.
+ *
+ * `\"\i` is how TeX spells `ï`: the dot is removed so the diaeresis has
+ * somewhere to sit. Unicode composes `ï` from a plain dotted `i`, so the base
+ * this wants is `i` and not `ı`. Outside an accent's argument `\i` is left to
+ * the ordinary command path, because there it is a letter this table has no
+ * claim on.
+ */
+const DOTLESS: Record<string, string> = { i: "i", j: "j" };
+
+/**
+ * One letter with a mark on it, composed where Unicode has a composition.
+ *
+ * The mark goes after the FIRST character rather than after the whole argument,
+ * so that `\"{oo}` — which nobody writes on purpose but which a truncated
+ * source can produce — accents the letter it names instead of hanging a
+ * diaeresis off the end of a word.
+ */
+function accented(base: string, mark: string): string {
+  return (base[0] + mark + base.slice(1)).normalize("NFC");
+}
+
+/**
  * One character of the source, or the empty string past its end.
  *
  * Every scan in this file walks an index forward and tests the character it
@@ -473,6 +559,77 @@ export function parseInline(src: string, start: number, end: number, inherited: 
         const text = SYMBOL_CMDS[name];
         if (text) pushDerived(text, i, e, []);
         i = e;
+        continue;
+      }
+
+      // An accent escape: not markup around a letter, but the letter itself.
+      //
+      // Placed here — after the two escape tables, before the optional-argument
+      // skip — for two reasons. It must come after them because a key in either
+      // would otherwise be shadowed (they do not in fact overlap, and this
+      // ordering is what keeps that true if one of them ever grows). It must
+      // come before the `[` skip because `\'[` is an accented bracket in
+      // principle and never an optional argument, and because everything below
+      // this point assumes the command takes a braced argument in the ordinary
+      // way, which an accent does not.
+      //
+      // Mathematics never reaches here at all: `$…$` is consumed whole by the
+      // branch above and handed to KaTeX verbatim, so `$\hat{x}$` keeps its
+      // backslash. Composing a combining circumflex into maths would hand the
+      // renderer something that is not LaTeX.
+      const mark = ACCENT_MARKS[name];
+      if (mark !== undefined) {
+        // `\c{c}` and `\c c` are both cedillas, and a letter-named accent is
+        // allowed the space that separates it from its argument — TeX eats it.
+        // A control symbol is not: `\" a` is a diaeresis on a space, and
+        // guessing otherwise would be this parser being cleverer about the
+        // author's source than the compiler that produced their PDF.
+        let at = p;
+        if (/^[a-zA-Z]$/.test(name)) while (src[at] === " ") at++;
+
+        let base = "";
+        let after = at;
+        if (src[at] === "{") {
+          const close = Math.min(matchBrace(src, at), end);
+          const inner = src.slice(at + 1, close - 1);
+          // Only a plain letter or a dotless one. Anything else — a nested
+          // command, a brace group, an empty `\^{}` — is left to the paths
+          // below, which keep the group and its content rather than guessing at
+          // a base that is not a letter.
+          if (DOTLESS[inner.slice(1)] !== undefined && inner.startsWith("\\")) base = DOTLESS[inner.slice(1)]!;
+          else if (/^[^\\{}]+$/.test(inner)) base = inner;
+          if (base) after = close;
+        } else if ((src[at] === "\\" && DOTLESS[ch(src, at + 1)] !== undefined) && !/[a-zA-Z]/.test(ch(src, at + 2))) {
+          base = DOTLESS[ch(src, at + 1)]!;
+          after = at + 2;
+        } else if (/^[a-zA-Z]$/.test(ch(src, at))) {
+          base = ch(src, at);
+          after = at + 1;
+        }
+
+        if (base) {
+          // Derived, because the rendering is shorter than the source it came
+          // from and no offset inside it would mean anything: a selection that
+          // lands on the `ä` gets the whole `\"a`, which is the only edit range
+          // that could honestly be sent back to be rewritten.
+          pushDerived(accented(base, mark), i, after, []);
+          i = after;
+          continue;
+        }
+
+        // Nothing to accent. The escape is emitted as ITSELF — a literal
+        // segment whose text is exactly the source it points at, so the offset
+        // invariant holds — rather than being dropped by the fallback at the
+        // bottom of this function.
+        //
+        // This is the one place the unknown-command policy is deliberately not
+        // followed, and it is worth saying why. Dropping an unrecognised
+        // wrapper is safe: `\foo{words}` still shows its words. Dropping an
+        // unrecognised ACCENT is exactly the bug this branch was written to
+        // remove, one character further along. Showing `\"` is ugly and
+        // self-announcing, which is the failure a reader can act on.
+        out.push({ text: src.slice(i, p), srcStart: i, srcEnd: p, literal: true, styles: [...inherited] });
+        i = p;
         continue;
       }
 

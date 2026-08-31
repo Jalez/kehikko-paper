@@ -551,9 +551,23 @@ function braced(source: string, command: string): string | null {
       depth -= 1
       if (depth === 0) {
         const raw = source.slice(at + command.length + 2, i)
-        /* Markup reduced to prose the same way the parser does it, so a title
-           in the picker and the same title in the reading view are one string
-           rather than two that usually agree. */
+        /* Markup reduced to prose so that a title in the picker and the same
+           title in the reading view read as one string.
+
+           An approximation of `parseInline`, and knowingly a coarser one than
+           it was: the parser learned accent escapes and these four replacements
+           did not, so `\title{Tiivistelm\"a}` would now read `Tiivistelmä` in
+           the reading column and `Tiivistelm\"a` here. The divergence is left
+           standing on purpose. The proper fix is to route this through
+           `parseInline` — these regexes already disagree with it about
+           citations, refs and comments — but that would change the rendered
+           title of every paper on this machine to close a gap no title in the
+           corpus falls into, and a picker that silently renames somebody's
+           document is a worse surprise than one showing two characters of TeX.
+           What it does NOT do is eat the accent, which is the property that
+           matters: whoever meets it can see what happened. The first accented
+           title in this corpus is the moment to do it properly here, rather
+           than to add a fifth regex. */
         const text = raw
           /* `\\` is a line break in a title, not a command — the loop above
              skips it as an escape, so it survives to here and would otherwise

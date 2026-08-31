@@ -175,3 +175,69 @@ describe('block ids', () => {
     expect(a.length).toBeGreaterThan(2)
   })
 })
+
+describe('accent escapes, which are letters and not markup', () => {
+  /**
+   * The fault this describes, in the owner's own thesis.
+   *
+   * `\"a` was read as a command named `"`, which nothing in the parser
+   * recognised, so the unknown-bare-command fallback applied: drop the command,
+   * keep what follows. `tiivistelm\"a` therefore reached the reading column as
+   * `tiivistelma` — and that is a worse failure than showing the source would
+   * have been. Markup on screen is visibly markup; a Finnish word with its
+   * umlaut removed looks like the author cannot spell.
+   *
+   * The assertion is the word, spelled correctly, and nothing weaker. A test
+   * that only checked "the backslash is gone" would have passed against the
+   * broken parser too.
+   */
+  test('tiivistelm\\"a reads as tiivistelmä', () => {
+    expect(text(inlineOf('the Finnish \\emph{tiivistelm\\"a} still needs writing'))).toBe(
+      'the Finnish tiivistelmä still needs writing',
+    )
+  })
+
+  test('the braced form is the same letter', () => {
+    /* `\"{a}` is how a good deal of real source spells it, and a rule that knew
+       only the tight form would half-fix the corpus. */
+    expect(text(inlineOf('tiivistelm\\"{a}'))).toBe('tiivistelmä')
+  })
+
+  test('a letter-named accent is an accent only when the name stands alone', () => {
+    /* `\v` is a caron and `\vspace` is not — and `\vspace` is in this thesis.
+       The command name is read greedily, which is what keeps the two apart. */
+    expect(text(inlineOf('\\v{s}koda and \\c{c}edilla'))).toBe('škoda and çedilla')
+    expect(text(inlineOf('a\\vspace{1cm}b'))).toBe('ab')
+  })
+
+  test('the composed letter is one character, so it costs one character of a line', () => {
+    /* `pages.ts` charges a block for the LENGTH of its rendered text. A
+       decomposed `a` plus a combining diaeresis would be typographically
+       correct and would still make every accented word count as wider than it
+       is drawn. NFC is what keeps that count honest. */
+    expect(text(inlineOf('\\"a'))).toBe('ä')
+    expect(text(inlineOf('\\"a')).length).toBe(1)
+  })
+
+  test('an accent inside mathematics is left exactly as written', () => {
+    /* `$\hat{x}$` is handed to KaTeX verbatim; a pass that composed a combining
+       circumflex into it would hand KaTeX something that is not LaTeX. */
+    expect(text(inlineOf('the estimator $\\hat{x} \\ne \\bar{y}$ here'))).toContain('\\hat{x} \\ne \\bar{y}')
+  })
+
+  test('an accent with nothing to accent keeps its backslash', () => {
+    /* The bound the whole table sits inside: what is not recognised is shown,
+       never half-eaten. Losing a character silently is the failure this change
+       exists to remove, so it must not introduce a new way to do it. */
+    expect(text(inlineOf('a bare \\" at the end'))).toContain('\\"')
+  })
+
+  test('a non-breaking space was already a space, and still is', () => {
+    /* Checked here because the same fix in the notes module had to ADD this:
+       every tie in this thesis sits between a word and a cross-reference, and
+       `\textbf{RQ1}~how` was reading as `RQ1~how` there. This parser has
+       converted a tie since it was written, so there was nothing to change —
+       but the two modules now agree by test rather than by coincidence. */
+    expect(text(inlineOf('\\textbf{RQ1}~how students perceive'))).toBe('RQ1 how students perceive')
+  })
+})
