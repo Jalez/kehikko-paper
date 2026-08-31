@@ -280,6 +280,77 @@
     font-variant-numeric: oldstyle-nums proportional-nums;
   }
 
+  /*
+   * The passage somebody else is pointing at.
+   *
+   * ## Marked, not selected
+   *
+   * The obvious implementation is to put a real browser selection over the
+   * range, and it is the one thing this must never do. `use-selection.ts`
+   * reads `window.getSelection()` on mouse-up, and a selection this module
+   * applied to itself would be indistinguishable from one a person made: the
+   * pane would compose a passage out of it and publish it back to the canvas
+   * that had just sent it. That is half of the loop, arranged for free, with
+   * nothing on screen looking wrong.
+   *
+   * So the mark is paint. It is a class on the spans whose source range
+   * overlaps, drawn from the copy-editor's amber pencil that this page already
+   * owns, and the browser's own selection is untouched — a reader can still
+   * drag across a marked passage and quote it, which is the thing they would
+   * most likely want to do next.
+   *
+   * ## Colour and an underline, because colour is a channel some readers lack
+   *
+   * The same rule the rest of this file follows: `--mark` at low alpha carries
+   * it for most people, and the underline carries it for everybody. Both are
+   * drawn behind the type rather than over it — a highlight that changed the
+   * text colour would be this pane restyling somebody's paper to point at it.
+   *
+   * `color-mix` against `--paper` rather than a fixed alpha over white, so the
+   * wash sits on the sheet's own surface in both themes instead of turning grey
+   * on the dark one.
+   */
+  /*
+   * The block a passage landed in, marked as a whole.
+   *
+   * ## Because the range can name source this page does not draw
+   *
+   * A note lifted out of a `\todo{}` points at the bytes of the macro, and
+   * `segments.tsx` removes todo segments before anything is rendered — the
+   * author's annotations live in the notes pane now, which is the whole reason
+   * that filter exists. A comment run is the same: `pages.ts` drops every
+   * `comment` block. So a perfectly good passage can name a place in the file
+   * with no span on the sheet to paint.
+   *
+   * Marking only the spans would leave those passages with nothing visible at
+   * all — the pane would scroll, land, and appear to have done nothing, which
+   * is exactly the silence this change was made to end. So the BLOCK carries a
+   * mark too: a rule in the margin saying "the thing you pointed at is here",
+   * which is true whether or not any of it is drawn.
+   *
+   * Drawn in the margin rather than as a wash, so a paragraph that also has
+   * marked spans in it does not end up highlighted twice over.
+   */
+  .block-row[data-marked='1']::before {
+    content: '';
+    position: absolute;
+    inset-block: -0.15em;
+    left: -1.1em;
+    width: 0.18em;
+    border-radius: 1px;
+    background: var(--mark);
+  }
+
+  .passage-mark {
+    background-color: color-mix(in oklch, var(--mark) 26%, var(--paper));
+    box-shadow: 0 0 0 1px color-mix(in oklch, var(--mark) 35%, var(--paper));
+    border-radius: 2px;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklch, var(--mark) 70%, var(--paper));
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.18em;
+  }
+
   /* ---- The column the pages lie in ------------------------------------- */
 
   /*

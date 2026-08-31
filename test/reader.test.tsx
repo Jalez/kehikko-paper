@@ -72,7 +72,7 @@ const readout = (r: { container: HTMLElement }) => r.container.querySelector('[d
 
 /** The view, with the props it actually takes. */
 function view(paper: Paper, walk: PaginatedProps['walk'] = null, ref = { current: null as HTMLElement | null }) {
-  return render(<PaginatedView paper={paper} walk={walk} rootRef={ref} />)
+  return render(<PaginatedView paper={paper} walk={walk} rootRef={ref} mark={null} />)
 }
 
 /**
@@ -178,7 +178,7 @@ describe('pagination is a property of the document', () => {
        state and React runs this component again. The readout must not move,
        and no scroll may be asked for. */
     const scrolls = watchScrolls()
-    rendered.rerender(<PaginatedView paper={paper} walk={null} rootRef={{ current: null }} />)
+    rendered.rerender(<PaginatedView paper={paper} walk={null} rootRef={{ current: null }} mark={null} />)
     expect(readout(rendered).textContent).toBe(`1 / ${total}`)
     expect(scrolls.asked.filter((a) => a.block !== 'to-top')).toEqual([])
     scrolls.stop()
@@ -314,7 +314,7 @@ describe('the reading view scrolls, and there is nothing to press', () => {
       <PaginatedView
         paper={paper}
         walk={{ file: heading.file, id: heading.id, nonce: 1 }}
-        rootRef={{ current: null }}
+        rootRef={{ current: null }} mark={null}
       />,
     )
     const target = document.getElementById(`b-${`${heading.file}-${heading.id}`.replace(/[^a-zA-Z0-9-]+/g, '-')}`)
@@ -331,7 +331,7 @@ describe('the reading view scrolls, and there is nothing to press', () => {
     const scrolls = watchScrolls()
     for (const nonce of [1, 2]) {
       rendered.rerender(
-        <PaginatedView paper={paper} walk={{ file: heading.file, id: heading.id, nonce }} rootRef={{ current: null }} />,
+        <PaginatedView paper={paper} walk={{ file: heading.file, id: heading.id, nonce }} rootRef={{ current: null }} mark={null} />,
       )
     }
     expect(scrolls.asked.filter((a) => a.block === 'center').length).toBe(2)

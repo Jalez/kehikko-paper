@@ -3,7 +3,7 @@ import { useState } from 'react'
 import type { Block } from '../../latex/parse.ts'
 import type { PlacedBlock } from '../../store.ts'
 import { cn } from '@/lib/utils.ts'
-import { Segments } from './segments.tsx'
+import { Marked, Segments } from './segments.tsx'
 
 /**
  * One block, drawn, with the gutter tag that says what it is.
@@ -86,11 +86,28 @@ export interface BlockProps {
    * produces a 404 and the fallback box rather than somebody else's picture.
    */
   epic: string
+  /**
+   * A byte range of THIS block's file that the canvas is pointing at, or null.
+   *
+   * Resolved by the caller against the block's file — see the essay on `Marked`
+   * — and passed down through a context from here, so that every rendered span
+   * inside this block gets it without six call sites having to remember.
+   */
+  mark?: { from: number; to: number } | null
 }
 
-export function BlockRow({ block, epic }: BlockProps) {
+export function BlockRow({ block, epic, mark = null }: BlockProps) {
+  /* Narrowed to this block before it is supplied. A block the mark does not
+     touch gets `null`, which is the same value every unmarked block gets, so
+     the context does not change identity for the whole page every time one
+     paragraph is highlighted. */
+  const here = mark && block.srcStart < mark.to && mark.from < block.srcEnd ? mark : null
   return (
-    <div className="block-row group relative" data-block-id={anchorId(block.file, block.id)}>
+    <div
+      className="block-row group relative"
+      data-block-id={anchorId(block.file, block.id)}
+      data-marked={here ? '1' : undefined}
+    >
       <div
         aria-hidden
         className="gutter-tag pointer-events-none absolute top-[0.4em] -left-11 w-9 text-right"
@@ -98,7 +115,9 @@ export function BlockRow({ block, epic }: BlockProps) {
       >
         <span className="gutter-mark">{GUTTER[block.kind]}</span>
       </div>
-      <BlockBody block={block} epic={epic} />
+      <Marked.Provider value={here}>
+        <BlockBody block={block} epic={epic} />
+      </Marked.Provider>
     </div>
   )
 }

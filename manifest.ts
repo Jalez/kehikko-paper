@@ -168,11 +168,20 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   extensions: { emits: [], consumes: [] },
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
-    /* One entry, and see the essay above. What this app READS — which epic is
-       open — is handed to it unbidden, on the greeting and on every context,
-       whatever it declared; there has never been anything to ask for on that
-       side. What it WRITES is `passage.set`, and that is a capability because
-       it changes what every other pane on the canvas is told. */
+    /* One entry, and see the essay above. What this app READS is handed to it
+       unbidden, on the greeting and on every context, whatever it declared —
+       which epic is open, and now also `passage`, so a pane that holds a note
+       about a passage can turn this one to it. There has never been anything to
+       ask for on that side, and there should not be: a context is broadcast to
+       every framed module, and a permission over what a host is already sending
+       would be a permission over nothing.
+
+       What it WRITES is `passage.set`, and that IS a capability because it
+       changes what every other pane on the canvas is told. Doing both is the
+       shape that can loop, so the rule about when this module speaks is in
+       `shouldPublish` with a test rather than in a comment: never while it is
+       showing a passage somebody else set, and never back at the pane that set
+       it. */
     uses: ['passage:set'],
     storage: true,
     prompt: false,

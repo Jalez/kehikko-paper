@@ -7,7 +7,8 @@
  *   data-src-start / data-src-end / data-literal
  *
  * For a literal span, an offset inside the rendered text is also an offset into
- * the source, so this can be exact. For a derived span — a macro expansion, a
+ * the source, so this can be exact — measured in BYTES on both sides, which is
+ * what the spans carry and what the protocol's `passage` means. See `bytesOf`. For a derived span — a macro expansion, a
  * collapsed line break, the pin in front of a todonote — there is no honest
  * character-level correspondence, so the selection snaps outward to the whole
  * span and says so.
@@ -52,18 +53,53 @@ const endOf = (el: HTMLElement) => Number(el.dataset.srcEnd)
 const isLiteral = (el: HTMLElement) => el.dataset.literal === '1'
 
 /**
- * Characters of rendered text preceding `offset` within `container`, counted
- * from the start of `seg`.
+ * How many UTF-8 BYTES one string of rendered text is.
+ *
+ * ## Bytes, because the number it is added to is bytes
+ *
+ * `data-src-start` is a byte offset — `latex/parse.ts` converts every offset it
+ * produces at its own boundary, and the essay on `inBytes` there is why. The
+ * exact case in this file is `startOf(span) + (the rendered text before the
+ * cursor)`, so if that addend were counted in characters the sum would be two
+ * short for every em dash and one for every accented letter inside the span.
+ *
+ * That is the specific reason the conversion was NOT done as a single fix-up
+ * where the numbers leave this module. Converting one end and not the other
+ * breaks the exact case — the one thing this file is careful about — in order
+ * to fix the approximate one, which snaps to a whole span and was never wrong
+ * by a character in the first place. Both ends move together or neither does.
+ *
+ * `TextEncoder` is not used: it allocates per call and this runs once per
+ * endpoint per drag over a document that may be thirty kilobytes of text. The
+ * arithmetic is the same three cases the parser and the notes module both
+ * count, written the same way in all three so nobody has to check.
+ */
+function bytesOf(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    /* A surrogate pair is four bytes across two units, two each, which keeps
+       the running total right without either half claiming the other's. */
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code >= 0xd800 && code <= 0xdfff ? 2 : 3
+  }
+  return bytes
+}
+
+/**
+ * Bytes of rendered text preceding `offset` within `container`, counted from
+ * the start of `seg`.
  *
  * A segment normally holds a single text node, but the style nesting splits it
  * — `\emph{\texttt{x}}` is a span holding an `<em>` holding a `<code>` — so
- * this walks rather than assumes.
+ * this walks rather than assumes. `offset` is a DOM offset and is therefore in
+ * UTF-16 units; it is turned into bytes by measuring the text it names rather
+ * than by being used as a number.
  */
 function offsetWithinSegment(seg: HTMLElement, container: Node, offset: number): number {
   if (container === seg) {
     let count = 0
     for (let i = 0; i < offset && i < seg.childNodes.length; i++) {
-      count += seg.childNodes[i]?.textContent?.length ?? 0
+      count += bytesOf(seg.childNodes[i]?.textContent ?? '')
     }
     return count
   }
@@ -71,8 +107,8 @@ function offsetWithinSegment(seg: HTMLElement, container: Node, offset: number):
   let count = 0
   let node = walker.nextNode()
   while (node) {
-    if (node === container) return count + offset
-    count += node.textContent?.length ?? 0
+    if (node === container) return count + bytesOf((node.textContent ?? '').slice(0, offset))
+    count += bytesOf(node.textContent ?? '')
     node = walker.nextNode()
   }
   return 0

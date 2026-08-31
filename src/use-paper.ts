@@ -92,6 +92,25 @@ export function usePaper(framed: boolean) {
    * turn it, so something has to say why.
    */
   const [said, setSaid] = useState('')
+  /**
+   * Where somebody else is pointing, as the context carries it.
+   *
+   * ## This module publishes a passage and had never read one
+   *
+   * `use-published-passage.ts` says where the reader is; nothing here listened
+   * for the answer, so the wire ran one way. The user asked for the other —
+   * "when you click on a note shouldn't it highlight and show what its target
+   * from the paper?" — and the mechanism is the same field read instead of
+   * written.
+   *
+   * Compared before it is written, because it is an OBJECT rebuilt by the host
+   * on every context. Without that, a passage that had not changed would be a
+   * new identity several times a second, and everything downstream of it —
+   * scrolling the reader to a block, marking a range — would fire on each one.
+   * The host has a measured history of this exact shape: seventeen identical
+   * contexts during one startup because nothing checked.
+   */
+  const [pointed, setPointed] = useState<Passage | null>(null)
 
   const host = useRef<Host | null>(null)
   const goto = useRef<GotoHandler>(() => {})
@@ -234,7 +253,7 @@ export function usePaper(framed: boolean) {
      * on the greeting, which is a bug that only shows on the first paint and
      * therefore in front of somebody.
      */
-    const arrived = (context: { epic: string | null; theme?: string }, greeting: boolean) => {
+    const arrived = (context: { epic: string | null; theme?: string; passage?: Passage | null }, greeting: boolean) => {
       /* The theme is a fact about the document rather than about any part of
          it, so it goes on the root element. `light` is set explicitly as well
          as `dark`, so a host asking for light on a machine set to dark actually
@@ -244,6 +263,11 @@ export function usePaper(framed: boolean) {
         root.classList.toggle('dark', context.theme === 'dark')
         root.classList.toggle('light', context.theme === 'light')
       }
+
+      /* Applied on every context including the ones that name no epic, and
+         including null — a passage this page holds onto after the canvas has
+         stopped pointing is a mark on a page nobody is pointing at. */
+      setPointed((was) => (samePassage(was, context.passage ?? null) ? was : (context.passage ?? null)))
 
       /* A greeting always re-reads, because a greeting means the conversation
          is new: the host greets on every frame LOAD, so one arriving is a page
@@ -351,7 +375,20 @@ export function usePaper(framed: boolean) {
   }, [])
 
   return useMemo(
-    () => ({ sight, said, setSaid, resize, point, goto }),
-    [sight, said, resize, point],
+    () => ({ sight, said, setSaid, resize, point, pointed, goto }),
+    [sight, said, resize, point, pointed],
   )
+}
+
+/**
+ * Two passages, compared by value.
+ *
+ * Field by field rather than by `JSON.stringify`, for the reason the same
+ * function in `use-published-passage.ts` gives: key order out of two different
+ * construction sites is not guaranteed to match, and a comparison that silently
+ * stops matching is one that stops preventing anything.
+ */
+function samePassage(a: Passage | null, b: Passage | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.path === b.path && a.page === b.page && a.from === b.from && a.to === b.to && a.quoted === b.quoted
 }

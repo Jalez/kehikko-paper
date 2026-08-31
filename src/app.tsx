@@ -5,6 +5,7 @@ import { AskPopover } from './reader/ask.tsx'
 import { anchorId } from './reader/blocks.tsx'
 import { paginate, pageOf, visible } from './reader/pages.ts'
 import { PaginatedView } from './reader/paginated.tsx'
+import { pointedAt } from './reader/pointed.ts'
 import { plain } from './reader/segments.tsx'
 import { usePaper, type Sight } from './use-paper.ts'
 import { usePublishedPassage, type Sheet } from './use-published-passage.ts'
@@ -49,7 +50,7 @@ import { useSelection } from './use-selection.ts'
 const FRAMED = typeof window !== 'undefined' && window.parent !== window
 
 export function App() {
-  const { sight, said, setSaid, resize, point, goto } = usePaper(FRAMED)
+  const { sight, said, setSaid, resize, point, pointed, goto } = usePaper(FRAMED)
   const root = useRef<HTMLElement | null>(null)
   /**
    * A walk asked for from outside, and nothing else.
@@ -74,13 +75,102 @@ export function App() {
    * a candidate broadcast to every pane on the canvas.
    */
   const [sheet, setSheet] = useState<Sheet>({ page: 1, file: null })
+  /**
+   * The range somebody else is pointing at, drawn in the paper.
+   *
+   * Separate state from `walk` because they are two different acts on two
+   * different clocks: the walk happens once, when the passage arrives, and the
+   * mark stays on the page for as long as the canvas is pointing there. Folding
+   * them together would either re-scroll the reader every render or drop the
+   * highlight the moment they scrolled away from it.
+   */
+  const [mark, setMark] = useState<{ file: string; from: number; to: number } | null>(null)
+  /**
+   * Whether what this pane is showing came from somebody else, untouched since.
+   *
+   * The loop guard, and the reason it is a piece of state rather than a
+   * comparison: "did a PERSON do this" is not a property of any passage, it is
+   * a property of what has happened since one arrived. See `shouldPublish`.
+   */
+  const [adopted, setAdopted] = useState(false)
 
   const paper = sight.at === 'reading' ? sight.paper : null
 
   /* Where the reader is pointing, told to the canvas. Everything about when and
      whether is in `use-published-passage.ts`; from here it is one line, which
-     is what `use-selection.ts` predicted it would be. */
-  usePublishedPassage(point, paper, sheet, selected.passage)
+     is what `use-selection.ts` predicted it would be — plus the two arguments
+     that stop this module answering itself. */
+  usePublishedPassage(point, paper, sheet, selected.passage, pointed, adopted)
+
+  /**
+   * A passage arriving from the canvas: turn to it, mark it, say so.
+   *
+   * ## Everything decided here is decided in `reader/pointed.ts`
+   *
+   * This effect performs; it does not judge. Which file, which block, whether
+   * this paper holds the document at all — all of it is a pure function over
+   * the paper and the passage, so the awkward case (a note on a chapter of
+   * another epic) can be asserted without a canvas.
+   *
+   * ## It reuses the walk rather than scrolling for itself
+   *
+   * `walk` is already the one way anything outside `PaginatedView` may move the
+   * reader — it is how `roadmap.goto` lands on a reference and how the sections
+   * sidebar turns a page. A second scroller here would be a second answer to
+   * "where is the reader", and the two would disagree the first time somebody
+   * pressed a section while a passage was arriving.
+   *
+   * ## And it announces that the pane moved on its own
+   *
+   * `said` exists for exactly this: "the document moved and the reader did not
+   * move it". A passage naming a document this pane does not have open goes
+   * through the same line rather than doing nothing quietly — from the pane
+   * that sent it, a press that silently did nothing looks like it worked.
+   */
+  useEffect(() => {
+    const answer = pointedAt(paper, pointed)
+    if (answer.at === 'nowhere') {
+      setMark(null)
+      setAdopted(false)
+      return
+    }
+    if (answer.at === 'elsewhere') {
+      setMark(null)
+      setAdopted(false)
+      setSaid(answer.said)
+      return
+    }
+    setMark(answer.mark)
+    setWalk({ file: answer.file, id: answer.id, nonce: Date.now() })
+    setSaid(answer.said)
+    /* Quiet from here until somebody touches the paper. Anything the pane does
+       between now and then is a consequence of this passage, and saying it back
+       to the canvas is the loop. */
+    setAdopted(true)
+  }, [paper, pointed, setSaid])
+
+  /**
+   * The first thing a person does to the paper takes the pane off mute.
+   *
+   * Four gestures, and they are the four ways somebody moves or points at a
+   * document: the pointer, the wheel, a key, and a finished selection. Any one
+   * of them means the next passage this module composes is about where THEY
+   * are, which is news and is worth broadcasting.
+   *
+   * On the window rather than on the reading column, because a reader who
+   * presses the sections trigger and then an arrow key has moved the paper
+   * without the column ever having been touched. Passive and capturing, so
+   * nothing here can interfere with what the gesture was for.
+   */
+  useEffect(() => {
+    if (!adopted) return
+    const woke = () => setAdopted(false)
+    const kinds = ['pointerdown', 'wheel', 'keydown'] as const
+    for (const kind of kinds) window.addEventListener(kind, woke, { passive: true, capture: true })
+    return () => {
+      for (const kind of kinds) window.removeEventListener(kind, woke, { capture: true })
+    }
+  }, [adopted])
 
   /*
    * A different paper drops the selection with it.
@@ -238,7 +328,7 @@ export function App() {
       {/* A finished drag over the pages becomes a citable source range. */}
       <div className="flex min-h-0 flex-1 flex-col" onMouseUp={() => selected.read(root.current, filesByAnchor)}>
         {paper ? (
-          <PaginatedView paper={paper} walk={walk} rootRef={root} onSheet={setSheet} />
+          <PaginatedView paper={paper} walk={walk} mark={mark} rootRef={root} onSheet={setSheet} />
         ) : (
           <Screen sight={sight} />
         )}

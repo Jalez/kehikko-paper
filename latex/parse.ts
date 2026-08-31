@@ -1156,7 +1156,100 @@ function parseBlocks(src: string, path: string): ParsedDocument {
     i = j;
   }
 
-  return { path, blocks, sourceLength: src.length };
+  return { path, blocks: inBytes(blocks, src), sourceLength: byteLengthOf(src) };
+}
+
+/**
+ * Every offset this parser produces, converted from UTF-16 units to UTF-8
+ * bytes, once, at the boundary.
+ *
+ * ## The bug this closes, which had been correct-looking for its whole life
+ *
+ * Every scan in this file walks a JavaScript string, so `match.index`,
+ * `indexOf` and every `i++` count UTF-16 code units. `Segment.srcStart` has
+ * said "byte offset" since it was written, and on ASCII the two agree exactly,
+ * which is why nothing ever caught it. On a document with an em dash in it they
+ * do not: a `—` is one unit and three bytes, so every offset after the first
+ * one in a file is short by two per dash.
+ *
+ * That was survivable while the offsets never left this module — a citation a
+ * reader pastes into a conversation is a couple of bytes wide and still finds
+ * the passage. It stopped being survivable the moment they became a
+ * `passage.set`: the protocol says bytes, in as many words and with the reason
+ * ("the consumer that opens the file reads bytes and a character count would
+ * need the encoding to be agreed on as well"), and the module that consumes
+ * them opens the file and counts bytes. Two modules using the same numbers to
+ * mean different things is a highlight landing two characters off per em dash
+ * above it, with nothing on either side able to notice.
+ *
+ * ## Why here, and not a conversion where the numbers cross the wire
+ *
+ * That was looked at and it is worse, for a specific reason. `lib/selection.ts`
+ * gets an EXACT offset inside a literal span by adding the rendered characters
+ * before the cursor to the span's own start. If the span's start were bytes and
+ * the addend characters, the exact case — the one thing that file is careful
+ * about — would be quietly wrong in a way a whole-span snap never is. So the
+ * two halves are converted together: the spans carry bytes, and that file
+ * measures its addend in bytes too.
+ *
+ * Converting HERE rather than inside the scanners keeps the scanners working in
+ * the units JavaScript actually indexes strings in, which is the only way any
+ * of them can be read. The one rule that follows: after this function nothing
+ * may slice `src` with a block's offsets. Nothing does — `store.ts` and
+ * `doors.ts` use them for identity and for display, and the page uses them to
+ * name a passage — and a caller that started to would be reading from the wrong
+ * place on the first accented character, which is exactly the failure above.
+ */
+function inBytes(blocks: Block[], src: string): Block[] {
+  const at = byteOffsets(src);
+  const clamp = (i: number) => at[Math.max(0, Math.min(i, src.length))] ?? 0;
+  const segment = (s: Segment): Segment => ({ ...s, srcStart: clamp(s.srcStart), srcEnd: clamp(s.srcEnd) });
+  return blocks.map((block) => {
+    const moved = { ...block, srcStart: clamp(block.srcStart), srcEnd: clamp(block.srcEnd) };
+    /* Written per field rather than per kind, so a block that grows a third run
+       of segments is a compile error here instead of a span that silently keeps
+       character offsets. */
+    if ("segments" in moved) moved.segments = moved.segments.map(segment);
+    if ("caption" in moved) moved.caption = moved.caption.map(segment);
+    if ("items" in moved) moved.items = moved.items.map((item) => item.map(segment));
+    return moved;
+  });
+}
+
+/**
+ * A UTF-8 byte offset for every UTF-16 position in the string, plus one past
+ * the end.
+ *
+ * A surrogate pair is four bytes across two units and is counted two per unit,
+ * which keeps the running total right without either half claiming the other's.
+ * The same arithmetic the consumer of these offsets uses on its side, on
+ * purpose: two programs agreeing about what a byte is cannot be arranged by
+ * both being approximately right.
+ *
+ * A whole array rather than counting from the start for each offset, because a
+ * paper has thousands of segments and the quadratic version is measurable on a
+ * thirty-kilobyte chapter.
+ */
+function byteOffsets(src: string): number[] {
+  const out = new Array<number>(src.length + 1);
+  let byte = 0;
+  for (let i = 0; i < src.length; i++) {
+    out[i] = byte;
+    const code = src.charCodeAt(i);
+    byte += code < 0x80 ? 1 : code < 0x800 ? 2 : code >= 0xd800 && code <= 0xdfff ? 2 : 3;
+  }
+  out[src.length] = byte;
+  return out;
+}
+
+/** How many bytes the source is, in the units every offset above is now in. */
+function byteLengthOf(src: string): number {
+  let byte = 0;
+  for (let i = 0; i < src.length; i++) {
+    const code = src.charCodeAt(i);
+    byte += code < 0x80 ? 1 : code < 0x800 ? 2 : code >= 0xd800 && code <= 0xdfff ? 2 : 3;
+  }
+  return byte;
 }
 
 /** Locate the matching \end{env}, honouring nesting of the same environment. */

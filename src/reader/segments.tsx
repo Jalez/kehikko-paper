@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
 
 import type { Segment, SegmentStyle } from '../../latex/parse.ts'
 
@@ -114,7 +114,32 @@ function coalesce(segments: readonly Segment[]): Segment[] {
   return out
 }
 
-function styled(segment: Segment, key: string): ReactNode {
+/**
+ * The byte range of this file that something outside the paper is pointing at.
+ *
+ * ## A context and not a prop, and the reason is the six call sites
+ *
+ * A mark has to reach every rendered span: a heading's, a paragraph's, a list
+ * item's, a caption's, a table cell's. Threading it as a prop means five
+ * signatures in `blocks.tsx` and one in every branch of `BlockBody`, and the
+ * failure mode of forgetting one is a passage that highlights in a paragraph
+ * and silently does not in a caption — the same shape as the missing
+ * `data-src-start` this file's own opening essay warns about.
+ *
+ * So it is supplied once per block, by `BlockRow`, which is also the only place
+ * that knows which FILE the block came out of — and a range means nothing
+ * without its file, because `main.tex` and every chapter each have a byte 4120.
+ * `BlockRow` resolves that and hands down a range or nothing.
+ */
+export const Marked = createContext<{ from: number; to: number } | null>(null)
+
+/** Whether a segment's source overlaps the marked range. Touching is not overlapping. */
+function isMarked(segment: Segment, mark: { from: number; to: number } | null): boolean {
+  if (!mark) return false
+  return segment.srcStart < mark.to && mark.from < segment.srcEnd
+}
+
+function styled(segment: Segment, key: string, mark: { from: number; to: number } | null): ReactNode {
   let node: ReactNode = segment.text
   for (const style of NESTING) {
     if (!segment.styles.includes(style)) continue
@@ -122,12 +147,18 @@ function styled(segment: Segment, key: string): ReactNode {
     const Tag = spec.tag
     node = <Tag className={spec.className}>{node}</Tag>
   }
+  const marked = isMarked(segment, mark)
   return (
     <span
       key={key}
       data-src-start={segment.srcStart}
       data-src-end={segment.srcEnd}
       data-literal={segment.literal ? '1' : '0'}
+      /* Readable from the outside, so "did the right words get marked" is a
+         thing a probe can answer by measuring rather than by looking at a
+         picture of a page. */
+      data-marked={marked ? '1' : undefined}
+      className={marked ? 'passage-mark' : undefined}
     >
       {node}
     </span>
@@ -159,7 +190,8 @@ export function plain(segments: readonly Segment[]): string {
 }
 
 export function Segments({ segments }: { segments: readonly Segment[] }) {
-  return <>{coalesce(withoutNotes(segments)).map((s, i) => styled(stripPin(s), String(i)))}</>
+  const mark = useContext(Marked)
+  return <>{coalesce(withoutNotes(segments)).map((s, i) => styled(stripPin(s), String(i), mark))}</>
 }
 
 /**

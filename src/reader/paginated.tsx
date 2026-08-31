@@ -96,6 +96,21 @@ export interface PaginatedProps {
    */
   walk: { file: string; id: string; nonce: number } | null
   /**
+   * A range of one file to draw as marked, or null.
+   *
+   * Threaded down as a prop rather than applied to the DOM by an effect, and
+   * that is the same argument the rest of this file makes about measuring: a
+   * pass that reached into the rendered spans and set a class would have to
+   * find them again to take it off, and would fight React for the attribute
+   * every time a page re-rendered. Passed down, the mark is part of what a
+   * segment IS, and a segment that stops being marked stops being marked.
+   *
+   * It is per FILE as well as per range, because block offsets are per file: a
+   * paper is `main.tex` plus its chapters, and bytes 4120–4380 exist in every
+   * one of them.
+   */
+  mark: { file: string; from: number; to: number } | null
+  /**
    * The element every rendered page lives in, handed up so `lib/selection.ts`
    * can resolve a highlight against it. The view owns the element; the app owns
    * what is done with it. It is the scroll column and not one sheet, because a
@@ -120,7 +135,7 @@ export interface PaginatedProps {
 
 const CAVEAT = 'Page breaks are this reader\u2019s, not the PDF\u2019s.'
 
-export function PaginatedView({ paper, walk, rootRef, onSheet }: PaginatedProps) {
+export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: PaginatedProps) {
   const pages = useMemo(() => paginate(paper.blocks), [paper.blocks])
   const count = Math.max(1, pages.length)
 
@@ -418,6 +433,7 @@ export function PaginatedView({ paper, walk, rootRef, onSheet }: PaginatedProps)
                 count={count}
                 paper={paper}
                 blocks={blocks}
+                mark={mark}
                 scale={scale}
                 room={room}
                 keep={(el) => {
@@ -447,6 +463,7 @@ function SheetPage({
   count,
   paper,
   blocks,
+  mark,
   scale,
   room,
   keep,
@@ -455,6 +472,7 @@ function SheetPage({
   count: number
   paper: Paper
   blocks: readonly PlacedBlock[]
+  mark: { file: string; from: number; to: number } | null
   scale: number
   room: number
   keep: (el: HTMLElement | null) => void
@@ -500,7 +518,14 @@ function SheetPage({
         </header>
       )}
       {blocks.map((block) => (
-        <BlockRow key={`${block.file}#${block.id}`} block={block} epic={paper.epic} />
+        <BlockRow
+          key={`${block.file}#${block.id}`}
+          block={block}
+          epic={paper.epic}
+          /* Only where the block is in the marked file, so the range never
+             means something in a chapter it was not measured against. */
+          mark={mark && mark.file === block.file ? mark : null}
+        />
       ))}
       {!blocks.length && (
         <p className="text-[0.85em] text-[var(--paper-muted)]">This paper parsed to nothing a reader can see.</p>
