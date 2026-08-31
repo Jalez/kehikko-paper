@@ -11,7 +11,7 @@
  * `app.tsx` resolves to that module and answers `200 text/javascript` with
  * compiled source. A browser loads such a document happily and runs nothing in
  * it: the frame's `load` fires, the host greets it, and nothing answers. The
- * pane then reads "loaded its page and did not answer the host's greeting",
+ * container then reads "loaded its page and did not answer the host's greeting",
  * which is true and says nothing about why. Claiming `/app` in middleware,
  * before Vite's resolver sees it, is what makes that impossible — and a
  * middleware that claims a path has to have a document to answer with.

@@ -7,19 +7,19 @@ import type { PlacedBlock } from '../../store.ts'
  *
  * The reader this replaces packed blocks to whatever height the PANE happened
  * to have, so "a page" meant "as much as fits here at the moment". Two readers
- * with differently sized panes were on different page 7s of the same paper, and
- * one reader who dragged a pane edge was moved between them.
+ * with differently sized containers were on different page 7s of the same paper, and
+ * one reader who dragged a container edge was moved between them.
  *
  * A page here is 210×297mm at 96dpi — the box below — and every measurement of
  * type on it is fixed too. The whole sheet is then scaled to the width of the
- * pane by a CSS transform, which changes how big the page LOOKS and nothing
+ * container by a CSS transform, which changes how big the page LOOKS and nothing
  * about what is on it. So pagination is a property of the DOCUMENT: the same
- * blocks give the same pages in a 220-pixel pane and a 1200-pixel one, in both
+ * blocks give the same pages in a 220-pixel container and a 1200-pixel one, in both
  * themes, on every render.
  *
  * That property was already true of the previous version and it was true by
  * ACCIDENT — it held because the weights below were written not to consult the
- * pane, and any future line that measured a rendered width would have quietly
+ * container, and any future line that measured a rendered width would have quietly
  * ended it. Now it holds because the box the type is set in cannot vary. Keep
  * it that way: nothing in this file may read the DOM, and `PAGE` is the only
  * source of the numbers, so the sheet the browser draws and the sheet this
@@ -134,7 +134,7 @@ export function visible(b: PlacedBlock): boolean {
  * change is the fixed page rather than a better guess: an image on a 666-pixel
  * column is drawn at whatever width it has up to that, which is a third of the
  * sheet's height for a normal plot. Three lines was calibrated for a page that
- * was however tall the pane was, where being wrong about a figure cost nothing
+ * was however tall the container was, where being wrong about a figure cost nothing
  * because the sheet stretched. On a fixed sheet it costs an overrun.
  */
 export function weigh(b: PlacedBlock): number {

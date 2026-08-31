@@ -201,7 +201,7 @@ export function connect(id: string, events: HostEvents = {}, source: MessageSour
         epic: message.epic,
         project: message.project,
         /* Added by protocol 0.8, and copied for the same reason as the three
-           below: this pane does not act on which FOLDER the canvas is standing
+           below: this container does not act on which FOLDER the canvas is standing
            in — that is a later phase across every module — but a field dropped
            here is a field the page believes the host never mentioned, and the
            symptom of that is silence rather than an error. */
@@ -222,7 +222,7 @@ export function connect(id: string, events: HostEvents = {}, source: MessageSour
         kehikko: message.kehikko,
         /* Added by protocol 0.9, and this one is a field this app WRITES rather
            than reads: the reader highlights a paragraph here and `passage.set`
-           puts it in front of every pane on the canvas. It is copied all the
+           puts it in front of every container on the canvas. It is copied all the
            same, for the reason the four above are — a field dropped here is a
            field the page believes the host never mentioned — and for one more
            that is specific to being the sender. What comes back is the host's
@@ -245,7 +245,7 @@ export function connect(id: string, events: HostEvents = {}, source: MessageSour
       /* Answered exactly once, whatever the listener does — including nothing,
          including throwing. The host is waiting on this and will time out into
          "not found"; a module that leaves it to the timeout has turned a
-         hundred milliseconds into a reader watching a pane do nothing. */
+         hundred milliseconds into a reader watching a container do nothing. */
       let answered = false
       const answer = (found: boolean, why = '') => {
         if (answered) return

@@ -110,7 +110,7 @@ const bad = (why: string, status = 400): Reply => ({ status, body: { ok: false, 
  * The sentence this app says when it has not been told where to look.
  *
  * One string, used by the page, by `/api/papers` and by every MCP tool, because
- * a person reading it in a terminal and a person reading it in a pane are
+ * a person reading it in a terminal and a person reading it in a container are
  * looking at the same problem and should be given the same instruction. It says
  * what to set rather than that something is unset: "no papers directory" is a
  * fact somebody can do nothing with.

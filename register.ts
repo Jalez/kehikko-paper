@@ -27,7 +27,7 @@ import { ID } from './manifest.ts'
  *
  * The url is where to talk to this app; the directory is where to start it. A
  * host that has only the first can frame a running module and can do nothing at
- * all about a stopped one, which in practice means a pane that says "nothing is
+ * all about a stopped one, which in practice means a container that says "nothing is
  * answering" beside a Start button that is not there. With both, the host runs
  * `run.sh` inside this directory — one script, no arguments, for the reason
  * that file gives.

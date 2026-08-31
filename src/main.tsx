@@ -11,7 +11,7 @@ import './index.css'
  * frame's `load` event, and effects run strictly after that, so a listener
  * installed in `useEffect` is installed after the greeting has already been
  * posted and thrown away. See the essay in `mailbox.ts`; it is a bug that costs
- * an afternoon and whose only symptom is a pane reporting a module that will
+ * an afternoon and whose only symptom is a container reporting a module that will
  * not speak.
  */
 import '../wire/mailbox.ts'

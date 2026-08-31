@@ -18,7 +18,7 @@ export const VERSION = '1.0.0'
  * ## Protocol 2, and the rename that made this file necessary to rewrite
  *
  * The module this was extracted from declared protocol 1, which meant a host
- * running 2 framed it as *incompatible* and never greeted it — a pane that
+ * running 2 framed it as *incompatible* and never greeted it — a container that
  * loads a page and then refuses to talk to it, for a reason visible only in the
  * host's own log. The rename is not cosmetic and it reaches into three places
  * here: `epics.list` and `epic.get` are the method names now, `roadmap.context`
@@ -36,7 +36,7 @@ export const VERSION = '1.0.0'
  * - **`uses` is empty, and `epics:read` was taken OUT of it.** It was declared
  *   for one drawing: a list of every paper on this machine, with a muted line
  *   under it naming the epics a host knew about that had no paper. That list is
- *   gone — a pane shows the paper for the epic the canvas is on and nothing
+ *   gone — a container shows the paper for the epic the canvas is on and nothing
  *   else — and with it the only reader of `epics.list`.
  *
  *   Removing the declaration rather than leaving it is the point. A capability
@@ -51,8 +51,8 @@ export const VERSION = '1.0.0'
  *   other program on the canvas can: turn "these words on screen" into
  *   `chapters/2_bridge.tex`, bytes 4120–4380, and the text that was there. That
  *   is a fact about where the reader is standing, and the protocol's answer for
- *   such a fact is the context — the host holds it and every pane is told,
- *   which is how a notes pane beside this one narrows to the paragraph without
+ *   such a fact is the context — the host holds it and every container is told,
+ *   which is how a notes container beside this one narrows to the paragraph without
  *   either module having been written for the other.
  *
  *   It is worth being plain about what this asks for, because it is more than
@@ -170,17 +170,17 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
     /* One entry, and see the essay above. What this app READS is handed to it
        unbidden, on the greeting and on every context, whatever it declared —
-       which epic is open, and now also `passage`, so a pane that holds a note
+       which epic is open, and now also `passage`, so a container that holds a note
        about a passage can turn this one to it. There has never been anything to
        ask for on that side, and there should not be: a context is broadcast to
        every framed module, and a permission over what a host is already sending
        would be a permission over nothing.
 
        What it WRITES is `passage.set`, and that IS a capability because it
-       changes what every other pane on the canvas is told. Doing both is the
+       changes what every other container on the canvas is told. Doing both is the
        shape that can loop, so the rule about when this module speaks is in
        `shouldPublish` with a test rather than in a comment: never while it is
-       showing a passage somebody else set, and never back at the pane that set
+       showing a passage somebody else set, and never back at the container that set
        it. */
     uses: ['passage:set'],
     storage: true,

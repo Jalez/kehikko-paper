@@ -27,7 +27,7 @@ import { PAGE, pageOf, paginate } from './pages.ts'
  * already has for a document — in Word, in Preview, in every PDF viewer in a
  * browser — is to scroll, with the boundary between one sheet and the next
  * visible as they pass it. Turning pages by pressing a button was a thing this
- * pane asked a reader to learn for no benefit they were getting.
+ * container asked a reader to learn for no benefit they were getting.
  *
  * So the page number is now a READOUT. It follows the scroll and cannot be
  * pressed, because a number that looks pressable and is not is worse than no
@@ -42,11 +42,11 @@ import { PAGE, pageOf, paginate } from './pages.ts'
  * and a figure is always the same share of the page. Only the apparent size
  * changes.
  *
- * The cost is real and is not hidden: in a 220-pixel pane the scale is about
+ * The cost is real and is not hidden: in a 220-pixel container the scale is about
  * 0.28 and the body type draws at four pixels. That is a thumbnail of a page
  * rather than something to read a sentence off, and it is what "show the whole
  * A4 page" means at that width. The alternative — clamping the scale — would
- * put half the sheet behind the edge of a pane and make a reader drag sideways
+ * put half the sheet behind the edge of a container and make a reader drag sideways
  * to find it, which `index.css` has an essay about refusing.
  *
  * ## Everything is rendered; nothing is virtualised
@@ -77,7 +77,7 @@ import { PAGE, pageOf, paginate } from './pages.ts'
  * cannot oscillate.
  *
  * That matters more with a scroll than it did with a page turn. Page
- * boundaries that moved when somebody dragged a pane edge would move the
+ * boundaries that moved when somebody dragged a container edge would move the
  * reader's position under them, for a reason they did not cause and could not
  * point at.
  */
@@ -157,7 +157,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
    * In an effect keyed on the page rather than inside the scroll handler,
    * because `setAt` already refuses to change when the page has not, so this
    * runs once per page TURN rather than once per animation frame. The consumer
-   * of this is a broadcast to every pane on the canvas — see
+   * of this is a broadcast to every container on the canvas — see
    * `use-published-passage.ts` — and a callback fired sixty times a second
    * would put the debounce there in charge of a problem that is cheaper to not
    * create.
@@ -180,7 +180,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
     [rootRef],
   )
 
-  /* How much width there is. Observed rather than read once, because the pane
+  /* How much width there is. Observed rather than read once, because the container
      is dragged and because a frame's window is not what changes when it is. */
   useLayoutEffect(() => {
     const el = column.current
@@ -209,7 +209,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
    *
    * It cannot feed back into pagination, which is a pure function of the block
    * list and of `PAGE` (see `pages.ts`): a sheet is 794 pixels wide whatever
-   * the pane is doing, so nothing measured here can change what is on it.
+   * the container is doing, so nothing measured here can change what is on it.
    */
   useLayoutEffect(() => {
     const read = () => {
@@ -270,7 +270,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
    *
    * Keyed on the epic rather than on the object, because a re-sent context can
    * hand back the same paper and a reset keyed on identity would throw a reader
-   * on page 20 back to page 1 every time somebody clicked in another pane. That
+   * on page 20 back to page 1 every time somebody clicked in another container. That
    * is the property the fetch in `use-paper.ts` protects one layer up, kept in
    * the one other place it could be broken — and it matters more now that the
    * scroll IS the navigation.
@@ -298,7 +298,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
    *
    * The column is `tabIndex=0`, so a reader who tabs or clicks into it gets
    * PageUp, PageDown, Home, End and the arrows for free from the browser. That
-   * leaves the case where the pane has focus but the column does not — the
+   * leaves the case where the container has focus but the column does not — the
    * reader has just pressed the sections trigger, say — where those keys would
    * do nothing at all until somebody clicked the text. So they are forwarded.
    *
@@ -345,11 +345,11 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
 
       <SidebarInset className="min-h-0 gap-2">
         {/* The sections trigger and the page readout, on one row, because a
-            pane cannot spare a strip of its own for chrome. */}
+            container cannot spare a strip of its own for chrome. */}
         {/* `flex-wrap`, because at 220 pixels with the sections open the column
             beside them is under a hundred wide and a row that would not wrap
             pushes the whole document sideways — measured, at 18px of horizontal
-            scroll, which is the one thing this pane must never do. */}
+            scroll, which is the one thing this container must never do. */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <SidebarTrigger />
           <span className="min-w-0 text-[0.7rem] text-muted-foreground">
@@ -367,8 +367,8 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
             /* The caveat, kept and costing nothing.
              *
              * It was a centred `<p>` under the scroll column: a permanent strip
-             * across the bottom of the pane, outside the scroll, taking height
-             * from every page forever. In a 340px pane that is a real fraction
+             * across the bottom of the container, outside the scroll, taking height
+             * from every page forever. In a 340px container that is a real fraction
              * of the paper, and the user asked for the space.
              *
              * Deleting it was not an option. It is the honest caveat on a
@@ -384,7 +384,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
              * number itself — as a tooltip and in the accessible name, where it
              * occupies no layout at all. The same move was made elsewhere on
              * this canvas for the same reason: Atlas's "choosing one asks the
-             * host to show it" was good prose eating a short pane's height, and
+             * host to show it" was good prose eating a short container's height, and
              * it became `title`/`aria-label` on the control it was about. */
             title={CAVEAT}
           >
@@ -403,7 +403,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
              cosmetic. This is a child of a flex COLUMN, where `min-height`
              defaults to `auto` — the content's height — so without it the
              column's own height is overridden upward to the height of every
-             sheet stacked, the pane stops scrolling in one place, and the
+             sheet stacked, the container stops scrolling in one place, and the
              document becomes twenty-three thousand pixels tall. Measured. See
              the essay in `app.tsx`. */
           className="reading-column relative min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto focus-visible:outline-none"
@@ -419,7 +419,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
                  fix `index.css` warns about: the unscaled sheet is 794 pixels
                  wide and overflows a narrow column as a LAYOUT box, while after
                  the transform nothing of it is outside this element visually.
-                 The clip removes a phantom; without it the pane would scroll
+                 The clip removes a phantom; without it the container would scroll
                  sideways to reach empty space. */
               className="overflow-hidden"
               style={{
@@ -508,7 +508,7 @@ function SheetPage({
           {/* `h2`, not `h1`: `h1` on this page is the APP's name, drawn only
               when nothing is framing it. A paper whose title outranked that
               would give an unframed page two `h1`s, and a framed one an `h1`
-              for a document inside somebody else's pane header. */}
+              for a document inside somebody else's container header. */}
           <h2 className="prose-reading text-[1.9em] leading-tight font-semibold">{paper.title ?? paper.epic}</h2>
           <p className="mt-[0.6em] text-[0.8em] text-[var(--paper-muted)]">
             {[paper.author, paper.epic, paper.files.length > 1 ? `${paper.files.length} files` : null]

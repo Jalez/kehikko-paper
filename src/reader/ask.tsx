@@ -18,7 +18,7 @@ import type { Passage } from '@/use-selection.ts'
  * panel's real trick was never the textarea; it was that a highlight in the
  * browser could be turned into an exact, citable place in a `.tex` file on
  * disk. That is `lib/selection.ts`, it needs no write path, and it is the one
- * thing a reader of this pane genuinely cannot do for themselves: nobody can
+ * thing a reader of this container genuinely cannot do for themselves: nobody can
  * look at rendered prose and tell you it is bytes 4120–4380 of
  * `chapters/2_bridge.tex`.
  *
@@ -43,8 +43,8 @@ const GUESS_HEIGHT = 190
  * Below the selection, then clamped into the viewport.
  *
  * The clamp matters more than it looks: the anchor is in viewport coordinates,
- * so a passage highlighted near the bottom of a short pane would otherwise open
- * a panel below the pane, where nobody can reach it.
+ * so a passage highlighted near the bottom of a short container would otherwise open
+ * a panel below the container, where nobody can reach it.
  */
 function place(x: number, y: number, height: number): { left: number; top: number } {
   const width = Math.min(WIDTH, window.innerWidth - MARGIN * 2)
@@ -60,7 +60,7 @@ export function AskPopover({ passage, epic, onDismiss }: { passage: Passage; epi
   const [copied, setCopied] = useState(false)
 
   /* Re-place once the real height is known. The guess is only a first pass, and
-     a panel that opened half off the bottom of a 340px pane is a panel nobody
+     a panel that opened half off the bottom of a 340px container is a panel nobody
      can dismiss. */
   useLayoutEffect(() => {
     const height = box.current?.offsetHeight ?? GUESS_HEIGHT
@@ -133,11 +133,11 @@ export function AskPopover({ passage, epic, onDismiss }: { passage: Passage; epi
       <p className="mt-2 font-mono text-[0.65rem] break-all text-muted-foreground">{where}</p>
 
       <div className="mt-3 flex items-center gap-2">
-        <Button size="pane" onClick={copy}>
+        <Button size="container" onClick={copy}>
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
           {copied ? 'Copied' : 'Copy citation'}
         </Button>
-        <Button variant="ghost" size="pane" onClick={onDismiss}>
+        <Button variant="ghost" size="container" onClick={onDismiss}>
           <X className="size-3.5" />
           Close
         </Button>

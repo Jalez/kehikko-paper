@@ -18,11 +18,11 @@ import { useSelection } from './use-selection.ts'
  *
  * There used to be a picker here: every paper on this machine, as a row of
  * buttons, with a muted line naming the epics that had none. It is gone, and
- * the reason is what a pane IS. The canvas already says which epic the reader
- * is standing on and the host already writes this module's name in the pane
- * header; a list of eleven other papers inside that pane is an invitation to
+ * the reason is what a container IS. The canvas already says which epic the reader
+ * is standing on and the host already writes this module's name in the container
+ * header; a list of eleven other papers inside that container is an invitation to
  * leave the epic you opened, drawn in the space the paper was supposed to
- * occupy — four hundred pixels of buttons in a pane three hundred wide. Which
+ * occupy — four hundred pixels of buttons in a container three hundred wide. Which
  * paper is on screen is a question the canvas answers.
  *
  * What is NOT gone is the honesty. There are still screens for the states this
@@ -37,10 +37,10 @@ import { useSelection } from './use-selection.ts'
  *
  * ## Identity is printed only when nothing is framing this page
  *
- * The host draws the module's name in the pane header and hangs the manifest's
+ * The host draws the module's name in the container header and hangs the manifest's
  * `summary` off it as a tooltip. A page that also printed "Paper" at the top of
  * itself would be saying the name twice and spending a fixed strip of a
- * 340px-tall pane on the repetition. Unframed there is no pane header and
+ * 340px-tall container on the repetition. Unframed there is no container header and
  * nothing else would ever say what this app is, so it stays.
  *
  * `window.parent !== window` is answerable before first paint, so the heading
@@ -72,7 +72,7 @@ export function App() {
    * up: `passage.page` has to say which sheet somebody is looking at, and this
    * is the only thing that knows. Kept as one object so a page turn is one
    * state change rather than two, which matters because every change of it is
-   * a candidate broadcast to every pane on the canvas.
+   * a candidate broadcast to every container on the canvas.
    */
   const [sheet, setSheet] = useState<Sheet>({ page: 1, file: null })
   /**
@@ -86,7 +86,7 @@ export function App() {
    */
   const [mark, setMark] = useState<{ file: string; from: number; to: number } | null>(null)
   /**
-   * Whether what this pane is showing came from somebody else, untouched since.
+   * Whether what this container is showing came from somebody else, untouched since.
    *
    * The loop guard, and the reason it is a piece of state rather than a
    * comparison: "did a PERSON do this" is not a property of any passage, it is
@@ -120,11 +120,11 @@ export function App() {
    * "where is the reader", and the two would disagree the first time somebody
    * pressed a section while a passage was arriving.
    *
-   * ## And it announces that the pane moved on its own
+   * ## And it announces that the container moved on its own
    *
    * `said` exists for exactly this: "the document moved and the reader did not
-   * move it". A passage naming a document this pane does not have open goes
-   * through the same line rather than doing nothing quietly — from the pane
+   * move it". A passage naming a document this container does not have open goes
+   * through the same line rather than doing nothing quietly — from the container
    * that sent it, a press that silently did nothing looks like it worked.
    */
   useEffect(() => {
@@ -143,14 +143,14 @@ export function App() {
     setMark(answer.mark)
     setWalk({ file: answer.file, id: answer.id, nonce: Date.now() })
     setSaid(answer.said)
-    /* Quiet from here until somebody touches the paper. Anything the pane does
+    /* Quiet from here until somebody touches the paper. Anything the container does
        between now and then is a consequence of this passage, and saying it back
        to the canvas is the loop. */
     setAdopted(true)
   }, [paper, pointed, setSaid])
 
   /**
-   * The first thing a person does to the paper takes the pane off mute.
+   * The first thing a person does to the paper takes the container off mute.
    *
    * Four gestures, and they are the four ways somebody moves or points at a
    * document: the pointer, the wheel, a key, and a finished selection. Any one
@@ -193,7 +193,7 @@ export function App() {
   }, [epic, forget])
 
   /*
-   * Re-measure when the pane is resized, and after every paint that could have
+   * Re-measure when the container is resized, and after every paint that could have
    * changed the height.
    *
    * `ResizeObserver` on the document element rather than a window `resize`
@@ -229,17 +229,17 @@ export function App() {
   useEffect(() => {
     goto.current = (message, answer) => {
       if (!paper) {
-        answer(false, 'This pane is not showing a paper at the moment.')
+        answer(false, 'This container is not showing a paper at the moment.')
         return
       }
       /* A walk aimed at another epic is refused rather than followed. Loading
-         that epic's paper would answer `found` while moving the pane somewhere
+         that epic's paper would answer `found` while moving the container somewhere
          the canvas is not, and the host is about to send a context for wherever
          the reader really ends up — which would then be fetched, twice, one of
          them discarded. Saying no costs a fallback link and keeps one place
          deciding what is on screen. */
       if (message.epic && message.epic !== paper.epic) {
-        answer(false, `This pane is showing the paper for ${paper.epic}, not ${message.epic}.`)
+        answer(false, `This container is showing the paper for ${paper.epic}, not ${message.epic}.`)
         return
       }
       /* A step number is Journeys' vocabulary. A paper has sections and no
@@ -296,7 +296,7 @@ export function App() {
    *   a page 23,467px tall. The document scrolled twenty-three thousand pixels
    *   of nothing while the pages scrolled inside it. `min-h-0` is the fix and
    *   it is the whole fix; the flex sizing below is so the column can then FILL
-   *   the pane instead of guessing at it with `calc(100dvh - 8rem)`.
+   *   the container instead of guessing at it with `calc(100dvh - 8rem)`.
    * - **A box drawn around the paper.** `max-w-[80rem] mx-auto` centred the
    *   reader at 1280px, and the sheet inside it is already a fixed A4 page
    *   centred by its own arithmetic in `SheetPage`. Two things centring one
@@ -304,20 +304,20 @@ export function App() {
    *   user saw and said so.
    * - **A 40-pixel dead strip** under everything, which is most of what read as
    *   a footer. It grew visually when the sections panel opened, because a
-   *   narrower column scales the sheet down and leaves more empty pane around
+   *   narrower column scales the sheet down and leaves more empty container around
    *   it — the strip did not widen, the paper shrank.
    *
    * ## `h-dvh`, and the number this module reports
    *
    * `resize()` sends `document.documentElement.scrollHeight`. Before this, that
-   * was twenty-three thousand pixels — a module asking its host for a pane
+   * was twenty-three thousand pixels — a module asking its host for a container
    * taller than the screen, clamped by the host and therefore invisible, which
    * is the only reason it was survivable. There is a measured history here of a
-   * pane that DID grow that way, to 2552px, pushing its own resize handle off
+   * container that DID grow that way, to 2552px, pushing its own resize handle off
    * the canvas where nothing could reach it.
    *
    * With the page exactly the height of the frame it is in, the number reported
-   * is the pane's own height and the request is a no-op: the module asks to be
+   * is the container's own height and the request is a no-op: the module asks to be
    * the size it already is. That is the honest reading for a document reader —
    * it is however tall the reader made it, and it scrolls.
    */
@@ -343,7 +343,7 @@ export function App() {
         thing a reader could not otherwise see happening — the page turned and
         they did not turn it. It no longer narrates the ordinary case: a line
         saying "this is the paper for the epic the canvas is on" told a reader
-        what the canvas and the pane header had both already told them, in the
+        what the canvas and the container header had both already told them, in the
         space where the paper goes.
       */}
       {said && (

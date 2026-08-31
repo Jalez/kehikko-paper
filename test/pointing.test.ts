@@ -12,7 +12,7 @@ import { shouldPublish } from '../src/use-published-passage.ts'
  * ## What this module now does that it did not
  *
  * It published a passage and never consumed one, so the conversation ran one
- * way: the reader highlighted here and a notes pane narrowed. The user asked
+ * way: the reader highlighted here and a notes container narrowed. The user asked
  * for the other direction in one sentence — "when you click on a note shouldn't
  * it highlight and show what its target from the paper?" — and it is the same
  * field read instead of written.
@@ -95,14 +95,14 @@ describe('which block a byte range lands in', () => {
     expect(blockFor(paper, 'chapters/bridge.tex', { from: 5000, to: 5100 })?.id).toBe('para-2')
   })
 
-  test('a file whose only block is the preamble has nothing this pane draws', () => {
+  test('a file whose only block is the preamble has nothing this container draws', () => {
     /* `main.tex` here holds a folded preamble and nothing else. Notes stopped
-       lifting that region for the same reason this pane never draws it. */
+       lifting that region for the same reason this container never draws it. */
     expect(blockFor(paper, 'main.tex', { from: 0, to: 40 })).toBeNull()
   })
 })
 
-describe('what this pane does about a passage', () => {
+describe('what this container does about a passage', () => {
   test('a range in this paper: turn to the block and mark the range', () => {
     const answer = pointedAt(paper, at())
     expect(answer.at).toBe('here')
@@ -123,11 +123,11 @@ describe('what this pane does about a passage', () => {
     expect(answer.said).toContain('nothing is marked')
   })
 
-  test('a document this pane does not have open says so, and never silently does nothing', () => {
+  test('a document this container does not have open says so, and never silently does nothing', () => {
     /* The real case: a note lives on another epic's chapter and somebody
        presses it. Opening it would answer for a place the canvas is not
        standing — the `roadmap.goto` handler refuses the same thing for the same
-       reason — and doing nothing quietly would look, from the pane that sent
+       reason — and doing nothing quietly would look, from the container that sent
        it, exactly like it had worked. */
     const answer = pointedAt(paper, at({ path: '/Users/x/thesis/chapters/3_methods.tex' }))
     expect(answer.at).toBe('elsewhere')
@@ -169,13 +169,13 @@ describe('the loop guard', () => {
 
   test('a passage this module just RECEIVED is never sent back', () => {
     /* Two modules agreeing is not news. Without this, adopting a passage and
-       then being touched by a reader would send it straight back to the pane
+       then being touched by a reader would send it straight back to the container
        that set it. */
     expect(shouldPublish(a, null, false, a, false)).toBe(false)
   })
 
-  test('nothing is published while the pane is showing somebody else’s passage', () => {
-    /* The cycle this closes: a passage arrives, the pane turns to page 14, the
+  test('nothing is published while the container is showing somebody else’s passage', () => {
+    /* The cycle this closes: a passage arrives, the container turns to page 14, the
        readout changes, and rung 2 — the document and the page, with no range —
        is a DIFFERENT passage from the one that arrived. Sent, it would replace
        the range on the canvas with a page, in answer to a move nobody made. */

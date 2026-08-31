@@ -24,7 +24,7 @@
  *
  * What the failure looks like from outside is worth knowing, because it has
  * cost this codebase days: the document loads, its `load` event fires, the host
- * greets it, and nothing answers. The pane reads "loaded its page and did not
+ * greets it, and nothing answers. The container reads "loaded its page and did not
  * answer the host's greeting" — true, and no hint that the greeting arrived a
  * few hundred milliseconds before anybody was there to hear it.
  *

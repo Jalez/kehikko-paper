@@ -12,7 +12,7 @@ import type { Passage as Highlighted } from '../src/use-selection.ts'
  * app can honestly stand on all three: it knows when no paper is open, it knows
  * which sheet is in front of somebody, and it can turn a browser highlight into
  * a byte range. A module that could only ever send the third rung would leave a
- * notes pane blank whenever nobody happened to be dragging.
+ * notes container blank whenever nobody happened to be dragging.
  */
 
 const paper = { epic: 'modes-are-modules', dir: '/Users/x/Projects/roadmap/data/papers/modes-are-modules' } as Paper
@@ -31,14 +31,14 @@ const highlight = (over: Partial<Highlighted> = {}): Highlighted => ({
 describe('the three rungs, and no fourth', () => {
   test('no paper on screen is null, and not a passage with an empty path', () => {
     /* "No document is open" is a state a consumer has to be able to move INTO.
-       A pane that kept sending the last chapter would leave a notes pane
+       A container that kept sending the last chapter would leave a notes container
        showing the notes on a document the reader closed. */
     expect(passageFor(null, { page: 1, file: 'chapters/bridge.tex' }, null)).toBeNull()
     expect(passageFor(null, { page: 1, file: null }, highlight())).toBeNull()
   })
 
   test('a paper with nothing selected names the document and the page', () => {
-    /* This is the rung that makes a notes pane useful when nobody is
+    /* This is the rung that makes a notes container useful when nobody is
        highlighting anything: it shows the page's notes rather than nothing,
        which is the ask the field was designed for. */
     const passage = passageFor(paper, { page: 7, file: 'chapters/bridge.tex' }, null)

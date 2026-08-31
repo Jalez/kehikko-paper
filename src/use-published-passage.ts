@@ -21,7 +21,7 @@ import type { Passage as Highlighted } from './use-selection.ts'
  * imagined. `context.passage` is a first-class field with three rungs and one
  * method, and the argument for its being CONTEXT rather than a message is the
  * one this app cannot make for itself: a reader highlights a sentence at 10:04
- * and puts a notes pane on the canvas at 10:05. An event is gone by then; state
+ * and puts a notes container on the canvas at 10:05. An event is gone by then; state
  * is what a module can arrive late to.
  *
  * So the addition this hook makes is the one `use-selection.ts` predicted —
@@ -30,11 +30,11 @@ import type { Passage as Highlighted } from './use-selection.ts'
  * ## Three rungs, and this app can honestly stand on all three
  *
  *   1. **No paper on screen** — `null`. Not "the last paper", not a passage
- *      with an empty path: the pane is showing a screen that says no epic is
+ *      with an empty path: the container is showing a screen that says no epic is
  *      open, and a consumer holding the previous chapter would be showing the
  *      notes on a document the reader closed.
  *   2. **A paper, nothing selected** — the file and the page, with `from`,
- *      `to` null and no quote. This is the rung that makes a notes pane useful
+ *      `to` null and no quote. This is the rung that makes a notes container useful
  *      when nobody is highlighting anything: it shows the page's notes rather
  *      than nothing, which is the whole ask the field was designed for.
  *   3. **A paper with a highlight** — the byte range and the words.
@@ -68,7 +68,7 @@ export interface Sheet {
  * A passage goes into `roadmap.context`, and a context is posted into EVERY
  * framed module on the canvas. A selection changes on every pointer move during
  * a drag; a reader dragging across a paragraph produces dozens of them in a
- * second, and sent per event that is dozens of broadcasts to every pane, each
+ * second, and sent per event that is dozens of broadcasts to every container, each
  * carrying up to two kilobytes of somebody's document.
  *
  * There is a measured history of this exact failure a layer up: the host was
@@ -77,7 +77,7 @@ export interface Sheet {
  * which is why it survived being written.
  *
  * A hundred and fifty milliseconds is under the threshold at which a person
- * notices a pane react to their selection, and comfortably longer than the gap
+ * notices a container react to their selection, and comfortably longer than the gap
  * between two `mouseup`s of one gesture. The dedupe below is the second half:
  * a debounce stops a burst, and only an equality check stops a repeat.
  */
@@ -152,9 +152,9 @@ function same(a: WirePassage | null, b: WirePassage | null): boolean {
  *
  * This module now does both halves: it publishes where the reader is pointing,
  * and it REACTS to a passage by scrolling to it. Those two together are a
- * cycle waiting to close. A passage arrives; the pane turns to page 14; the
+ * cycle waiting to close. A passage arrives; the container turns to page 14; the
  * page readout changes; `passageFor` builds a rung-2 passage naming page 14
- * with no range; that goes out; the host broadcasts it; the notes pane loses
+ * with no range; that goes out; the host broadcasts it; the notes container loses
  * the passage it was just narrowed to; and if anything in the chain produced a
  * selection it would go round again. Nothing in it is a bug on its own.
  *
@@ -167,7 +167,7 @@ function same(a: WirePassage | null, b: WirePassage | null): boolean {
  *
  *   - **`quiet`** — this module has adopted a passage somebody else set and the
  *     person at this machine has not touched the paper since. Everything the
- *     pane does in that state is a consequence of the passage, so none of it is
+ *     container does in that state is a consequence of the passage, so none of it is
  *     news. It is lifted by a gesture: a scroll, a key, a pointer, a selection.
  *     "Publish only on a selection a PERSON made" is what this enforces.
  *   - **`echo`** — never send back the passage that was just received, even
@@ -178,7 +178,7 @@ function same(a: WirePassage | null, b: WirePassage | null): boolean {
  * against the last thing this module happened to say out loud.
  *
  * A pure function, exported, because a loop guard that cannot be tested without
- * two panes and a stopwatch is a loop guard nobody will change with confidence.
+ * two containers and a stopwatch is a loop guard nobody will change with confidence.
  */
 export function shouldPublish(
   next: WirePassage | null,
@@ -212,7 +212,7 @@ export function usePublishedPassage(
   highlighted: Highlighted | null,
   /** The passage this module last received from the canvas. Never echoed back. */
   echo: WirePassage | null = null,
-  /** Whether this pane is showing somebody else's passage and nobody has touched it since. */
+  /** Whether this container is showing somebody else's passage and nobody has touched it since. */
   quiet = false,
 ): void {
   const sent = useRef<{ was: WirePassage | null } | null>(null)

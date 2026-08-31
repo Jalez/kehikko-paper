@@ -19,7 +19,7 @@ import { PaginatedView, type PaginatedProps } from '../src/reader/paginated.tsx'
  *   copies of a page size do not fail; they produce a paginator that thinks
  *   forty lines fit a page showing thirty-two, and nothing says so.
  * - **Pagination is a property of the DOCUMENT.** The failure it replaces — a
- *   pagination that re-packs itself when the pane moves — does not throw and
+ *   pagination that re-packs itself when the container moves — does not throw and
  *   does not log; it moves the reader to a different page, once, mid sentence.
  *   The only way to catch that is to assert the property.
  * - **The sections are beside the paper, closed, and reopenable.** A sidebar
@@ -139,7 +139,7 @@ describe('the page is A4, and the paginator and the sheet agree about it', () =>
     expect(sheet.style.minHeight).toBe(`${PAGE.height}px`)
     expect(sheet.style.padding).toContain(`${PAGE.marginY}px`)
     /* Scaled, not reflowed. A sheet without a transform is a sheet that got its
-       size from the pane after all. */
+       size from the container after all. */
     expect(sheet.style.transform).toMatch(/^scale\(/)
     expect(sheet.style.transformOrigin).toBe('top left')
   })
@@ -155,7 +155,7 @@ describe('pagination is a property of the document', () => {
     expect(a.map((p) => p.map((x) => x.id))).toEqual(b.map((p) => p.map((x) => x.id)))
   })
 
-  test('nothing about the pane can reach the paginator', () => {
+  test('nothing about the container can reach the paginator', () => {
     /*
      * The property stated as a property rather than demonstrated at two widths,
      * because a width is exactly what this function must not be able to see: it
@@ -342,7 +342,7 @@ describe('the reading view scrolls, and there is nothing to press', () => {
 describe('the sections sit beside the paper and collapse to nothing', () => {
   const paper = fixture()
 
-  test('it is closed to start with, because a pane is 300 pixels wide', () => {
+  test('it is closed to start with, because a container is 300 pixels wide', () => {
     const rendered = view(paper)
     const side = rendered.container.querySelector('[data-slot="sidebar"]') as HTMLElement
     expect(side.getAttribute('data-state')).toBe('collapsed')

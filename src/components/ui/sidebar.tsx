@@ -10,29 +10,29 @@ import { cn } from '@/lib/utils.ts'
  * It is here rather than imported because shadcn ships source: `shadcn add
  * sidebar` writes this file into the project and it is then the project's to
  * live with. Three things about upstream's version are wrong inside a module
- * pane, and each is changed deliberately rather than by drift — so this comment
+ * container, and each is changed deliberately rather than by drift — so this comment
  * is the record of what a future `shadcn add sidebar` would overwrite.
  *
  * 1. **Upstream positions the sidebar `fixed inset-y-0` against the VIEWPORT.**
  *    That is right for an application that owns the window and catastrophic for
- *    a module framed in somebody else's canvas: a pane 300 pixels wide would
+ *    a module framed in somebody else's canvas: a container 300 pixels wide would
  *    hang a full-height panel down the left of a two-thousand-pixel monitor,
- *    over the panes either side of it. Here the sidebar is an ordinary flex
- *    child of the pane and collapses by going to zero width.
+ *    over the containers either side of it. Here the sidebar is an ordinary flex
+ *    child of the container and collapses by going to zero width.
  *
  * 2. **Upstream swaps to a `Sheet` below a 768px VIEWPORT breakpoint**, via a
  *    `useIsMobile` hook that reads `window.matchMedia`. Every viewport
- *    breakpoint is the wrong question in this codebase — the pane is routinely
+ *    breakpoint is the wrong question in this codebase — the container is routinely
  *    300px wide inside a window that is two thousand, so `useIsMobile` would
- *    answer `false` and lay out for a screen the pane has fifteen per cent of.
+ *    answer `false` and lay out for a screen the container has fifteen per cent of.
  *    The mobile branch is therefore not carried over at all, and with it go the
  *    dependencies on `Sheet`, `Tooltip`, `Separator`, `Input` and `Skeleton`.
  *    One presentation, correct at every width, is better than two of which one
  *    is chosen by a question nobody here can answer.
  *
  * 3. **Upstream binds ⌘B / Ctrl+B globally.** A module must not take a chord
- *    out of the host's hands: the canvas around this pane is a real application
- *    with its own keys, and a pane that swallowed one would be a bug reported
+ *    out of the host's hands: the canvas around this container is a real application
+ *    with its own keys, and a container that swallowed one would be a bug reported
  *    against the host. The trigger is a button and only a button.
  *
  * What IS upstream's, unchanged, is the vocabulary — `SidebarProvider`,
@@ -60,8 +60,8 @@ export function useSidebar(): SidebarState {
 /**
  * The provider, and the one decision it carries: what OPEN means by default.
  *
- * `defaultOpen` is false here where upstream's is true, and that is the pane
- * again. A sidebar open by default in a 280px pane is a pane showing a table of
+ * `defaultOpen` is false here where upstream's is true, and that is the container
+ * again. A sidebar open by default in a 280px container is a container showing a table of
  * contents and forty characters of the argument — a reader who asked for a
  * paper and was handed an index of it. Open is a thing the reader asks for; the
  * paper is what they came for.
@@ -96,7 +96,7 @@ export function SidebarProvider({
  * `display: none`, so the width transition has something to animate and so the
  * reader sees where the thing they just closed went. Its width is
  * `min(14rem, 55%)`: a fixed 16rem — upstream's — is seventy-three per cent of
- * a 220px pane, which is a sidebar with a sliver of paper beside it. The
+ * a 220px container, which is a sidebar with a sliver of paper beside it. The
  * percentage is of the PANE, because that is the box this element is laid out
  * in, and it needs no query to be right.
  */
@@ -118,7 +118,7 @@ export function Sidebar({ className, children, ...props }: ComponentProps<'div'>
       {/* A width of its own, so the rows do not reflow line by line while the
           panel is animating shut. `max-w-full` keeps it inside the parent's
           clip; there is deliberately no `vw` anywhere here, because a viewport
-          unit asks about the monitor and this element is sized by its pane. */}
+          unit asks about the monitor and this element is sized by its container. */}
       <div className="flex h-full w-[14rem] max-w-full flex-col border-r border-[var(--sidebar-border)] bg-[var(--sidebar)] text-[var(--sidebar-foreground)]">
         {children}
       </div>
@@ -198,7 +198,7 @@ export function SidebarMenuButton({
   )
 }
 
-/** The rest of the pane, beside the sidebar. `min-w-0` or a wide child wins. */
+/** The rest of the container, beside the sidebar. `min-w-0` or a wide child wins. */
 export function SidebarInset({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div data-slot="sidebar-inset" className={cn('flex min-w-0 flex-1 flex-col', className)} {...props} />
@@ -212,7 +212,7 @@ export function SidebarTrigger({ className, onClick, ...props }: ComponentProps<
     <Button
       data-slot="sidebar-trigger"
       variant="ghost"
-      size="icon-pane"
+      size="icon-container"
       aria-expanded={open}
       aria-label={open ? 'Hide sections' : 'Show sections'}
       className={className}

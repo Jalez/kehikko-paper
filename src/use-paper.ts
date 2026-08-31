@@ -86,7 +86,7 @@ export function usePaper(framed: boolean) {
    * What this page says out loud, and it is now only ever an answer to a walk.
    *
    * It used to narrate the ordinary case as well — "this is the paper for the
-   * epic the canvas is on" — which told a reader what the pane header and the
+   * epic the canvas is on" — which told a reader what the container header and the
    * canvas had both already told them, in the space where the paper goes. A
    * `roadmap.goto` is different in kind: the page turned and the reader did not
    * turn it, so something has to say why.
@@ -130,10 +130,10 @@ export function usePaper(framed: boolean) {
    * canvas's selection too, so the host sends one after every selection change
    * anywhere on the canvas — several a second while somebody drags. Re-fetching
    * on each would throw the paper away and put the page back into `asking`
-   * every time somebody clicked in another pane: fifteen hundred words gone, a
+   * every time somebody clicked in another container: fifteen hundred words gone, a
    * line saying the question is out, and the text back a moment later having
    * lost the reader's place. The click that caused it would look like a bug in
-   * this pane.
+   * this container.
    *
    * So a repeated context about the same epic is a normal event, and the right
    * response is to read the parts that did change — the theme — and leave the
@@ -299,7 +299,7 @@ export function usePaper(framed: boolean) {
      * has been assigned. Anything the handler then tries to send goes nowhere,
      * with no error and no timeout: in References this hung a page forever on
      * "Asking about…", because no question was ever sent and so none could time
-     * out. Here the symptom would be a pane that knows the epic and never asks
+     * out. Here the symptom would be a container that knows the epic and never asks
      * the host which epics exist.
      *
      * Worse, it works often enough to look fine — when the host happens to
@@ -341,7 +341,7 @@ export function usePaper(framed: boolean) {
    * A request, not an instruction: the host clamps whatever arrives. It is
    * measured off `scrollHeight` by the caller after a paint, because a paper is
    * however long it is and a fixed height would either crop the argument or
-   * leave a field of empty pane under a short one.
+   * leave a field of empty container under a short one.
    */
   const resize = useCallback((height: number) => host.current?.resize(height), [])
 
@@ -356,12 +356,12 @@ export function usePaper(framed: boolean) {
    * `unknown-method`; a host built against protocol 0.8 refuses it forever.
    * None of those is a fault in the paper on screen and none of them is
    * actionable by the person reading it — putting "the host would not take your
-   * highlight" under a paragraph would be this pane reporting somebody else's
+   * highlight" under a paragraph would be this container reporting somebody else's
    * missing feature as its own failure, in the space the paper goes.
    *
    * What it must not do is throw. `request` rejects with `HostRefused`, and an
    * unhandled rejection out of a mouse-up handler is a console full of red on a
-   * canvas where the notes pane simply is not present.
+   * canvas where the notes container simply is not present.
    *
    * The page loses nothing by being refused: the highlight is still on screen,
    * the popover still offers the citation to copy, and this module goes on

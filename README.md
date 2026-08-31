@@ -9,7 +9,7 @@ whole reader is there, reading that one paper off this machine.
 
 It shows **the paper for the epic the canvas is on, and nothing else**. There is
 no list of the other papers, no margin rail, and no sentence under the page
-explaining which paper it is: the pane header already carries this module's name
+explaining which paper it is: the container header already carries this module's name
 and the canvas already says which epic it is on.
 
 ```bash
@@ -94,7 +94,7 @@ for the same reason, which is that a control here should be the control it is
 everywhere else on the canvas.
 
 **A whole page, not as much of one as fits.** The sheet is 794×1123 CSS pixels,
-which is A4 at 96dpi, and it is scaled to the width of the pane by one
+which is A4 at 96dpi, and it is scaled to the width of the container by one
 `transform: scale`. Every proportion inside it is fixed: the measure is always
 the same number of characters, the margins are always the same fraction of the
 sheet, a figure is always the same share of the page. Only the apparent size
@@ -104,16 +104,16 @@ rendered aspect ratio is 1.4144 every time, against √2 = 1.41421.
 The cost is stated rather than hidden. At 220 pixels the scale is 0.247 and the
 body type draws at under four pixels — a thumbnail of a page, which is what
 "show the whole page" means at that width. Clamping the scale instead would put
-half a sheet behind the edge of a pane, and dragging sideways to read is the one
+half a sheet behind the edge of a container, and dragging sideways to read is the one
 thing this module refuses.
 
-**Pagination is a property of the DOCUMENT, not of the pane.** Because the page
+**Pagination is a property of the DOCUMENT, not of the container.** Because the page
 box is fixed, `src/reader/pages.ts` derives its line budget from that box —
 `CHARS_PER_LINE` and `LINES_PER_PAGE` are computed from `PAGE`, not typed in —
 and takes nothing else. The thesis is 55 pages at 220px and 55 pages at 1200px;
-resizing a pane cannot move a reader, because there is nothing about the pane
+resizing a container cannot move a reader, because there is nothing about the container
 for the paginator to see. That property used to hold by accident, because the
-weights happened not to consult the pane; now it holds because the box the type
+weights happened not to consult the container; now it holds because the box the type
 is set in cannot vary.
 
 The breaks are still an ESTIMATE and the page still says so under them. A LaTeX
@@ -136,12 +136,12 @@ find-in-page can only see what is in the DOM; and a highlight anchored to page 3
 cannot be resolved. Measured, the cost of rendering everything was not there.
 
 **The sections are a shadcn sidebar beside the paper.** Collapsed to nothing by
-default, because a pane is routinely 280 pixels wide and a table of contents open
+default, because a container is routinely 280 pixels wide and a table of contents open
 by default is a reader who asked for a paper being handed an index of it. The
 trigger opens and closes it; a press on a section scrolls that page into view,
 smoothly, so the reader can see how far they went.
 `src/components/ui/sidebar.tsx` says exactly which three things about upstream's
-version were changed for a pane and why — the short version is that upstream
+version were changed for a container and why — the short version is that upstream
 positions itself against the VIEWPORT, swaps to a `Sheet` at a viewport
 breakpoint, and takes ⌘B globally, and all three are the wrong answer inside
 somebody else's canvas.

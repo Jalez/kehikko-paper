@@ -22,7 +22,7 @@ import { Marked, Segments } from './segments.tsx'
  * the passage somebody meant to quote.
  *
  * It lives in the sheet's own left margin, which is a fixed fraction of a
- * fixed A4 page rather than whatever the pane had left over — so unlike the
+ * fixed A4 page rather than whatever the container had left over — so unlike the
  * version this replaces, there is no width at which it is silently not drawn.
  * It is never moved inline: a `¶` in the reading flow is a character in the
  * argument, which is exactly the confusion it exists to prevent.
@@ -61,9 +61,9 @@ const HEADING_TAG = ['h2', 'h2', 'h2', 'h3', 'h4', 'h5'] as const
 /*
  * In `em`, not `rem`, and that is the fixed page rather than a preference. The
  * sheet sets its own body size (`PAGE.fontSize`) and is then scaled bodily to
- * the pane; a heading in `rem` would be sized off the ROOT, so it would keep
+ * the container; a heading in `rem` would be sized off the ROOT, so it would keep
  * its pixel size while the page around it shrank and a level-1 heading would
- * end up taller than the sheet in a narrow pane.
+ * end up taller than the sheet in a narrow container.
  */
 const HEADING_SIZE = [
   'text-[1.75em] mt-[2em] mb-[0.8em]',
@@ -340,8 +340,8 @@ function Graphic({ epic, file }: { epic: string; file: string }) {
         loading="lazy"
         onError={() => setFailed(true)}
         /* `max-w-full` and an `auto` height so a 1400px-wide plot in a 220px
-           pane scales instead of pushing the whole column sideways. Horizontal
-           overflow in a reading view is the bug this pane is measured for. */
+           container scales instead of pushing the whole column sideways. Horizontal
+           overflow in a reading view is the bug this container is measured for. */
         className="h-auto max-w-full rounded-md border border-[var(--paper-edge)] bg-white"
       />
       <span className="font-mono text-[0.75em] break-all text-[var(--paper-muted)]">{file}</span>

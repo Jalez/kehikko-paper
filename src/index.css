@@ -26,24 +26,24 @@
  *
  * ## The width question this page no longer asks
  *
- * There used to be a `@container pane (min-width: 700px)` here, and it decided
+ * There used to be a `@container container (min-width: 700px)` here, and it decided
  * three things: whether a margin rail was drawn, whether the gutter tags had a
  * margin to sit in, and whether a note's text stayed in the reading flow. All
  * three are gone, because the sheet is now a FIXED A4 page scaled bodily to the
- * pane (see `reader/pages.ts`): its margins are a fixed fraction of itself, so
+ * container (see `reader/pages.ts`): its margins are a fixed fraction of itself, so
  * there is always room for a gutter, and there is no layout left that depends
- * on how wide the pane is. One less thing that can differ between two readers.
+ * on how wide the container is. One less thing that can differ between two readers.
  *
  * `<body>` stays a named container anyway, and the rule stands for whatever is
- * added next: this page's normal case is a pane 220 to 400 pixels wide inside a
+ * added next: this page's normal case is a container 220 to 400 pixels wide inside a
  * canvas on a monitor two thousand across, so every viewport breakpoint
  * Tailwind ships would fire — `lg:` is true, `xl:` is true — and the page would
  * lay itself out for a screen it has three per cent of. Anything that responds
- * to width asks `@container pane`, never `md:`.
+ * to width asks `@container container`, never `md:`.
  *
  * ## Nothing overflows sideways, ever
  *
- * A pane that scrolls horizontally is a pane where half a sentence is behind an
+ * A container that scrolls horizontally is a container where half a sentence is behind an
  * edge nobody thinks to drag. `overflow-x: hidden` on the body would HIDE that
  * rather than fix it, so it is not here. What is here is `overflow-wrap:
  * anywhere` on the prose — only `anywhere` lowers a long token's min-content
@@ -75,11 +75,11 @@
    *
    * The app this reader was rebuilt from had one visual idea — a warm lit page
    * against cool chrome — and it is worth keeping, because it says at a glance
-   * which part of the pane is the author's argument and which part is this
+   * which part of the container is the author's argument and which part is this
    * program talking. In light that is a genuinely warm off-white.
    *
    * In dark it is NOT a white sheet, and that is a deliberate departure. This
-   * module is framed between other panes; a bright rectangle among them would
+   * module is framed between other containers; a bright rectangle among them would
    * be the first thing anybody noticed about the protocol, and the module it
    * replaces spent a long comment arguing for sharing a surface with its
    * neighbours. So in dark the sheet is a lifted surface rather than a lit one,
@@ -224,11 +224,11 @@
 
   /*
    * The container every responsive rule in this app measures. Named, so a
-   * `@container pane` rule cannot accidentally attach itself to some nested
+   * `@container container` rule cannot accidentally attach itself to some nested
    * container a component introduces later.
    */
   body {
-    container: pane / inline-size;
+    container: container / inline-size;
     margin: 0;
     font-synthesis-weight: none;
     text-rendering: optimizeLegibility;
@@ -236,7 +236,7 @@
   }
 
   /*
-   * Long, unbroken strings are the one thing that widens a pane past its frame:
+   * Long, unbroken strings are the one thing that widens a container past its frame:
    * a `\texttt` span holding `roadmap-module-protocol`, a label like
    * `sec:extraction`, a URL in a footnote. Breaking them is the honest fix —
    * the whole string stays on screen, wrapped, rather than being clipped by an
@@ -289,7 +289,7 @@
    * range, and it is the one thing this must never do. `use-selection.ts`
    * reads `window.getSelection()` on mouse-up, and a selection this module
    * applied to itself would be indistinguishable from one a person made: the
-   * pane would compose a passage out of it and publish it back to the canvas
+   * container would compose a passage out of it and publish it back to the canvas
    * that had just sent it. That is half of the loop, arranged for free, with
    * nothing on screen looking wrong.
    *
@@ -304,7 +304,7 @@
    * The same rule the rest of this file follows: `--mark` at low alpha carries
    * it for most people, and the underline carries it for everybody. Both are
    * drawn behind the type rather than over it — a highlight that changed the
-   * text colour would be this pane restyling somebody's paper to point at it.
+   * text colour would be this container restyling somebody's paper to point at it.
    *
    * `color-mix` against `--paper` rather than a fixed alpha over white, so the
    * wash sits on the sheet's own surface in both themes instead of turning grey
@@ -317,13 +317,13 @@
    *
    * A note lifted out of a `\todo{}` points at the bytes of the macro, and
    * `segments.tsx` removes todo segments before anything is rendered — the
-   * author's annotations live in the notes pane now, which is the whole reason
+   * author's annotations live in the notes container now, which is the whole reason
    * that filter exists. A comment run is the same: `pages.ts` drops every
    * `comment` block. So a perfectly good passage can name a place in the file
    * with no span on the sheet to paint.
    *
    * Marking only the spans would leave those passages with nothing visible at
-   * all — the pane would scroll, land, and appear to have done nothing, which
+   * all — the container would scroll, land, and appear to have done nothing, which
    * is exactly the silence this change was made to end. So the BLOCK carries a
    * mark too: a rule in the margin saying "the thing you pointed at is here",
    * which is true whether or not any of it is drawn.
@@ -362,13 +362,13 @@
    * thirty pages tall — which either gets clamped, silently, or turns the
    * CANVAS into the scrollbar for somebody else's paper.
    *
-   * So the column is as tall as the pane minus the chrome above and below it,
-   * and the page's own height then stays about what the pane already is, which
+   * So the column is as tall as the container minus the chrome above and below it,
+   * and the page's own height then stays about what the container already is, which
    * is what `resize` reports back. That is a fixed point rather than a loop.
    *
    * ## The height is no longer a subtraction, and the subtraction was a guess
    *
-   * It used to be `max(12rem, calc(100dvh - 8rem))`: the pane, minus eight rems
+   * It used to be `max(12rem, calc(100dvh - 8rem))`: the container, minus eight rems
    * of chrome estimated by counting the things above and below it. Every one of
    * those was a number in this file that had to be right about markup in
    * another one — and it was wrong the moment a strip was removed from the
@@ -427,7 +427,7 @@
 
   /*
    * Always drawn now. It sits inside the sheet's own left margin, which is a
-   * fixed fraction of a fixed A4 page rather than whatever the pane had left
+   * fixed fraction of a fixed A4 page rather than whatever the container had left
    * over — so there is no longer a width at which it is silently absent. It is
    * never moved inline: a `¶` in the reading flow is a character in the
    * argument, which is exactly the confusion the tags exist to prevent.

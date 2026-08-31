@@ -11,7 +11,7 @@ import { ID, MANIFEST } from '../manifest.ts'
 describe('what this app claims about itself', () => {
   test('it is protocol 2, which is the whole reason this module was rewritten', () => {
     /* The module this was extracted from declared 1. A host running 2 framed it
-       as incompatible and never greeted it: a pane that loads a page and then
+       as incompatible and never greeted it: a container that loads a page and then
        refuses to talk to it, for a reason visible only on the host's side. */
     expect(MANIFEST.protocol).toBe(PROTOCOL)
     expect(PROTOCOL).toBe(2)
@@ -42,7 +42,7 @@ describe('what this app claims about itself', () => {
        arrives on the greeting to every module whatever it declared. What IS
        here is the one thing this app asks permission to do to its neighbours —
        put a path, a page, a byte range and a paragraph of somebody's document
-       into the context every pane on the canvas is told. */
+       into the context every container on the canvas is told. */
     expect(MANIFEST.declares.uses).toEqual(['passage:set'])
     expect(MANIFEST.declares.prompt).toBe(false)
   })

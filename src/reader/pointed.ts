@@ -10,7 +10,7 @@ import { visible } from './pages.ts'
  *
  * `use-published-passage.ts` is this module saying where the reader is
  * pointing. This is the answer arriving: a `context.passage` naming a file and
- * a byte range, from a pane that holds a note about it, and the user's question
+ * a byte range, from a container that holds a note about it, and the user's question
  * was the whole specification — "when you click on a note shouldn't it
  * highlight and show what its target from the paper?"
  *
@@ -21,7 +21,7 @@ import { visible } from './pages.ts'
  *
  * ## The three answers, and why "nothing" is not one of them
  *
- * A passage can name a document this pane does not have open. That is not an
+ * A passage can name a document this container does not have open. That is not an
  * edge case: a note lives on a chapter, the canvas is on another epic, and the
  * note is pressed. The protocol's own note on `path` says consumers compare it
  * for EQUALITY, and this one cannot open what it was not asked to show — the
@@ -32,7 +32,7 @@ import { visible } from './pages.ts'
  *
  * So the third answer is a SENTENCE. Doing nothing quietly is the failure this
  * codebase spends the most words on, and it is at its worst here, because from
- * the other pane the press looked like it worked.
+ * the other container the press looked like it worked.
  */
 export type Pointed =
   /** Nothing is pointing, or the passage names no range and no page worth moving to. */
@@ -87,7 +87,7 @@ export function blockFor(paper: Paper, file: string, range: { from: number; to: 
 }
 
 /**
- * What this pane should do about a passage.
+ * What this container should do about a passage.
  *
  * `page` on the passage is deliberately NOT used to decide where to go. It is a
  * filter and never an anchor — the protocol says so, and the number was
@@ -100,7 +100,7 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
   if (!paper) {
     return {
       at: 'elsewhere',
-      said: 'Something pointed at a passage of a document, and this pane is not showing a paper at the moment.',
+      said: 'Something pointed at a passage of a document, and this container is not showing a paper at the moment.',
     }
   }
 
@@ -109,7 +109,7 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
     return {
       at: 'elsewhere',
       said:
-        `Something pointed at ${passage.path}, which is not part of the paper open here — this pane is showing `
+        `Something pointed at ${passage.path}, which is not part of the paper open here — this container is showing `
         + `${paper.title ?? paper.epic}. Open the epic that paper belongs to and point again.`,
     }
   }
@@ -119,7 +119,7 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
   if (!block) {
     return {
       at: 'elsewhere',
-      said: `Something pointed at ${file}, which is part of this paper and has nothing in it that this pane draws.`,
+      said: `Something pointed at ${file}, which is part of this paper and has nothing in it that this container draws.`,
     }
   }
 
@@ -135,6 +135,6 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
     mark: range ? { file: block.file, ...range } : null,
     said: range
       ? `Something pointed at ${file}, bytes ${range.from}–${range.to}. It is marked below.`
-      : `Something pointed at ${file}. This pane has turned to it; no range was named, so nothing is marked.`,
+      : `Something pointed at ${file}. This container has turned to it; no range was named, so nothing is marked.`,
   }
 }

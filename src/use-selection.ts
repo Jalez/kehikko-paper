@@ -35,7 +35,7 @@ import { clearSelection, fileOfSelection, readSelection, selectionRect, type Sou
  * and `passage.set` to fill it. It is CONTEXT rather than an extension event,
  * which is better than what was imagined here for a reason this module could
  * not have supplied on its own: a reader highlights at 10:04 and puts a notes
- * pane on the canvas at 10:05, and an event is gone by then.
+ * container on the canvas at 10:05, and an event is gone by then.
  *
  * The prediction about the SHAPE of the change was exact. Nothing in this file
  * and nothing in `lib/selection.ts` changed. The addition is one hook —
