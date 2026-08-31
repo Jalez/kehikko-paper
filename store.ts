@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 
 import { findMacros, parseLatex, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
 
@@ -178,28 +178,102 @@ export function isEpic(value: unknown): value is string {
  * a typo one. Either way the answer is the same: resolve the real path and
  * refuse anything that did not land underneath the root.
  *
- * `realpathSync` on the root and on the parent of the target, because a symlink
- * inside the tree pointing out of it resolves after a plain `resolve()` has
- * already declared the string safe.
+ * `realpathSync` on the root as well as on the target, because a symlink inside
+ * the tree pointing out of it resolves after a plain `resolve()` has already
+ * declared the string safe — and on the root because the answer has to be
+ * compared against a real path, and `/tmp` is `/private/tmp` on the machine
+ * this workspace's tests run on.
+ *
+ * ## The leaf may not exist, and that used to be the hole
+ *
+ * `realpathSync` throws ENOENT for a path whose last component is not there,
+ * and a missing leaf is an ordinary state here: `readPaper` asks about
+ * `chapters/3_methods.tex` before it knows whether the author has written it,
+ * and reports "is not on disk here" — which it can only do if this function
+ * hands back a path for the read to fail on. So the throw cannot simply be a
+ * refusal.
+ *
+ * What it used to be instead was a LEXICAL fallback: the unresolved `target`
+ * compared, as a string, against the realpath'd root. That blesses a path the
+ * filesystem would send somewhere else. Plant a directory symlink inside the
+ * root pointing out of it — `<root>/out -> /somewhere/else` — ask for
+ * `out/ghost.tex`, and the string starts with the root, so the fence said yes
+ * about a path resolving into `/somewhere/else`. Nothing was served through it
+ * only because `readFileSync` threw on the next line. That is not a fence; it
+ * is a fence with a note asking the next operation to please fail. The day
+ * somebody adds an `existsSync`, a write, or any call happy to CREATE the
+ * missing leaf, the escape is real, and the reviewer who checked this function
+ * would have read the comment above promising the parent was resolved.
+ *
+ * So the leaf is split off and the PARENT is realpath'd — a real directory,
+ * whose symlinks resolve — and the check is made against the answer. A parent
+ * that cannot be realpath'd either is refused outright: this program has
+ * nothing to say about a path two components deep in a directory that is not
+ * there.
+ *
+ * The explorer's `tree/confine.ts` reached the same rule from the other end and
+ * refuses anything it cannot realpath at all, which it can afford because it
+ * only ever asks about things it has just listed. Two modules implementing "the
+ * fence" two different ways is how one of them ends up wrong — this one did —
+ * and the answer is one implementation in `roadmap-module-protocol` that both
+ * import. That is not done here on purpose: another agent is in that package as
+ * this is written, and a shared fence landed by two hands at once is the worst
+ * possible file to have a merge conflict in. It is the next move, and this
+ * comment is the note that says so.
+ *
+ * A refusal is always `null`, with no distinction between "outside", "not
+ * there" and "cannot be read". Three refusals is an existence oracle: a caller
+ * that can tell them apart can probe for files it is not allowed to see, one
+ * question at a time.
  */
-function confine(root: string, relative: string): string | null {
+export function confine(root: string, relative: string): string | null {
   const target = resolve(root, relative)
-  let realRoot: string
+  const realRoot = real(root)
+  if (realRoot === null) return null
+
+  const realTarget = real(target)
+  if (realTarget !== null) return inside(realRoot, realTarget) ? realTarget : null
+
+  /* The leaf is not on disk. Everything ABOVE it must still be, and must still
+     land under the root once its symlinks are followed. */
+  const parent = dirname(target)
+  /* `dirname('/')` is `'/'`. Without this a target at the filesystem root would
+     ask the same question forever, or answer it about itself. */
+  if (parent === target) return null
+  const realParent = real(parent)
+  if (realParent === null) return null
+  if (!inside(realRoot, realParent)) return null
+  return join(realParent, basename(target))
+}
+
+/**
+ * Whether `path` is `root` or sits beneath it, as directories rather than as
+ * strings.
+ *
+ * The separator is not decoration: `'/paper-evil'.startsWith('/paper')` is
+ * true, and a prefix check without it is written by somebody thinking about
+ * directories while the language thinks about characters. The root is allowed
+ * as itself because `confine(dir, '.')` — which `roots()` uses to resolve a
+ * root against itself — asks exactly that question.
+ */
+function inside(root: string, path: string): boolean {
+  if (path === root) return true
+  return path.startsWith(root.endsWith(sep) ? root : root + sep)
+}
+
+/**
+ * `realpathSync`, or null.
+ *
+ * A throw here is ENOENT, EACCES or ELOOP, and all three mean the same thing to
+ * this program: it is not going to read that. Telling them apart on the way out
+ * is the oracle `confine` refuses.
+ */
+function real(path: string): string | null {
   try {
-    realRoot = realpathSync(root)
+    return realpathSync(path)
   } catch {
     return null
   }
-  let realTarget: string
-  try {
-    realTarget = realpathSync(target)
-  } catch {
-    /* A file that does not exist cannot be read, and saying so is the caller's
-       job rather than this fence's. But it still must not be reported as inside
-       the root when it is not, so the string form is checked. */
-    return target.startsWith(`${realRoot}/`) ? target : null
-  }
-  return realTarget === realRoot || realTarget.startsWith(`${realRoot}/`) ? realTarget : null
 }
 
 const MAIN = 'main.tex'

@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { isEpic, listPapers, papersDir, readPaper, readSource } from '../store.ts'
+import { confine, isEpic, listPapers, papersDir, readPaper, readSource } from '../store.ts'
 
 /**
  * The store, which is a reader over somebody else's directory.
@@ -172,5 +172,97 @@ describe('the two fences', () => {
     expect(readSource('good-epic', 'chapters/second.tex', papers)).toContain('The second thing')
     expect(readSource('good-epic', 'scratch.tex', papers)).toBeNull()
     expect(readSource('good-epic', '../secret.tex', papers)).toBeNull()
+  })
+})
+
+/**
+ * The fence itself, asked directly.
+ *
+ * Every other test in this file goes through a reader, and every one of them
+ * passed while `confine` was wrong — because `readFileSync` threw on the way
+ * out and the reader returned null for a reason that had nothing to do with
+ * the fence. A fence tested only through the thing standing behind it is a
+ * fence whose failures are invisible until the thing behind it moves.
+ *
+ * So `confine` is exported for this, the way `inside` is in the explorer's
+ * `tree/confine.ts`, and this block asks it the questions the readers cannot.
+ */
+describe('the fence, asked directly', () => {
+  /*
+   * Realpath'd, and the test does not work without it.
+   *
+   * `tmpdir()` on macOS is under `/var`, which is a symlink to `/private/var`.
+   * A root left as the string `mkdtemp` returned makes every prefix comparison
+   * in here compare `/var/...` against `/private/var/...` and fail for the
+   * wrong reason — the fence would refuse everything and this file would be a
+   * row of green ticks proving nothing. `roots()` realpaths its roots before
+   * handing them out, so realpathing here is also the honest simulation of how
+   * `confine` is actually called.
+   */
+  const fenced = realpathSync(mkdtempSync(join(tmpdir(), 'kehikko-fence-')))
+  const inside = join(fenced, 'paper')
+  const elsewhere = join(fenced, 'elsewhere')
+  mkdirSync(join(inside, 'chapters'), { recursive: true })
+  mkdirSync(elsewhere, { recursive: true })
+  writeFileSync(join(inside, 'main.tex'), 'the paper')
+  writeFileSync(join(elsewhere, 'secret.tex'), 'this must never be served')
+
+  test('a file that is there and is inside is resolved', () => {
+    expect(confine(inside, 'main.tex')).toBe(join(inside, 'main.tex'))
+  })
+
+  test('a path that climbs out is refused', () => {
+    expect(confine(inside, '../elsewhere/secret.tex')).toBeNull()
+  })
+
+  test('a symlink pointing out of the tree is refused, though its string looks fine', () => {
+    symlinkSync(join(elsewhere, 'secret.tex'), join(inside, 'away.tex'))
+    expect(confine(inside, 'away.tex')).toBeNull()
+  })
+
+  test('a symlinked DIRECTORY plus a leaf that does not exist is refused', () => {
+    /*
+     * The hole this test was written to fail against.
+     *
+     * `confine` used to fall back to a lexical prefix check whenever
+     * `realpathSync(target)` threw — and it throws for ENOENT, which is the
+     * ordinary case of a leaf that is not there yet. The string it compared
+     * was the UNRESOLVED target: `<root>/out/ghost.tex` starts with the root,
+     * so the fence said yes and handed back a path that the filesystem would
+     * have opened in `elsewhere/`.
+     *
+     * Nothing was actually served through it, and that is the point rather
+     * than the defence: the only reason was that `readFileSync` threw next.
+     * A fence that returns a path it should not, and relies on the next line
+     * to fail, is one refactor away from being a hole — the day somebody
+     * writes `existsSync(path)`, or a `mkdir -p`, or any operation that is
+     * happy to CREATE the missing leaf, the escape becomes real. And the
+     * comment above `confine` had already promised the parent was realpath'd,
+     * so a reader auditing this file would have seen a fence that was correct
+     * on paper.
+     *
+     * Exploitability is low — planting the symlink needs local write, and the
+     * loopback threat model already trusts that user. The shape is the
+     * problem, and it is exactly the shape explorer's first draft of
+     * `tree/confine.ts` had.
+     */
+    symlinkSync(elsewhere, join(inside, 'out'))
+    expect(confine(inside, 'out/ghost.tex')).toBeNull()
+  })
+
+  test('a leaf that does not exist inside a real directory is still resolved', () => {
+    /* The other half, and the reason this is not "refuse everything that does
+       not exist". `readPaper` asks about `chapters/x.tex` before it knows
+       whether the author wrote it, and reports "is not on disk here" — which
+       it can only do if the fence hands back a path to fail on. */
+    expect(confine(inside, 'chapters/nothing-yet.tex')).toBe(join(inside, 'chapters', 'nothing-yet.tex'))
+  })
+
+  test('a sibling directory with the root as its prefix is not inside it', () => {
+    /* `'/paper-evil'.startsWith('/paper')` is true, and the separator is the
+       whole of the answer. The explorer has a test named after this one. */
+    mkdirSync(`${inside}-evil`, { recursive: true })
+    writeFileSync(join(`${inside}-evil`, 'main.tex'), 'not this one')
+    expect(confine(inside, '../paper-evil/main.tex')).toBeNull()
   })
 })
