@@ -37,8 +37,16 @@ import { visible } from './pages.ts'
 export type Pointed =
   /** Nothing is pointing, or the passage names no range and no page worth moving to. */
   | { at: 'nowhere' }
-  /** In this paper: turn to this block, and mark this range if there is one. */
-  | { at: 'here'; file: string; id: string; mark: { file: string; from: number; to: number } | null; said: string }
+  /** In this paper, and pointed INTO it: turn to this block and mark the range. */
+  | { at: 'here'; file: string; id: string; mark: { file: string; from: number; to: number }; said: string }
+  /**
+   * In this paper, and not pointed into it — a document is open and no range
+   * was named. Nothing to mark, nowhere to turn, nothing to say. Kept apart
+   * from `here` with a null mark because the difference is not cosmetic: this
+   * is the arm that must NOT move the page, and a boolean inside a shared arm
+   * is a thing a later reader drops.
+   */
+  | { at: 'holding'; file: string }
   /** Not in this paper, and this is what to say about it. */
   | { at: 'elsewhere'; said: string }
 
@@ -123,18 +131,37 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
     }
   }
 
+  /*
+   * A passage with no range is not a request to go anywhere.
+   *
+   * Rung two of the field — a document and a page, no `from`/`to` — means "a
+   * reader has this open", which is what lets a notes container show the page's
+   * notes instead of nothing. It does NOT mean "turn to this", and treating it
+   * as though it did produced a jump the reader could feel:
+   *
+   *   scroll -> the page readout changes -> this app publishes rung two naming
+   *   the new page -> the host broadcasts it -> this app turns to it -> the
+   *   scroll position moves under the person who was scrolling.
+   *
+   * `shouldPublish` already refuses to send an echo straight back, so the cycle
+   * did not spin forever. It did not have to: one turn per scroll is a jump.
+   * The guard was on the wrong half — the fix is not to publish less, it is to
+   * stop treating "a document is open" as an instruction.
+   *
+   * So this is its own answer rather than a `here` with a null mark. Nothing is
+   * marked, nothing is turned to, and nothing is said: a container that already has
+   * the document open, being told the document is open, has no news for
+   * anybody. The sentence that used to be here — "no range was named, so
+   * nothing is marked" — was the app narrating its own plumbing at somebody
+   * reading a thesis.
+   */
+  if (!range) return { at: 'holding', file: block.file }
+
   return {
     at: 'here',
     file: block.file,
     id: block.id,
-    /* Marked only where there is a range to mark. A passage with none is a
-       reader standing on a document rather than pointing into it — and a note
-       whose words this app could not find in the file arrives the same way,
-       deliberately, because highlighting its recorded offsets would put a
-       confident colour on whatever text has since drifted into them. */
-    mark: range ? { file: block.file, ...range } : null,
-    said: range
-      ? `Something pointed at ${file}, bytes ${range.from}–${range.to}. It is marked below.`
-      : `Something pointed at ${file}. This container has turned to it; no range was named, so nothing is marked.`,
+    mark: { file: block.file, ...range },
+    said: `Something pointed at ${file}, bytes ${range.from}–${range.to}. It is marked below.`,
   }
 }

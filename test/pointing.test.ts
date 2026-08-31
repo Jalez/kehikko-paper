@@ -112,15 +112,40 @@ describe('what this container does about a passage', () => {
     expect(answer.said).toContain('420')
   })
 
-  test('a passage with no range turns to the file and marks nothing', () => {
-    /* Rung 2, and also every note whose words this app could not find in the
-       file. Marking recorded offsets nobody verified would put a confident
-       colour on whatever text has since drifted into them. */
+  test('a passage with no range marks nothing AND turns nowhere', () => {
+    /*
+     * This test used to assert the opposite, and the opposite was a bug a
+     * reader could feel.
+     *
+     * Rung 2 of the field — a document and a page, no range — means "somebody
+     * has this open". It is what lets a notes container show a page's notes
+     * instead of nothing. It does not mean "go here". Treating it as a
+     * destination closed a loop through the canvas:
+     *
+     *   scroll -> the page readout changes -> this app publishes rung 2 naming
+     *   the new page -> the host broadcasts it -> this app turns to it -> the
+     *   page moves under the person who was scrolling.
+     *
+     * `shouldPublish` refuses to send an echo straight back, so it never span
+     * forever. It did not need to: one turn per scroll is a jump. The guard was
+     * on the wrong half.
+     *
+     * Marking is still refused for the reason it always was — a note whose
+     * words this app could not find arrives this way, and colouring its
+     * recorded offsets would put confidence on whatever text has drifted into
+     * them.
+     */
     const answer = pointedAt(paper, at({ from: null, to: null, quoted: '' }))
-    expect(answer.at).toBe('here')
-    if (answer.at !== 'here') return
-    expect(answer.mark).toBeNull()
-    expect(answer.said).toContain('nothing is marked')
+    expect(answer.at).toBe('holding')
+  })
+
+  test('holding says nothing, because there is nothing to say', () => {
+    /* A container that already has the document open, being told the document is
+       open, has no news. The sentence that used to be here narrated the app's
+       own plumbing at somebody reading a thesis. */
+    const answer = pointedAt(paper, at({ from: null, to: null, quoted: '' }))
+    expect('said' in answer).toBe(false)
+    expect('mark' in answer).toBe(false)
   })
 
   test('a document this container does not have open says so, and never silently does nothing', () => {

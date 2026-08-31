@@ -395,7 +395,17 @@
     flex: 1 1 auto;
     min-height: 0;
     padding-block: 0.5rem;
-    background: color-mix(in oklab, var(--foreground) 4%, transparent);
+    /*
+     * No tint of its own.
+     *
+     * It carried a 4%% wash to lift the scrolling area off the page around it —
+     * a reasonable instinct when this was one box among several, and wrong now
+     * that it is nearly the whole container: it drew a second surface behind the
+     * sheet, so the paper sat on a slightly different colour from the container
+     * holding it, and the seam was visible at the edges. The sheet is already
+     * lifted, by its own background and its shadow. One lifted thing is a page
+     * on a desk; two is a page on a tray on a desk.
+     */
     border-radius: var(--radius-md);
     /* `contain: paint` so thirty absolutely-ordinary sheets do not each cost a
        repaint of the ones above them while somebody scrolls. */

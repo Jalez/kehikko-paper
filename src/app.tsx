@@ -140,6 +140,15 @@ export function App() {
       setSaid(answer.said)
       return
     }
+    /* A document is open and nothing is pointed into it. Nothing to mark, and
+       nothing to turn to — turning here is what moved the page under a person
+       who was scrolling. Not adopted either: nothing was adopted, and going
+       quiet would suppress the next real thing this app has to say. */
+    if (answer.at === 'holding') {
+      setMark(null)
+      setAdopted(false)
+      return
+    }
     setMark(answer.mark)
     setWalk({ file: answer.file, id: answer.id, nonce: Date.now() })
     setSaid(answer.said)
