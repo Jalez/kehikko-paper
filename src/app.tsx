@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { Passage as WirePassage } from 'roadmap-module-protocol'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import type { Paper } from '../store.ts'
 import { AskPopover } from './reader/ask.tsx'
 import { anchorId } from './reader/blocks.tsx'
 import { paginate, pageOf, visible } from './reader/pages.ts'
 import { PaginatedView } from './reader/paginated.tsx'
-import { pointedAt } from './reader/pointed.ts'
+import { isEcho, keyOf, pointedAt } from './reader/pointed.ts'
 import { plain } from './reader/segments.tsx'
 import { usePaper, type Sight } from './use-paper.ts'
 import { usePublishedPassage, type Sheet } from './use-published-passage.ts'
@@ -96,11 +97,40 @@ export function App() {
 
   const paper = sight.at === 'reading' ? sight.paper : null
 
+  /**
+   * The last passage this module put on the canvas, so its echo can be known.
+   *
+   * A ref and not state on purpose: nothing is drawn from it, and a render for
+   * it would be a render caused by this module talking to itself. It is written
+   * on the way out and read on the way in, and both of those happen inside
+   * callbacks that already have every render they need.
+   *
+   * The whole of what it is for is in `isEcho` in `reader/pointed.ts` — a
+   * highlight goes out as `passage.set`, comes back as `context.passage`
+   * because a context is broadcast to every framed module including the one
+   * that sent it, and was being read here as somebody pointing this reader at a
+   * chapter. Measured at 166 pixels of scroll under the person doing the
+   * highlighting; `dev/measure-selection.mjs` is the probe.
+   */
+  const mine = useRef<string | null>(null)
+  /* Wrapped rather than recorded inside `usePublishedPassage`, because what is
+     published is that hook's decision and what was PUBLISHED is this
+     component's business — and because the hook is a pure debounce plus
+     `shouldPublish`, which is the part of this that can be asserted without a
+     host. Giving it a second output would put state back into it. */
+  const publish = useCallback(
+    (passage: WirePassage | null) => {
+      mine.current = passage === null ? null : keyOf(passage)
+      point(passage)
+    },
+    [point],
+  )
+
   /* Where the reader is pointing, told to the canvas. Everything about when and
      whether is in `use-published-passage.ts`; from here it is one line, which
      is what `use-selection.ts` predicted it would be — plus the two arguments
      that stop this module answering itself. */
-  usePublishedPassage(point, paper, sheet, selected.passage, pointed, adopted)
+  usePublishedPassage(publish, paper, sheet, selected.passage, pointed, adopted)
 
   /**
    * A passage arriving from the canvas: turn to it, mark it, say so.
@@ -128,6 +158,17 @@ export function App() {
    * that sent it, a press that silently did nothing looks like it worked.
    */
   useEffect(() => {
+    /*
+     * Ours or somebody's, decided before anything is done about it.
+     *
+     * The record is dropped on any passage that is not ours, which is what
+     * keeps this from being a permanent veto on one range of the document — see
+     * the essay on `isEcho`. It is dropped here rather than in that file
+     * because the ref is the state and that file has none.
+     */
+    const own = isEcho(mine.current, pointed)
+    if (!own) mine.current = null
+
     const answer = pointedAt(paper, pointed)
     if (answer.at === 'nowhere') {
       setMark(null)
@@ -150,6 +191,26 @@ export function App() {
       return
     }
     setMark(answer.mark)
+    /*
+     * A reader who is already looking at something does not need to be taken to
+     * it.
+     *
+     * This is the echo of this module's own highlight coming back off the
+     * canvas, so everything below this line would be the container reacting to the
+     * person using it as though they were a stranger: it would scroll them to
+     * the words under their own cursor, narrate "something pointed at bytes
+     * 4471–5114" at somebody reading a thesis, and then go quiet and stop
+     * publishing until they touched the paper again.
+     *
+     * The mark above the line is kept, and that asymmetry is deliberate. The
+     * canvas genuinely IS pointing there now — a notes container beside this one
+     * is showing the notes for this range, and the paper agreeing with it is
+     * truthful. Drawing a mark changes no scroll position and costs the reader
+     * nothing; it also cleans itself up, because releasing the selection
+     * publishes a passage with no range, which `pointedAt` answers with
+     * `holding` and which clears the mark.
+     */
+    if (own) return
     setWalk({ file: answer.file, id: answer.id, nonce: Date.now() })
     setSaid(answer.said)
     /* Quiet from here until somebody touches the paper. Anything the container does

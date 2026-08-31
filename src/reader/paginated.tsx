@@ -309,13 +309,42 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
     setAt(0)
   }, [epic])
 
-  /* A walk from outside: scroll to the block, wherever in the document it is.
-     Nothing is virtualised, so the element is always in the DOM to scroll to —
-     see the note above about what virtualising would cost. */
+  /*
+   * A walk from outside: scroll to the block, wherever in the document it is.
+   * Nothing is virtualised, so the element is always in the DOM to scroll to —
+   * see the note above about what virtualising would cost.
+   *
+   * ## `nearest`, and it used to be `center`
+   *
+   * `center` moves the page every single time, including when the block asked
+   * for is already in front of the reader, and the movement it makes is the
+   * largest one that lands on the target. That is the wrong default for a
+   * document: scrolling is the reader's, and a page that shifts under somebody
+   * who can already see what they are being shown has taken their place away
+   * for nothing they can perceive.
+   *
+   * `nearest` is the standard expression of "only if it is needed, and then as
+   * little as possible": nothing at all when the block is on screen, and
+   * otherwise the smallest scroll that brings it to an edge. What is lost is
+   * the tidiness of a target that always lands mid-column, which was never
+   * worth what it cost — and where the block is genuinely off screen the reader
+   * arrives at it against a full column of the pages either side of it, which
+   * is the same argument `turnTo` below makes for a real scroll over a jump.
+   *
+   * It also makes a repeated walk harmless. `walk` is fired on a nonce, so a
+   * passage re-sent unchanged is a second walk; under `center` that was a
+   * second lurch, and under `nearest` it is nothing, because the block it names
+   * has not moved since the first one put it on screen.
+   *
+   * The reported jump this was found next to was NOT this line — see
+   * `reader/pointed.ts` for the echo that was setting the walk in the first
+   * place. This is the second half: even a walk somebody really did ask for
+   * should not move a reader who can already see where they are going.
+   */
   const nonce = walk?.nonce
   useEffect(() => {
     if (!walk) return
-    document.getElementById(anchorId(walk.file, walk.id))?.scrollIntoView({ block: 'center' })
+    document.getElementById(anchorId(walk.file, walk.id))?.scrollIntoView({ block: 'nearest' })
     /* `walk` is deliberately not a dependency: a walk is an event and the nonce
        is what says a new one happened. */
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -380,13 +380,25 @@ describe('the reading view scrolls, and there is nothing to press', () => {
     )
     const target = document.getElementById(`b-${`${heading.file}-${heading.id}`.replace(/[^a-zA-Z0-9-]+/g, '-')}`)
     expect(target).toBeTruthy()
-    expect(scrolls.asked.some((a) => a.el === target && a.block === 'center')).toBe(true)
+    /* `nearest` and not `center`: a walk brings a reader to a block that is off
+       screen and leaves alone one that is not. The essay is on the effect in
+       `paginated.tsx`; asserted here because the block argument is the whole of
+       the difference between "only if needed, minimally" and "always, and as
+       far as possible". */
+    expect(scrolls.asked.some((a) => a.el === target && a.block === 'nearest')).toBe(true)
     scrolls.stop()
   })
 
-  test('the same walk asked for twice moves twice', () => {
+  test('the same walk asked for twice is asked for twice', () => {
     /* A nonce rather than value equality, because a reader who asks the host to
-       walk to the same reference again means it again. */
+       walk to the same reference again means it again — so the effect must fire
+       again rather than being deduplicated by the value.
+
+       What the second firing DOES is now the browser's business and not this
+       component's: under `nearest` a block already on screen from the first
+       walk is not moved to a second time. That is the point of the change and
+       is why this test asserts the call and not a scroll position, which
+       happy-dom has no layout to give it anyway. */
     const heading = paper.blocks.filter((b) => b.kind === 'heading')[1]!
     const rendered = view(paper)
     const scrolls = watchScrolls()
@@ -395,7 +407,7 @@ describe('the reading view scrolls, and there is nothing to press', () => {
         <PaginatedView paper={paper} walk={{ file: heading.file, id: heading.id, nonce }} rootRef={{ current: null }} mark={null} />,
       )
     }
-    expect(scrolls.asked.filter((a) => a.block === 'center').length).toBe(2)
+    expect(scrolls.asked.filter((a) => a.block === 'nearest').length).toBe(2)
     scrolls.stop()
   })
 })

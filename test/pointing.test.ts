@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Passage } from 'roadmap-module-protocol'
 
 import type { Paper, PlacedBlock } from '../store.ts'
-import { blockFor, fileOf, pointedAt } from '../src/reader/pointed.ts'
+import { blockFor, fileOf, isEcho, keyOf, pointedAt } from '../src/reader/pointed.ts'
 import { shouldPublish } from '../src/use-published-passage.ts'
 
 /**
@@ -215,5 +215,53 @@ describe('the loop guard', () => {
     /* "No document is open" is a state a consumer must be able to move into. */
     expect(shouldPublish(null, a, true, null, false)).toBe(true)
     expect(shouldPublish(null, null, true, null, false)).toBe(false)
+  })
+})
+
+describe('the echo of this module\u2019s own highlight', () => {
+  const mine = at()
+
+  test('a passage this module published is recognised when it comes back', () => {
+    /* The reported failure: highlighting a paragraph published it, the host put
+       it in the context, and the context arrived back here looking exactly like
+       a notes container pointing this reader somewhere. Measured at 166 pixels of
+       scroll under the person doing the highlighting — `dev/measure-selection.mjs`. */
+    expect(isEcho(keyOf(mine), mine)).toBe(true)
+  })
+
+  test('the quote is not compared, because it is the field that changes in transit', () => {
+    /* Truncated on the way out and re-readable from the file on the way back. A
+       key that included it would stop matching for a reason nobody could see,
+       and the guard would silently stop guarding. */
+    expect(isEcho(keyOf(mine), at({ quoted: 'the host re-read this from disk' }))).toBe(true)
+  })
+
+  test('a different range at the same path is somebody else pointing', () => {
+    expect(isEcho(keyOf(mine), at({ from: 900, to: 950 }))).toBe(false)
+  })
+
+  test('a different page of the same range is somebody else pointing', () => {
+    /* Page is part of the key even though the range identifies the place,
+       because `passageFor` sends the page the reader is on and two modules
+       disagreeing about which sheet a range is on is a real difference. */
+    expect(isEcho(keyOf(mine), at({ page: 9 }))).toBe(false)
+  })
+
+  test('nothing published and nothing arriving are both "not an echo"', () => {
+    /* All three of these mean the same thing to the caller — walk to it — and
+       none is worth a separate answer. */
+    expect(isEcho(null, mine)).toBe(false)
+    expect(isEcho(keyOf(mine), null)).toBe(false)
+    expect(isEcho(null, null)).toBe(false)
+  })
+
+  test('a passage with no range still keys, so rung two can be recognised too', () => {
+    /* `pointedAt` answers `holding` for these and moves nobody, so nothing
+       depends on it today. It keys anyway rather than throwing, because a
+       function that is correct only for the arm currently calling it is a trap
+       for whoever adds the second caller. */
+    const page = at({ from: null, to: null, quoted: '' })
+    expect(isEcho(keyOf(page), page)).toBe(true)
+    expect(keyOf(page)).not.toBe(keyOf(mine))
   })
 })

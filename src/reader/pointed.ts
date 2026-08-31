@@ -51,6 +51,80 @@ export type Pointed =
   | { at: 'elsewhere'; said: string }
 
 /**
+ * One passage, as a string that can be compared.
+ *
+ * The quote is deliberately not part of it. It is the longest and least stable
+ * field: it is truncated on the way out (`LIMITS.QUOTE`) and a host is entitled
+ * to re-read it from the file on the way back, so two spellings of one place
+ * would stop matching and every guard below it would silently stop guarding.
+ * Where a passage IS is its path, its page and its range; the quote is what
+ * happened to be written there.
+ *
+ * The same function, for the same reason, is in `notes/pointed.ts` in the notes
+ * module — this is the second module to need it, which is what the protocol's
+ * own note on `path` predicts: consumers compare passages for equality, and
+ * there is no equality without one spelling.
+ */
+export function keyOf(passage: Passage): string {
+  return `${passage.path} ${passage.page ?? ''} ${passage.from ?? ''} ${passage.to ?? ''}`
+}
+
+/**
+ * Is this passage the echo of one this module published?
+ *
+ * ## The bug this exists to name
+ *
+ * A reader highlights a sentence. `use-published-passage.ts` posts it as
+ * `passage.set`; the host puts it in `context.passage`; and a context is
+ * broadcast to EVERY framed module, this one included. What arrives back is
+ * byte-for-byte a passage naming a range of the document on screen — which is
+ * indistinguishable, to `pointedAt` above, from a notes container pointing this
+ * reader at a chapter. So the paper walked to it, and `scrollIntoView` centred
+ * the paragraph the reader had just dragged their mouse across.
+ *
+ * Measured, with a probe host in `dev/measure-selection.mjs`: selecting a
+ * paragraph near the top of the column moved the scroll 166 pixels under the
+ * person selecting it. The owner's words for it were "it jumps to 'center' that
+ * section, which feels like bad ux — if user wants to center to the highlighted
+ * spot, they will scroll to center it themselves."
+ *
+ * ## Who asked is not a property of the passage
+ *
+ * Nothing in a `Passage` says where it came from, and nothing should: it is a
+ * statement about a document, not about a module. So the only way to tell an
+ * echo from a person is to remember what this module said last, which is the
+ * one string `Published` holds.
+ *
+ * ## Why there is no `since` here, when the notes module needed one
+ *
+ * `notes/pointed.ts` carries a second key — the passage that was live when the
+ * press was made — because without it the hold lasted less than one frame.
+ * There, a press changes state immediately and the list re-renders long before
+ * the echo of it can arrive, so a comparison against the LIVE passage threw the
+ * press away on the very next render while every unit test passed.
+ *
+ * That cannot happen here, and the difference is structural rather than lucky:
+ * the thing being guarded is an effect keyed on the ARRIVING passage. It does
+ * not run in the gap between publishing and being answered, because nothing in
+ * that gap changes `pointed`. When it does run, `pointed` is either the echo
+ * (and matches) or somebody else's (and must not). A `since` here would be a
+ * second thing to keep true with no failure behind it.
+ *
+ * ## And why the record is dropped the moment somebody else points
+ *
+ * Held forever, this key would suppress a real walk the day another module
+ * pointed at exactly the range this reader once highlighted — rare, invisible,
+ * and impossible to work out from the outside. Dropped as soon as a passage
+ * arrives that is not ours, it can only ever suppress the walk caused by the
+ * publication that set it. See the call site in `app.tsx`, which does the
+ * dropping, because a ref is state and this file holds none.
+ */
+export function isEcho(published: string | null, passage: Passage | null): boolean {
+  if (!published || !passage) return false
+  return published === keyOf(passage)
+}
+
+/**
  * Which file of this paper a passage names, or null.
  *
  * The passage carries an absolute path because that is the only spelling two
