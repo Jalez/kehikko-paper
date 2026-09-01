@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/sidebar.tsx'
 import type { Proposal } from '../../latex/propose.ts'
 import { BlockRow, anchorId, type Pen } from './blocks.tsx'
-import { NO_PROPOSALS, type Answering } from './proposed.tsx'
+import { NO_PROPOSALS, Reading, type Answering } from './proposed.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
 
 /**
@@ -276,13 +276,62 @@ export function PaginatedView({
     told.current?.({ page: at + 1, file })
   }, [at, file])
 
+  /*
+   * The column, kept in STATE as well as in the ref, and only for the popover.
+   *
+   * Everything else here reads the column inside an effect or a handler, where
+   * a ref is the right tool and a render is not wanted. The floating control is
+   * the exception: `collisionBoundary` is a prop Floating UI reads during
+   * render, so the element has to be a value that changes when it arrives — a
+   * ref is still `null` on the pass that mounts it, and a control positioned
+   * against a boundary that was null is a control positioned against the
+   * window. Once, on mount, and never again. See `Reading` in `proposed.tsx`.
+   */
+  const [columnEl, setColumnEl] = useState<HTMLDivElement | null>(null)
+
   const hold = useCallback(
     (el: HTMLDivElement | null) => {
       column.current = el
       rootRef.current = el
+      setColumnEl(el)
     },
     [rootRef],
   )
+
+  /*
+   * The waiting suggestions, in the order a reader MEETS them.
+   *
+   * Sorted here and once, so that everything downstream counts from the same
+   * list: the chrome row's total, and the `x of y` beside each control's
+   * buttons, are the length and the index of this array. Two numbers derived
+   * from one list cannot disagree, which is the whole reason the sort is here
+   * rather than in the control.
+   *
+   * By the paper's own file order and then by byte offset — `paper.files` is
+   * the order the document is assembled in, so this is document order and not
+   * alphabetical order, which for `chapters/10-x.tex` before `chapters/2-y.tex`
+   * would be neither.
+   *
+   * It is NOT the order `Accept all` writes in, which is oldest-filed first and
+   * belongs to the write path — see `acceptAll` in `use-paper.ts`, which reads
+   * its own ref and is untouched by anything here. Nothing on screen prints
+   * that order, so there is no second numbering for this one to contradict.
+   */
+  const inOrder = useMemo<readonly Proposal[]>(() => {
+    if (proposals.length < 2) return proposals
+    const rank = new Map(paper.files.map((f, i) => [f, i]))
+    return [...proposals].sort(
+      (a, b) =>
+        (rank.get(a.file) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.file) ?? Number.MAX_SAFE_INTEGER) ||
+        a.from - b.from ||
+        /* A tie-break that is total, so the ordinals do not shuffle between two
+           renders of the same list. Two suggestions at the same offset happen:
+           the door files them independently and only accepting one drops the
+           other. */
+        a.at - b.at ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    )
+  }, [proposals, paper.files])
 
   /* How much width there is. Observed rather than read once, because the container
      is dragged and because a frame's window is not what changes when it is. */
@@ -585,12 +634,12 @@ export function PaginatedView({
             It appears at two or more, because at one it is the Accept button
             already floating over the change, in a worse place.
           */}
-          {answering && proposals.length > 0 && (
-            <span className="flex min-w-0 shrink-0 items-center gap-1" data-pending-proposals={proposals.length}>
+          {answering && inOrder.length > 0 && (
+            <span className="flex min-w-0 shrink-0 items-center gap-1" data-pending-proposals={inOrder.length}>
               <span className="text-[0.7rem] text-[var(--mark)]">
-                {proposals.length} suggested
+                {inOrder.length} suggested
               </span>
-              {proposals.length > 1 && (
+              {inOrder.length > 1 && (
                 <button
                   type="button"
                   className="rounded border px-1 text-[0.7rem] text-muted-foreground hover:bg-accent disabled:opacity-50"
@@ -645,6 +694,15 @@ export function PaginatedView({
           </Badge>
         </div>
 
+        {/*
+          The column is published to the floating controls, which render in a
+          portal at the end of `document.body` and would otherwise be positioned
+          against the WINDOW. This page is a module on somebody else's canvas
+          and is routinely a narrow strip of a wide window, so "keep it on
+          screen" and "keep it in this container" are very different
+          instructions. See `Reading` in `proposed.tsx`.
+        */}
+        <Reading.Provider value={columnEl}>
         <div
           ref={hold}
           /* Focusable so PageUp, PageDown, Home, End and the arrows reach it
@@ -688,7 +746,7 @@ export function PaginatedView({
                 blocks={blocks}
                 mark={mark}
                 pen={pen}
-                proposals={proposals}
+                proposals={inOrder}
                 answering={answering}
                 scale={scale}
                 room={room}
@@ -699,6 +757,7 @@ export function PaginatedView({
             </div>
           ))}
         </div>
+        </Reading.Provider>
 
       </SidebarInset>
     </SidebarProvider>
@@ -753,27 +812,6 @@ function SheetPage({
         transform: `scale(${scale})`,
         transformOrigin: 'top left',
         marginLeft: left,
-        /*
-         * The reciprocal of the sheet's scale, and the room the column has, in
-         * real pixels — both published as custom properties so that anything
-         * drawn INSIDE the sheet that is a control rather than a document can
-         * undo the page's scaling for itself.
-         *
-         * A page is scaled and a button is not. Everything on an A4 sheet is
-         * expressed in the sheet's own units on purpose — the essay at the top
-         * of this file is about why — and the whole point of that is that the
-         * type gets smaller when the container does. A control has the opposite
-         * requirement: at 220 pixels the scale is 0.247 and a button drawn in
-         * sheet units would be six pixels tall and unpressable, which is the
-         * same failure as the gutter tag that used to vanish at a narrow width.
-         *
-         * Published as variables rather than passed as props because what needs
-         * them is a floating control several components down, and every one in
-         * between would have to carry a number it has no other use for. CSS
-         * inheritance is the mechanism that already exists for exactly this.
-         */
-        ['--counter-scale' as string]: String(1 / scale),
-        ['--sheet-room' as string]: `${room}px`,
       }}
       aria-label={`Page ${index + 1} of ${count}`}
       /* Readable from the outside, because "is this page whole and in
@@ -800,16 +838,13 @@ function SheetPage({
           </p>
         </header>
       )}
-      {blocks.map((block, at) => (
+      {blocks.map((block) => (
         <BlockRow
           key={`${block.file}#${block.id}`}
           block={block}
           epic={paper.epic}
           proposals={proposals}
           answering={answering}
-          /* The first block on a sheet has no room above it inside the page
-             box, which clips. Its control goes below instead. See `BlockRow`. */
-          first={at === 0}
           /* Only where the block is in the marked file, so the range never
              means something in a chapter it was not measured against. */
           mark={mark && mark.file === block.file ? mark : null}

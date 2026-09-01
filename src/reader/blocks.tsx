@@ -6,7 +6,14 @@ import { apiUrl } from '../api.ts'
 import { cn } from '@/lib/utils.ts'
 import type { Proposal } from '../../latex/propose.ts'
 import { Marked, Segments, Typed, type Typing } from './segments.tsx'
-import { NO_PROPOSALS, ProposalControl, Proposed, type Answering } from './proposed.tsx'
+import {
+  Anchoring,
+  NO_PROPOSALS,
+  ProposalControl,
+  Proposed,
+  type Anchors,
+  type Answering,
+} from './proposed.tsx'
 
 /**
  * Everything the paper needs in order to be typeable EXCEPT which file it is.
@@ -136,18 +143,17 @@ export interface BlockProps {
    * into the prose, and there is no control offering to apply them.
    */
   answering?: Answering | null
-  /**
-   * Whether this block is the first one on its sheet.
-   *
-   * The control floats above the block, and above the first block of a sheet is
-   * outside the page box — which clips, deliberately, for the phantom-width
-   * reason `paginated.tsx` argues. So the first block puts its control below
-   * instead. Known from the packing rather than measured: a `getBoundingClient
-   * Rect` here would be a layout read this module does not otherwise take, and
-   * a rule nothing without a browser could test.
-   */
-  first?: boolean
 }
+
+/**
+ * No change has reported where it was drawn yet. One frozen map, shared.
+ *
+ * The same care `NO_PROPOSALS` takes, for the same reason: this is the value
+ * every block with nothing suggested about it holds forever, and a fresh
+ * `new Map()` per render would be a new identity per render on every block in
+ * the document.
+ */
+const NO_ANCHORS: ReadonlyMap<string, HTMLElement> = new Map()
 
 export function BlockRow({
   block,
@@ -156,7 +162,6 @@ export function BlockRow({
   pen = null,
   proposals = NO_PROPOSALS,
   answering = null,
-  first = false,
 }: BlockProps) {
   /*
    * Narrowed to this block before it is supplied. A block the mark does not
@@ -211,6 +216,36 @@ export function BlockRow({
     return mine.length ? mine : NO_PROPOSALS
   }, [proposals, block.file, block.srcStart, block.srcEnd])
 
+  /*
+   * Where each of this block's changes actually got drawn, so the control can
+   * point at it. See the essay on `Anchoring`.
+   *
+   * State rather than a ref, because the popover has to RE-RENDER when the span
+   * arrives: on the first pass the prose has not mounted yet and there is
+   * nothing to anchor to, so the control falls back to the block. One extra
+   * render per block that has a suggestion drawn in it, and none at all for a
+   * block that has none — `put` is only ever called by a `Change` that was
+   * given an id, and the updater returns the same map when nothing moved, which
+   * is React's own signal to skip the re-render.
+   *
+   * `anchors.put` is memoised on nothing, so the context value is stable for
+   * the life of the block and `Change`'s ref callback never changes identity.
+   */
+  const [anchors, setAnchors] = useState<ReadonlyMap<string, HTMLElement>>(NO_ANCHORS)
+  const anchoring = useMemo<Anchors>(
+    () => ({
+      put: (id, el) =>
+        setAnchors((was) => {
+          if ((was.get(id) ?? null) === el) return was
+          const next = new Map(was)
+          if (el) next.set(id, el)
+          else next.delete(id)
+          return next.size ? next : NO_ANCHORS
+        }),
+    }),
+    [],
+  )
+
   return (
     <div
       className="block-row group relative"
@@ -236,7 +271,17 @@ export function BlockRow({
           <ProposalControl
             key={proposal.id}
             proposal={proposal}
-            side={first ? 'below' : 'above'}
+            anchor={anchors.get(proposal.id) ?? null}
+            /*
+             * The ordinal is this proposal's place in the WHOLE paper's list,
+             * not in this block's. `proposals` arrives already in document
+             * order — `PaginatedView` sorts it once — so `indexOf` is the
+             * number a reader would get by scrolling from the top and counting,
+             * and `length` is the same total the chrome row prints beside
+             * `Accept all`. One list, two readouts, no way for them to disagree.
+             */
+            ordinal={proposals.indexOf(proposal) + 1}
+            total={proposals.length}
             decide={answering.decide}
             busy={answering.busy}
           />
@@ -244,7 +289,9 @@ export function BlockRow({
       <Marked.Provider value={here}>
         <Typed.Provider value={typing}>
           <Proposed.Provider value={suggested}>
-            <BlockBody block={block} epic={epic} />
+            <Anchoring.Provider value={anchoring}>
+              <BlockBody block={block} epic={epic} />
+            </Anchoring.Provider>
           </Proposed.Provider>
         </Typed.Provider>
       </Marked.Provider>

@@ -453,6 +453,14 @@ function withProposals(run: Run, proposals: readonly Proposal[]): ReactNode | nu
            replacement is the empty string, which `diffWords` renders as the
            removal alone — the honest picture of "this part of it leaves". */
         now={startsHere ? proposal.text : ''}
+        /* And only that run reports itself as the control's anchor, for the
+           same reason and by the same test: one suggestion drawn across three
+           runs is still one question, and three spans claiming to be its place
+           would leave whichever mounted last in charge of where the control
+           points. A change whose first run is one this reader could not draw
+           names nobody, and the control falls back to the block — which is
+           where it has always been, so nothing is lost that was there. */
+        id={startsHere ? proposal.id : undefined}
       />,
     )
     cursor = upto
