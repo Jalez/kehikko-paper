@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 
-import { MAX_EDIT_BYTES } from './latex/edit.ts'
+import { MAX_EDIT_BYTES, sourceRefuses, whyNot } from './latex/edit.ts'
+import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
+import { drop, keep, pendingFor, proposalById, rebaseAll } from './proposals.ts'
 import {
   MAIN,
   PAPERS_AT,
@@ -73,9 +75,27 @@ import {
  *    that.
  *
  * The reads are unchanged and stay ungated, for the reason below. What is gated
- * is exactly the two doors that write: `POST /api/paper`, which starts a paper
- * where there is none, and `POST /api/edit`, which replaces bytes in one that
- * is already there.
+ * is exactly the three doors that write: `POST /api/paper`, which starts a paper
+ * where there is none, `POST /api/edit`, which replaces bytes in one that is
+ * already there, and `POST /api/proposal`, which answers a change somebody has
+ * suggested — accepting one goes through the same `writeRange` as an edit, so
+ * the third door adds a decision rather than a way of writing.
+ *
+ * ## There is a tool on the MCP door that is not a read now, and it writes nothing
+ *
+ * `propose_edit` files a change an agent thinks ought to happen. It changes what
+ * this PROCESS is holding and it does not touch a `.tex`: the paper is untouched
+ * until a person looking at the change in the prose presses Accept, and Accept
+ * is `POST /api/proposal`, which demands the ticket. The MCP door emits no
+ * ticket and has no tool that returns one, so the two are separated by different
+ * keys rather than by a flag.
+ *
+ * The limit of that is stated where the door is, and is worth repeating here
+ * because this is the file's summary: it is not a fence between a person and an
+ * agent. An agent with a shell on this machine can read the ticket out of `/app`
+ * — or skip all of this and edit the file with `sed`. What it is is a guarantee
+ * about the door this module OFFERS: an agent following it cannot change a paper
+ * behind the back of the person reading it.
  *
  * ## Reads are not gated, and that is deliberate
  *
@@ -143,6 +163,18 @@ const MAX_PROJECT = 4096
  * over-long edit is the one written for that, and not a silent truncation.
  */
 const MAX_TEXT = MAX_EDIT_BYTES
+
+/**
+ * As long as the sentence beside a suggested change may be.
+ *
+ * It is drawn in a floating control over a paper that is read at 220 pixels, so
+ * the real constraint is not memory — it is that anything longer than this is
+ * not a sentence, and a paragraph of reasoning covering the paragraph it is
+ * about is worse than no reasoning at all. Clipped rather than refused, unlike
+ * the text of the edit itself: a clipped explanation is still the explanation,
+ * while a clipped replacement is a DIFFERENT replacement, silently.
+ */
+const MAX_WHY = 240
 
 /**
  * The write ticket, minted once per process.
@@ -438,6 +470,176 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       return source
     },
   },
+
+  /**
+   * Suggest a change to the prose, for the person reading the paper to answer.
+   *
+   * ## This is the only tool here that is not a read, and it still writes nothing
+   *
+   * The distinction is the whole feature. Nothing on this door can change a
+   * `.tex` file. This one files a suggestion in the server's memory; the paper
+   * on disk is untouched, and stays untouched until a person looks at the
+   * change drawn into the prose they are reading and presses Accept. There is
+   * no tool here that presses it, and there is no argument to this one that
+   * skips it — see the essay on `/api/proposal`, which is where applying
+   * happens and which demands a ticket this door never emits.
+   *
+   * ## Text rather than byte offsets, and that is not a convenience
+   *
+   * See `propose` in `latex/propose.ts`. The short version: an agent counting
+   * UTF-8 bytes by hand to name a range is an agent whose off-by-four does not
+   * fail — it splices a correction into the middle of the wrong word and passes
+   * every check this door makes, because the range is real and holds no markup.
+   * Naming the text moves the counting to the side that holds the bytes.
+   *
+   * ## What it refuses, and the rule that is STRICTER here than at the door
+   *
+   * `whyNot` on what would go there, which is the same function the typed
+   * correction runs, for the same reasons — and applied at PROPOSE time rather
+   * than at accept time, because a suggestion that could never be applied is
+   * not worth putting in front of somebody, and refusing it now tells the agent
+   * about it while it is still holding the context.
+   *
+   * `sourceRefuses` on the whole of `find`, and this is the part that is
+   * deliberately stricter than `writeRange`'s version of the same check. The
+   * write path applies it to the bytes actually being replaced, which is the
+   * right rule there. Here the range is NARROWED before it is stored, and the
+   * two come apart in a way that is easy to miss and was caught by a test:
+   * `\autocite{jones}` becoming `\autocite{smith}` narrows to `jones` becoming
+   * `smith`, and neither of those holds a LaTeX special. The bytes are safe to
+   * write. The proposal is still wrong to accept, for a reason that has nothing
+   * to do with safety — those five characters render as part of `[jones]`, so
+   * `renderedRange` cannot honestly draw a change to them, and a suggestion this
+   * page cannot draw is a suggestion sitting in a list that the person is being
+   * asked to approve without seeing. The whole promise of this feature is that
+   * you look at the change before you answer it.
+   *
+   * So the rule is about the window the agent QUOTED and not only about the
+   * bytes it resolved to: name prose, and the narrowed range inside it is prose
+   * too. It over-refuses in one shape — `50\% escape` becoming `90\% escape`
+   * narrows to `5` becoming `9`, which is perfectly drawable — and the cost of
+   * that is one sentence to the agent telling it to quote `a 50` instead. That
+   * is a better trade than a rule with an exception in it.
+   *
+   * The consequence worth naming is that this door cannot touch a citation, a
+   * reference, an escape or a comment. Changing one of those means editing the
+   * `.tex` with the tools you already have, which is what this module has
+   * always said and still says.
+   */
+  propose_edit: {
+    description:
+      'Suggest a change to one sentence of a paper, for the person reading it to accept or reject. This does NOT '
+      + 'edit the file: it puts the change in front of the reader, drawn into the prose in green and red where it '
+      + 'happens, with Accept and Reject beside it. Name the text to replace rather than a byte range, and give '
+      + 'enough of it to be unique in the file — the exact text, as read_source shows it, including the line break '
+      + 'if it wraps. Prose only, and this is checked against the text you quote rather than only the part that '
+      + 'differs: if find or replace contains any of \\ { } $ & # ^ _ ~ %, it is refused. So quote around a '
+      + 'citation or an escape rather than across one — "a 50" rather than "50\\% of" — and edit the .tex '
+      + 'directly to change markup, a citation, a heading or the structure of the document.',
+    schema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_ARG,
+        epic: { type: 'string', description: 'e.g. modes-are-modules' },
+        file: { type: 'string', description: 'e.g. main.tex or chapters/wire.tex. Defaults to main.tex.' },
+        find: { type: 'string', description: 'The exact text to replace. Must appear exactly once in that file.' },
+        replace: { type: 'string', description: 'What goes there. Empty deletes it.' },
+        why: { type: 'string', description: 'One sentence the reader sees beside the change, saying why.' },
+      },
+      required: ['project', 'epic', 'find', 'replace', 'why'],
+    },
+    run(args) {
+      const epic = str(args.epic, MAX_SLUG)
+      if (!isEpic(epic)) return 'that is not an epic name'
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const paper = readPaper(epic, named.project)
+      if (!paper) return noPaper(epic, named.project)
+      const file = str(args.file, MAX_PATH) || MAIN
+      const source = readSource(epic, file, named.project)
+      if (source === null) {
+        return `"${epic}" does not name a file called "${file}". It is made of: ${paper.files.join(', ')}`
+      }
+      const was = paper.hashes[file]
+      /* Unreachable while `readSource` and `readPaper` agree about which files
+         a paper has, and checked because the alternative to a hash is a
+         proposal that can never be applied — the door would answer it as
+         staleness, which is a true sentence about the wrong problem. */
+      if (!was) return `This program could not measure ${file}, so a suggestion about it could not be filed.`
+
+      /* Not trimmed. `str` trims, and a proposal about text ending in a space —
+         which is most of them, because prose is words separated by spaces — has
+         to name that space or it names something else. This is the one place in
+         this file where the caller's whitespace is load-bearing. */
+      const find = typeof args.find === 'string' ? args.find.slice(0, MAX_TEXT) : ''
+      const replace = typeof args.replace === 'string' ? args.replace.slice(0, MAX_TEXT) : ''
+      const why = str(args.why, MAX_WHY)
+      if (!why) return 'A suggestion has to say why, in a sentence. The reader sees it beside the change.'
+
+      /* The quoted window, not the narrowed range. See the essay above: the
+         narrowed range inside `\autocite{jones}` is the five letters `jones`,
+         which hold no special character and are still not a thing this page
+         could draw a change to. */
+      const covered = sourceRefuses(find)
+      if (covered) return covered
+      const refused = whyNot(replace)
+      if (refused) return refused
+
+      const worked = propose(source, find, replace)
+      if ('why' in worked) return worked.why
+
+      const filed = keep(named.project, epic, {
+        file,
+        from: worked.from,
+        to: worked.to,
+        text: worked.text,
+        was_text: worked.was_text,
+        was,
+        why,
+        by: 'an agent',
+      })
+      if (!filed.ok) return filed.why
+      return (
+        `Filed as ${filed.proposal.id}. It is drawn into the paper where it happens, in green and red, and `
+        + 'nothing is written until the reader accepts it. Nothing on this door can accept it for them.'
+      )
+    },
+  },
+
+  /**
+   * What is still waiting, so an agent can tell "not answered yet" from "gone".
+   *
+   * Without it a proposal is posted into silence: an agent that made three
+   * suggestions has no way to learn that two were accepted and one was dropped
+   * because it covered the same words as another. That is not a nicety — an
+   * agent which cannot see the outcome will re-propose, and re-proposing an
+   * accepted change is how a paragraph gets edited twice.
+   *
+   * It says why each one is there and not what it did to the file, because it
+   * has not done anything to the file.
+   */
+  list_proposals: {
+    description:
+      'The changes suggested for one paper that the reader has not answered yet. A suggestion that is not here '
+      + 'was either accepted, rejected, or dropped because another accepted change rewrote the same words. This '
+      + 'server holds them in memory only, so a restart forgets them all.',
+    schema: {
+      type: 'object',
+      properties: { project: PROJECT_ARG, epic: { type: 'string' } },
+      required: ['project', 'epic'],
+    },
+    run(args) {
+      const epic = str(args.epic, MAX_SLUG)
+      if (!isEpic(epic)) return 'that is not an epic name'
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const held = pendingFor(named.project, epic)
+      if (!held.length) return 'Nothing is waiting on that paper.'
+      return held
+        .map((p) => `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}`)
+        .join('\n')
+    },
+  },
 }
 
 /** Rendered text of a run of segments, as one line. */
@@ -464,11 +666,13 @@ function mcp(rpc: Rpc): Reply {
       capabilities: { tools: {} },
       serverInfo: { name: ID, version: VERSION },
       instructions:
-        'The papers the epics in this roadmap are aimed at: LaTeX on disk, read as prose. Every tool here ' +
-        'reads, and there is deliberately no edit tool: a paper lives in a repository with a history, and you ' +
-        'have better tools for changing a file than an HTTP door with an undo table. (The PAGE this server ' +
-        'serves does take corrections a reader types into the rendered prose — that is a person fixing a ' +
-        'sentence in front of them, not an agent rewriting a chapter.) It reads no tracker and holds no ' +
+        'The papers the epics in this roadmap are aimed at: LaTeX on disk, read as prose. Three tools read and ' +
+        'one suggests. There is deliberately no tool that EDITS: propose_edit puts a change in front of the ' +
+        'person reading the paper, drawn into the prose where it happens, and the file is untouched until they ' +
+        'accept it — nothing on this door can accept it for them, and there is no argument that skips them. ' +
+        'Use it for prose a reader is looking at. For markup, structure, a new section or a citation, edit the ' +
+        '.tex directly with the tools you already have: a paper lives in a repository with a history, and ' +
+        'propose_edit refuses any range holding LaTeX markup anyway. It reads no tracker and holds no ' +
         'credential, so nothing here can tell you whether the work a paper cites has landed.',
     })
   }
@@ -686,7 +890,153 @@ export function answer(
         },
       }
     }
-    return ok({ ok: true, paper: readPaper(epic, project) })
+    /* Every pending suggestion is now measured against a file that has moved,
+       and this is the arithmetic that moves them with it. It runs on THIS path
+       — a person typing a correction — as well as on the accept path, because a
+       typo fixed two paragraphs above a pending suggestion shifts its bytes
+       just as surely as accepting another suggestion would. See `rebaseAll`. */
+    const lost = rebaseAll(project, epic, { file, from, to, text }, written.hash)
+    return ok({
+      ok: true,
+      paper: readPaper(epic, project),
+      proposals: pendingFor(project, epic),
+      said: droppedBecause(lost),
+    })
+  }
+
+  /*
+   * What has been suggested about this paper and not yet answered.
+   *
+   * Ungated, like every other read here and for the same reason: a proposal is
+   * about a paper anything on loopback can already read in full, so gating this
+   * would cost an agent's `curl` a credential in exchange for hiding nothing.
+   * What is NOT here is any way to change one — see the door below.
+   */
+  if (path === '/api/proposals' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    /* No project is not an error on a read that answers with a list: there is
+       nowhere to have filed anything, so the honest answer is that nothing is
+       waiting. The page polls this, and a refusal every four seconds while
+       nobody has a project open would be a container that looks broken. */
+    if (project === null) return ok({ ok: true, proposals: [] })
+    return ok({ ok: true, proposals: pendingFor(project, epic) })
+  }
+
+  /*
+   * Answer one suggestion: accept it, or reject it.
+   *
+   * ## This is the door that makes approval mean something
+   *
+   * `propose_edit` on `/mcp` files a suggestion and cannot apply it. This
+   * applies one and cannot be reached from `/mcp` at all: it is HTTP, it is a
+   * POST, and it demands this process's ticket, which is minted per run and
+   * printed into the page. The MCP door emits no ticket, holds no ticket, and
+   * has no tool that returns one — so the separation is not a flag somebody
+   * could set, it is two doors with different keys.
+   *
+   * That is the honest extent of it, and the limit belongs in the code rather
+   * than in a README nobody is reading at the moment it matters. The ticket
+   * separates "this app's own page" from "something else on this machine that
+   * guessed the port". It does not separate a person from an agent: an agent
+   * with a shell here can fetch `/app`, read the ticket out of it and post to
+   * this door — and could equally have skipped all of it and written to the
+   * `.tex` with `sed`. What approval buys is not a fence around the disk. It is
+   * that the ONE PATH THIS MODULE OFFERS AN AGENT does not write, so an agent
+   * following the door it was given cannot change a paper behind the back of
+   * the person reading it.
+   *
+   * ## Auto-approve is not a setting here, and that is deliberate
+   *
+   * A reader may tick "apply straight away" beside the Edit checkbox. That tick
+   * lives in the page, and when it is on the page answers a new suggestion by
+   * calling THIS door immediately — with the ticket, exactly as it would if a
+   * finger had pressed Accept. There is no server-side flag for it and no
+   * argument on this door meaning "the reader said yes in advance".
+   *
+   * The reason is that a setting the server held would be a setting the server
+   * could be talked into. Anything that can post here could post the flag, and
+   * a caller that can post the flag has approved its own change on the reader's
+   * behalf. Kept in the page, the only thing that can auto-approve is the page
+   * a person is looking at, and the strongest statement available about
+   * approval stays true: nothing is written that the ticket-holder did not ask
+   * for.
+   *
+   * ## Accepting is the ordinary write path, not a second one
+   *
+   * `writeRange` — the same function `/api/edit` calls, with the same hash
+   * check, the same `sourceRefuses` and the same atomic rename. A proposal
+   * carries the hash of the file it was measured against, so one that has gone
+   * stale is refused here exactly as a stale typed correction is, with the
+   * paper as it now is sent back on the refusal.
+   */
+  if (path === '/api/proposal' && method === 'POST') {
+    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+
+    const decision = str(body?.decision, 20)
+    const id = str(body?.id, 80)
+
+    /* Rejecting writes nothing, and this is the line that says so: the file is
+       never opened. A rejected suggestion leaves the paper byte-identical
+       because there is no path from here to a filesystem call at all. */
+    if (decision === 'reject') {
+      if (!proposalById(project, epic, id)) return bad('There is no suggestion by that name waiting here.', 404)
+      drop(project, epic, id)
+      return ok({ ok: true, proposals: pendingFor(project, epic) })
+    }
+
+    if (decision !== 'accept') return bad('A suggestion is accepted or rejected, and this said neither.')
+
+    const proposal = proposalById(project, epic, id)
+    if (!proposal) return bad('There is no suggestion by that name waiting here.', 404)
+
+    const written = writeRange(
+      epic,
+      { file: proposal.file, from: proposal.from, to: proposal.to, text: proposal.text, was: proposal.was },
+      project,
+    )
+    if (!written.ok) {
+      /*
+       * A refused suggestion is dropped rather than left greyed out on the page.
+       *
+       * The alternative was considered: keep it, mark it stale, let the reader
+       * see that it existed. It is refused because a suggestion that cannot be
+       * applied is not a decision anybody can still make — pressing Accept on
+       * it will refuse again, identically, for as long as it sits there, and an
+       * affordance that never works in the middle of somebody's paper is worse
+       * than an empty space. The reason travels back to the reader in this same
+       * answer, and the agent learns of it by `list_proposals` finding it gone.
+       */
+      drop(project, epic, id)
+      return {
+        status: written.stale ? 409 : 400,
+        body: {
+          ok: false,
+          error: written.why,
+          stale: written.stale,
+          paper: readPaper(epic, project),
+          proposals: pendingFor(project, epic),
+        },
+      }
+    }
+    drop(project, epic, id)
+    const lost = rebaseAll(
+      project,
+      epic,
+      { file: proposal.file, from: proposal.from, to: proposal.to, text: proposal.text },
+      written.hash,
+    )
+    return ok({
+      ok: true,
+      paper: readPaper(epic, project),
+      proposals: pendingFor(project, epic),
+      said: droppedBecause(lost),
+    })
   }
 
   if (path === '/api/figure' && method === 'GET') {

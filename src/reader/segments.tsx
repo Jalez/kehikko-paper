@@ -1,7 +1,9 @@
 import { createContext, useContext, type ReactNode } from 'react'
 
-import { narrow, place, whyNot } from '../../latex/edit.ts'
+import { narrow, place, renderedRange, whyNot } from '../../latex/edit.ts'
 import type { Segment, SegmentStyle } from '../../latex/parse.ts'
+import type { Proposal } from '../../latex/propose.ts'
+import { Change, Proposed } from './proposed.tsx'
 import { cn } from '@/lib/utils.ts'
 
 /**
@@ -355,13 +357,119 @@ export function asTyped(text: string): string {
   return text.replace(/\u00a0/g, ' ')
 }
 
+/**
+ * A run with the suggested changes to it drawn in, or `null` for a run nothing
+ * is suggested about.
+ *
+ * ## Held to `place`'s rule, and refusing looks like nothing rather than a lie
+ *
+ * `renderedRange` is the inverse of `place` and applies the same test: a byte
+ * range is drawable inside a literal piece exactly, over a whitespace gap by
+ * snapping outward to the whole gap, and nowhere else. A range that reaches
+ * anything derived is refused, and this function then draws that run as
+ * ordinary prose.
+ *
+ * That is deliberately a SILENT fallback here, and it is not the whole answer:
+ * the control above the block still appears, still carries the change in green
+ * and red, and still has to be answered. So a suggestion that cannot be placed
+ * in the prose is not lost, it is only not underlined — a reader sees the
+ * change and the words it is about, in the right paragraph, in the control.
+ * Making the prose lie about which characters are leaving, in order to have
+ * drawn something, is the one outcome not on the table.
+ *
+ * The door refuses most of what would land here before it is ever stored — a
+ * proposal must quote prose with no LaTeX special in it — so this is the second
+ * fence rather than the first. What still reaches it is the narrow set of
+ * things that are markup-free in the source and still derived on screen: a
+ * smart quote, an em dash written as three hyphens.
+ *
+ * ## The added text is drawn once, in the run the change STARTS in
+ *
+ * A suggestion can span several runs — a paragraph's words and the hard wraps
+ * between them are one run, but a citation in the middle of a sentence breaks
+ * it into two. Each run strikes through its own share of what is leaving, and
+ * only the first one carries what arrives. Putting the replacement in every run
+ * it touched would draw it two and three times, which reads as a suggestion to
+ * repeat the sentence.
+ */
+function withProposals(run: Run, proposals: readonly Proposal[]): ReactNode | null {
+  if (!proposals.length) return null
+
+  /*
+   * The pieces have to still add up to what is on screen.
+   *
+   * `stripPin` is the one place in this file where text is dropped from a run
+   * AFTER `coalesce` recorded the pieces it was built from, so a stripped run's
+   * pieces are longer than its text and every offset computed through them
+   * lands short by the length of the pin. `place` is protected from that by
+   * `stripPin` marking the run untypeable; nothing marks it undrawable, and a
+   * suggestion drawn one character to the left is exactly the quiet wrongness
+   * this whole feature is supposed to remove. So the invariant is checked here
+   * rather than a flag being trusted to have been set.
+   */
+  let rendered = 0
+  for (const piece of run.pieces) rendered += piece.text.length
+  if (rendered !== run.text.length) return null
+
+  const here: { at: number; upto: number; proposal: Proposal }[] = []
+  for (const proposal of proposals) {
+    /* Touching is not overlapping, exactly as `isMarked` has it: a suggestion
+       that ends where this run begins is about the run before it. An insertion
+       — `from === to` — is the exception, and it belongs to the run it sits
+       inside rather than to neither. */
+    const insertion = proposal.from === proposal.to
+    const touches = insertion
+      ? proposal.from >= run.srcStart && proposal.from <= run.srcEnd
+      : run.srcStart < proposal.to && proposal.from < run.srcEnd
+    if (!touches) continue
+    const where = renderedRange(run.pieces, proposal.from, proposal.to)
+    if ('why' in where) continue
+    here.push({ ...where, proposal })
+  }
+  if (!here.length) return null
+
+  here.sort((a, b) => a.at - b.at || a.upto - b.upto)
+
+  const out: ReactNode[] = []
+  let cursor = 0
+  for (const { at, upto, proposal } of here) {
+    /*
+     * Two suggestions about the same words cannot both be drawn.
+     *
+     * They can exist — the door files them independently, and only ACCEPTING
+     * one drops the other. Drawn on top of each other they would produce a
+     * span inside a span with two strike-throughs and two replacements, which
+     * says nothing true about either. The second is skipped in the prose; its
+     * control is still above the block, so it is still answerable.
+     */
+    if (at < cursor) continue
+    if (at > cursor) out.push(<span key={`t${cursor}`}>{run.text.slice(cursor, at)}</span>)
+    const startsHere = proposal.from >= run.srcStart && proposal.from < run.srcEnd
+    out.push(
+      <Change
+        key={proposal.id}
+        was={run.text.slice(at, upto)}
+        /* Only the run the change starts in carries what arrives. Elsewhere the
+           replacement is the empty string, which `diffWords` renders as the
+           removal alone — the honest picture of "this part of it leaves". */
+        now={startsHere ? proposal.text : ''}
+      />,
+    )
+    cursor = upto
+  }
+  if (cursor < run.text.length) out.push(<span key={`t${cursor}`}>{run.text.slice(cursor)}</span>)
+  return <>{out}</>
+}
+
 function styled(
   segment: Run,
   key: string,
   mark: { from: number; to: number } | null,
   typing: Typing | null,
+  proposals: readonly Proposal[],
 ): ReactNode {
-  let node: ReactNode = segment.text
+  const proposed = withProposals(segment, proposals)
+  let node: ReactNode = proposed ?? segment.text
   for (const style of NESTING) {
     if (!segment.styles.includes(style)) continue
     const spec = INLINE[style]
@@ -375,7 +483,17 @@ function styled(
    * hard wraps have been collapsed is not one-for-one with its source and is
    * still perfectly safe to write back, piece by piece.
    */
-  const editable = typing !== null && segment.typeable
+  /*
+   * And NOT while a suggested change is drawn in it.
+   *
+   * A `contenteditable` span holding `<del>` and `<ins>` elements is a span
+   * whose `textContent` is the old text and the new text run together — so a
+   * reader who typed one letter into it would commit a sentence containing
+   * both, and `narrow` would faithfully compute the range for it. The run is
+   * also, and more simply, not a thing to type into: it is a question waiting
+   * for an answer, and the answer is the control above the block.
+   */
+  const editable = typing !== null && segment.typeable && proposed === null
   /*
    * Whether this run is worth saying anything about when it refuses.
    *
@@ -566,7 +684,14 @@ export function plain(segments: readonly Segment[]): string {
 export function Segments({ segments }: { segments: readonly Segment[] }) {
   const mark = useContext(Marked)
   const typing = useContext(Typed)
-  return <>{coalesce(withoutNotes(segments)).map((s, i) => styled(stripPin(s), String(i), mark, typing))}</>
+  const proposals = useContext(Proposed)
+  return (
+    <>
+      {coalesce(withoutNotes(segments)).map((s, i) =>
+        styled(stripPin(s), String(i), mark, typing, proposals),
+      )}
+    </>
+  )
 }
 
 /**

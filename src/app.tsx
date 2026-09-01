@@ -2,6 +2,8 @@ import type { Passage as WirePassage } from 'roadmap-module-protocol'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import type { Paper } from '../store.ts'
+import { standingIn } from './api.ts'
+import { autoApproveKey, autoApproveWas, rememberAutoApprove } from './remembered.ts'
 import { AskPopover } from './reader/ask.tsx'
 import { anchorId } from './reader/blocks.tsx'
 import { paginate, pageOf, visible } from './reader/pages.ts'
@@ -51,7 +53,21 @@ import { useSelection } from './use-selection.ts'
 const FRAMED = typeof window !== 'undefined' && window.parent !== window
 
 export function App() {
-  const { sight, said, setSaid, resize, point, pointed, goto, start, correct } = usePaper(FRAMED)
+  const {
+    sight,
+    said,
+    setSaid,
+    resize,
+    point,
+    pointed,
+    goto,
+    start,
+    correct,
+    proposals,
+    answerOne,
+    acceptAll,
+    busy,
+  } = usePaper(FRAMED)
   const root = useRef<HTMLElement | null>(null)
   /**
    * A walk asked for from outside, and nothing else.
@@ -309,6 +325,122 @@ export function App() {
     [editing, correct, setSaid],
   )
 
+  /**
+   * Whether a suggested change lands the moment it arrives, remembered per paper.
+   *
+   * ## Read as state with an initialiser, and re-read when the paper changes
+   *
+   * The value is per project and per epic — see `remembered.ts` for why the
+   * pair and not the slug — so it cannot be read once at mount: the epic
+   * changes under this component while it stays mounted, and a tick carried
+   * from one paper to the next would be a reader being told they had agreed to
+   * something about a document they have not seen.
+   *
+   * The re-read is a layout effect keyed on the same epic the pen is dropped
+   * on, so the two happen together: a new paper arrives with typing off and
+   * with whatever this reader last said about THAT paper.
+   *
+   * Unlike the pen, it is not simply reset. A tick that forgot itself on every
+   * navigation would be a setting in name only, and the whole reason it is
+   * written down is that somebody working alongside an agent should not have to
+   * re-state it every time they look at something else.
+   */
+  const settingKey = autoApproveKey(standingIn(), epic)
+  const [auto, setAuto] = useState(false)
+  useLayoutEffect(() => {
+    setAuto(autoApproveWas(settingKey))
+  }, [settingKey])
+
+  const changeAuto = useCallback(
+    (on: boolean) => {
+      setAuto(on)
+      rememberAutoApprove(settingKey, on)
+    },
+    [settingKey],
+  )
+
+  /**
+   * With the tick on, the page answers a suggestion the way a finger would.
+   *
+   * ## This is the whole of the enforcement, and it is deliberately in the page
+   *
+   * There is no server-side auto-approve. The door that applies a change
+   * demands this process's ticket, and the ticket is printed into this document
+   * and returned by nothing on the MCP door — so the only thing on this machine
+   * that can accept a suggestion without being asked is the page a person is
+   * looking at, with a tick that person set. A flag on the server would be a
+   * flag anything able to reach the server could set, which is the same as
+   * having no approval at all. The essay is on `/api/proposal`.
+   *
+   * ## Only ones that arrived while it was on
+   *
+   * `acceptAll` is deliberately not what this calls, and the difference is not
+   * cosmetic. Ticking the box must not sweep up the four suggestions already
+   * sitting on the page unanswered: those were shown to somebody, who did not
+   * answer them, and a tick that applied them retroactively would write four
+   * changes as the side effect of setting a preference. So the ids present at
+   * the moment the tick goes on are remembered as already-seen, and only what
+   * arrives afterwards is applied.
+   *
+   * One at a time, because the door rebases what is left after each write —
+   * two accepts racing against the same hash means one is refused as stale for
+   * no reason but the ordering of two fetches.
+   */
+  const seen = useRef<Set<string>>(new Set())
+  const applying = useRef(false)
+  useEffect(() => {
+    if (!auto) {
+      /* Off: every id currently waiting is forgotten, so that turning it back
+         on later starts from what is on screen THEN rather than from a set
+         recorded in a session the reader may not remember. */
+      seen.current = new Set()
+      return
+    }
+    if (applying.current) return
+    const fresh = proposals.filter((p) => !seen.current.has(p.id))
+    if (!fresh.length) {
+      /* Nothing new. The set is rebuilt rather than added to, so ids that have
+         been answered and are gone do not accumulate for the life of the page. */
+      seen.current = new Set(proposals.map((p) => p.id))
+      return
+    }
+    applying.current = true
+    void (async () => {
+      try {
+        for (const one of fresh) {
+          seen.current.add(one.id)
+          await answerOne(one.id, 'accept')
+        }
+      } finally {
+        applying.current = false
+      }
+    })()
+  }, [auto, proposals, answerOne])
+
+  /*
+   * The moment the tick goes ON, everything already waiting counts as seen.
+   *
+   * A layout effect so it runs before the effect above can look at the list —
+   * otherwise turning the tick on would apply the backlog, which is exactly
+   * what the paragraph on `seen` says must not happen.
+   */
+  const wasAuto = useRef(false)
+  useLayoutEffect(() => {
+    if (auto && !wasAuto.current) seen.current = new Set(proposals.map((p) => p.id))
+    wasAuto.current = auto
+    /* `proposals` is read and deliberately not depended on: this fires on the
+       TRANSITION of the tick, and re-running it whenever the list changed would
+       mark every newly arrived suggestion as seen, which is the feature turned
+       off by accident. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto])
+
+  /** What the floating controls do, assembled once for every block on the page. */
+  const answering = useMemo(
+    () => ({ decide: (id: string, decision: 'accept' | 'reject') => void answerOne(id, decision), acceptAll: () => void acceptAll(), busy }),
+    [answerOne, acceptAll, busy],
+  )
+
   /*
    * Re-measure when the container is resized, and after every paint that could have
    * changed the height.
@@ -472,6 +604,10 @@ export function App() {
             onSheet={setSheet}
             pen={pen}
             onPen={setEditing}
+            proposals={proposals}
+            answering={answering}
+            auto={auto}
+            onAuto={changeAuto}
           />
         ) : (
           <Screen sight={sight} onStart={(epic) => void start(epic)} />

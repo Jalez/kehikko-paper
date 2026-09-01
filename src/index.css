@@ -98,6 +98,13 @@
   --mark: oklch(0.62 0.12 75);
   --code-bg: oklch(0 0 0 / 5%);
 
+  /* What leaves and what arrives in a suggested change. Not pencils — see the
+     essay on `.proposed-out`. The green is pulled toward teal and the red
+     toward crimson rather than being the pure hues, because the pure pair on a
+     warm sheet reads as a warning rather than as a comparison. */
+  --gone: oklch(0.55 0.18 22);
+  --arrived: oklch(0.52 0.14 152);
+
   /* shadcn's sidebar tokens. Its own, so the sections panel is the same control
      here that it is everywhere else on the canvas, and separate from `--card`
      so a panel beside the paper can be told from a panel on top of it. */
@@ -138,6 +145,11 @@
     --mark: oklch(0.78 0.12 80);
     --code-bg: oklch(1 0 0 / 8%);
 
+    /* Lifted in dark, like every other hue here: the same chroma against a dark
+       sheet is a colour nobody can see the difference between. */
+    --gone: oklch(0.7 0.16 22);
+    --arrived: oklch(0.72 0.13 152);
+
     --sidebar: oklch(0.205 0 0);
     --sidebar-foreground: oklch(0.985 0 0);
     --sidebar-accent: oklch(0.269 0 0);
@@ -169,6 +181,11 @@
   --pencil: oklch(0.72 0.13 265);
   --mark: oklch(0.78 0.12 80);
   --code-bg: oklch(1 0 0 / 8%);
+
+  /* Lifted in dark, like every other hue here: the same chroma against a dark
+     sheet is a colour nobody can see the difference between. */
+  --gone: oklch(0.7 0.16 22);
+  --arrived: oklch(0.72 0.13 152);
 
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
@@ -386,6 +403,130 @@
 
   .not-typeable {
     cursor: not-allowed;
+  }
+
+  /* ---- A change somebody has suggested ---------------------------------- */
+
+  /*
+   * Green for what arrives and red for what leaves, which is the one convention
+   * in this area that a reader already knows.
+   *
+   * ## A third and fourth hue, and why the page's own rule survives it
+   *
+   * Every other colour here is one of the copy-editor's two pencils, and the
+   * rule stated where they are defined is that colour is never the only channel
+   * — because some readers do not have it.
+   *
+   * Two more are admitted because added and removed are not a matter of
+   * emphasis, they are the two halves of a comparison, and red against green is
+   * the notation a person has already learned from every diff they have read.
+   * Inventing a house convention would be this module being consistent with
+   * itself at the cost of being legible.
+   *
+   * The pairing rule is kept, at no cost, because the ELEMENTS carry the
+   * meaning: what leaves is a `<del>` and is struck through, what arrives is an
+   * `<ins>` and is underlined. Turn the colour off and the change still reads.
+   * Red and green are precisely the pair the commonest colour blindness cannot
+   * separate, which is why the strike-through is not decoration.
+   *
+   * Both are `color-mix`ed toward the surface they sit on rather than used at
+   * full strength, so a wash of them behind body type stays readable — the same
+   * treatment `.passage-mark` gets.
+   */
+  .proposed-out {
+    background-color: color-mix(in oklch, var(--gone) 20%, var(--paper));
+    color: color-mix(in oklch, var(--gone) 65%, var(--paper-foreground));
+    text-decoration-line: line-through;
+    text-decoration-thickness: 0.07em;
+    border-radius: 2px;
+    padding-inline: 0.05em;
+  }
+
+  .proposed-in {
+    background-color: color-mix(in oklch, var(--arrived) 20%, var(--paper));
+    color: color-mix(in oklch, var(--arrived) 65%, var(--paper-foreground));
+    text-decoration-line: underline;
+    text-decoration-thickness: 0.07em;
+    text-underline-offset: 0.18em;
+    border-radius: 2px;
+    padding-inline: 0.05em;
+  }
+
+  /*
+   * The floating control, undoing the page's own scaling for itself.
+   *
+   * `--counter-scale` is the reciprocal of the sheet's `transform: scale`,
+   * published by `paginated.tsx` on the sheet element. Multiplying by it leaves
+   * this box at a net scale of 1, so one CSS pixel here is one real pixel on
+   * screen at every container width — while the paper underneath goes on being a
+   * scaled A4 page, which is the whole point of the sheet.
+   *
+   * `--sheet-room` is the column's width in real pixels. Because the net scale
+   * is 1, a `max-width` against it is a bound in the units the screen is in,
+   * which is the only bound worth having here: at 220 pixels the sheet is 794
+   * units wide and 196 pixels wide, and a control bounded by the sheet would be
+   * four times too big for the container it is in.
+   *
+   * The transform origin is set in the component, at whichever corner the
+   * control is anchored by, so that growing it moves it away from the block it
+   * is about rather than over it.
+   */
+  .proposal-control {
+    transform: scale(var(--counter-scale, 1));
+    max-width: calc(var(--sheet-room, 320px) - 10px);
+    width: max-content;
+  }
+
+  .proposal-card {
+    background: var(--card);
+    color: var(--card-foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 2px 10px oklch(0 0 0 / 18%);
+    padding: 0.3rem 0.4rem;
+    /* Its own type size, in real pixels, because it is chrome and not the
+       document. Everything else inside the sheet is in `em` of the page. */
+    font-size: 0.7rem;
+    line-height: 1.35;
+    /* Never so narrow that Accept and Reject cannot sit beside each other, and
+       never wider than the column above allows. */
+    min-width: 132px;
+  }
+
+  .proposal-why {
+    color: var(--muted-foreground);
+    /* Two lines at most. The door bounds the sentence at 240 characters, and a
+       control that grew to five lines would cover the paragraph above the one
+       it is about as well as the one below it. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .proposal-diff {
+    margin-top: 0.15rem;
+    /* Wrapping, and scrolling only as a last resort. A long replacement inside
+       a 220-pixel container has to go somewhere, and the one place it must not
+       go is sideways past the edge of the container. */
+    overflow-wrap: anywhere;
+    max-height: 4.5rem;
+    overflow-y: auto;
+  }
+
+  /*
+   * Inside the card the diff is chrome rather than paper, so both hues mix
+   * toward the CARD instead of toward the sheet. Mixed toward the paper they
+   * would be a warm-tinted wash on a cool surface, which reads as a bug.
+   */
+  .proposal-card .proposed-out {
+    background-color: color-mix(in oklch, var(--gone) 22%, var(--card));
+    color: color-mix(in oklch, var(--gone) 70%, var(--card-foreground));
+  }
+
+  .proposal-card .proposed-in {
+    background-color: color-mix(in oklch, var(--arrived) 22%, var(--card));
+    color: color-mix(in oklch, var(--arrived) 70%, var(--card-foreground));
   }
 
   /* ---- The column the pages lie in ------------------------------------- */

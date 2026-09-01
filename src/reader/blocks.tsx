@@ -4,7 +4,9 @@ import type { Block } from '../../latex/parse.ts'
 import type { PlacedBlock } from '../../store.ts'
 import { apiUrl } from '../api.ts'
 import { cn } from '@/lib/utils.ts'
+import type { Proposal } from '../../latex/propose.ts'
 import { Marked, Segments, Typed, type Typing } from './segments.tsx'
+import { NO_PROPOSALS, ProposalControl, Proposed, type Answering } from './proposed.tsx'
 
 /**
  * Everything the paper needs in order to be typeable EXCEPT which file it is.
@@ -116,9 +118,46 @@ export interface BlockProps {
    * being a reading view stays true for them.
    */
   pen?: Pen | null
+  /**
+   * Everything suggested about THIS block's file that nobody has answered yet.
+   *
+   * Narrowed to the block here rather than by the caller, which is the opposite
+   * of what happens with `mark` and the difference is worth a line: a mark is
+   * one range and the caller can resolve it once, while proposals are a list
+   * that every block has to filter for itself anyway. Passing the whole list
+   * and narrowing here keeps one filter instead of one per sheet.
+   */
+  proposals?: readonly Proposal[]
+  /**
+   * How to answer one, and whether an answer is already in flight.
+   *
+   * Absent means the page did not wire the write path, which is what a test or
+   * any other caller of the reading view gets: the suggestions are still drawn
+   * into the prose, and there is no control offering to apply them.
+   */
+  answering?: Answering | null
+  /**
+   * Whether this block is the first one on its sheet.
+   *
+   * The control floats above the block, and above the first block of a sheet is
+   * outside the page box — which clips, deliberately, for the phantom-width
+   * reason `paginated.tsx` argues. So the first block puts its control below
+   * instead. Known from the packing rather than measured: a `getBoundingClient
+   * Rect` here would be a layout read this module does not otherwise take, and
+   * a rule nothing without a browser could test.
+   */
+  first?: boolean
 }
 
-export function BlockRow({ block, epic, mark = null, pen = null }: BlockProps) {
+export function BlockRow({
+  block,
+  epic,
+  mark = null,
+  pen = null,
+  proposals = NO_PROPOSALS,
+  answering = null,
+  first = false,
+}: BlockProps) {
   /*
    * Narrowed to this block before it is supplied. A block the mark does not
    * touch gets `null`, which is the same value every unmarked block gets, so
@@ -149,11 +188,35 @@ export function BlockRow({ block, epic, mark = null, pen = null }: BlockProps) {
     () => (pen ? { ...pen, file: block.file } : null),
     [pen, block.file],
   )
+  /*
+   * The suggestions about this block, narrowed once and memoised.
+   *
+   * Touching is not overlapping, the same rule `here` applies to the mark: a
+   * suggestion that ends exactly where this block begins is about the block
+   * before it. An INSERTION — `from === to` — has no width to overlap with, so
+   * it is admitted by its position, which is the only thing it has.
+   *
+   * `NO_PROPOSALS` when there are none, rather than a fresh `[]`, so the
+   * context value of the 2,437 blocks nothing is suggested about does not
+   * change identity every time one of them gains a suggestion.
+   */
+  const suggested = useMemo<readonly Proposal[]>(() => {
+    const mine = proposals.filter(
+      (p) =>
+        p.file === block.file &&
+        (p.from === p.to
+          ? p.from >= block.srcStart && p.from <= block.srcEnd
+          : block.srcStart < p.to && p.from < block.srcEnd),
+    )
+    return mine.length ? mine : NO_PROPOSALS
+  }, [proposals, block.file, block.srcStart, block.srcEnd])
+
   return (
     <div
       className="block-row group relative"
       data-block-id={anchorId(block.file, block.id)}
       data-marked={here ? '1' : undefined}
+      data-has-proposals={suggested.length ? String(suggested.length) : undefined}
     >
       <div
         aria-hidden
@@ -162,9 +225,27 @@ export function BlockRow({ block, epic, mark = null, pen = null }: BlockProps) {
       >
         <span className="gutter-mark">{GUTTER[block.kind]}</span>
       </div>
+      {/*
+        One control per suggestion, stacked, and never more than a few.
+        `MAX_PENDING` bounds the paper at 24 and two on one paragraph is already
+        unusual; stacking them is honest about there being two questions, where
+        one control listing both would make the reader answer them as a pair.
+      */}
+      {answering &&
+        suggested.map((proposal) => (
+          <ProposalControl
+            key={proposal.id}
+            proposal={proposal}
+            side={first ? 'below' : 'above'}
+            decide={answering.decide}
+            busy={answering.busy}
+          />
+        ))}
       <Marked.Provider value={here}>
         <Typed.Provider value={typing}>
-          <BlockBody block={block} epic={epic} />
+          <Proposed.Provider value={suggested}>
+            <BlockBody block={block} epic={epic} />
+          </Proposed.Provider>
         </Typed.Provider>
       </Marked.Provider>
     </div>

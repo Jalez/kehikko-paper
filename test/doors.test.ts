@@ -116,7 +116,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
    * forget to ask for is a ticket that protects nothing while looking like it
    * does, and nothing else on the page would ever show it.
    */
-  test.each(['/api/paper', '/api/edit'])('POST %s without the ticket is 403', (path) => {
+  test.each(['/api/paper', '/api/edit', '/api/proposal'])('POST %s without the ticket is 403', (path) => {
     const reply = answer('POST', path, new URLSearchParams(inProject(roadmap, 'epic=a-paper')), {
       file: 'main.tex',
       from: 0,
@@ -139,16 +139,37 @@ describe('the write paths are exactly two, and both are ticketed', () => {
     expect(reply?.status).toBe(403)
   })
 
-  test('the MCP door offers only tools that read', () => {
-    /* Unchanged, and it is the half of the old claim that is still true. An
-       agent editing a paper should be editing the `.tex` file with the tools it
-       already has, in a repository with a history. The page taking a
-       correction from the person reading it is not that. */
+  /*
+   * The claim this test makes has been NARROWED once, and the narrowing is the
+   * interesting part rather than the list.
+   *
+   * It used to say that every tool on the MCP door reads, and that was the
+   * whole of the answer to "can an agent change somebody's thesis through
+   * this". It is no longer true: `propose_edit` is there, and it is a write in
+   * the sense that it changes what this process is holding.
+   *
+   * What is still true, and is what actually protects the file, is that no tool
+   * on this door touches a `.tex`. A proposal sits in memory until a person
+   * looking at the paper presses Accept, and Accept is an HTTP POST carrying a
+   * ticket this door never emits. So the enumeration below is checked for two
+   * things: which tools exist, and — in `proposals.test.ts` — that proposing
+   * leaves the file byte-identical.
+   *
+   * A fourth tool appearing here fails this test, which is the point: whoever
+   * adds one has to come to this list and say whether it writes.
+   */
+  test('the MCP door offers these tools, and none of them touches a .tex', () => {
     const reply = post('/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' })
     const tools = ((reply?.body as { result: { tools: { name: string }[] } }).result.tools ?? []).map(
       (t) => t.name,
     )
-    expect(tools).toEqual(['list_papers', 'read_paper', 'read_source'])
+    expect(tools.sort()).toEqual([
+      'list_papers',
+      'list_proposals',
+      'propose_edit',
+      'read_paper',
+      'read_source',
+    ])
   })
 })
 

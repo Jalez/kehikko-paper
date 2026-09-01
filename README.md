@@ -241,6 +241,147 @@ point moves by the change in length, and this module does not move it. That is
 part of why the range written is narrowed to the characters that actually
 changed rather than to the whole span.
 
+### A change an agent suggests, approved where it is read
+
+An agent can now suggest a change to the prose, and the person reading the paper
+answers it. `propose_edit` on the MCP door takes the text to replace and the text
+to put there — not a byte range — and files the suggestion. **Nothing is written
+to the `.tex`.** The change is drawn into the paper where it happens, what leaves
+struck through in red and what arrives in green, with a small shadcn button group
+floating above the block: Accept, Reject.
+
+**A byte range is not something a person can check before approving it.** That is
+the whole reason the change is drawn in the prose and not listed in a panel. A
+panel saying "in `chapters/2_bridge.tex`, bytes 4120–4137, replace X with Y" makes
+the reader find the place themselves and then trust that the panel was talking
+about it, which is exactly what goes wrong when a program asks for approval it has
+not made checkable.
+
+**It is drawn twice, on purpose.** The same red and green appear in the floating
+control as well as in the prose. At 220 pixels the sheet is scaled to 0.247 and
+the body type draws at under four pixels: the inline diff is correctly placed and
+completely illegible. The control is counter-scaled — `--counter-scale` on the
+sheet is the reciprocal — so its copy is drawn at true size at every width, and at
+narrow widths it is the only readable one. The control sits entirely above the
+block it is about and never over it; a block at the top of a sheet puts it below
+instead, because above is outside the page box, which clips.
+
+**The diff is at token level and the write is at character level**, and the two
+are different jobs. `narrow` decides which bytes are replaced and works in
+characters, so an anchor in the rest of the sentence is left in bytes nothing
+touched. `diffWords` decides what is drawn and works in tokens, because a
+character-level diff of "market" becoming "farm" keeps `mark` and reports `et`
+out, `rm` in — minimal, true and unreadable.
+
+**Prose only, and it is checked against the text the agent quoted.** A proposal
+whose `find` or `replace` holds any of `\ { } $ & # ^ _ ~ %` is refused. That is
+deliberately stricter than the write path, which checks the bytes actually being
+replaced, and the reason is a case a test caught: `\autocite{jones}` becoming
+`\autocite{smith}` narrows to `jones` becoming `smith`, neither of which holds a
+special character. Those bytes are safe to write and the suggestion is still wrong
+to accept — those five characters render as part of `[jones]`, so there is no
+honest way to draw a change to them, and a suggestion this page cannot draw is one
+somebody is being asked to approve without seeing.
+
+#### Where a pending suggestion lives
+
+**In this process's memory, for as long as it runs.** Not in the page: an agent
+proposes over `/mcp`, which is a request to the server, so a page holding the list
+would never hear about one. Not on the disk either — whether `.kehikot/` is
+committed is a per-project setting in the host, so a `proposals.json` beside the
+paper would put a half-considered suggestion nobody accepted into the author's git
+history; and it is the SQLite work queue this module's extraction deliberately
+dropped, with a different file extension.
+
+The cost is stated rather than hidden: restart the server and every pending
+suggestion is gone. Nothing was written and nothing was destroyed — the paper is
+exactly as it was, which is the whole promise of a proposal — but an agent's work
+has to be done again. That is the same lifetime the write ticket has, for the same
+reason: a thing written down outlives the process that minted it.
+
+#### What stops an agent applying its own change
+
+**Two doors with different keys, and not a flag.** `propose_edit` is on `/mcp` and
+cannot write. Accepting is `POST /api/proposal`, which demands the ticket this
+process mints per run and prints into the page. The MCP door emits no ticket,
+holds no ticket, and has no tool that returns one.
+
+The limit is worth saying plainly, because a fence described as more than it is
+becomes decoration. This is not a boundary between a person and an agent. An agent
+with a shell on this machine can fetch `/app`, read the ticket out of it and post
+— and could equally have skipped all of it and written to the `.tex` with `sed`.
+What it guarantees is a property of the door this module OFFERS: an agent
+following that door cannot change a paper behind the back of the person reading
+it, and `guidance` in the manifest now tells every agent on the canvas so.
+
+There is deliberately **no server-side auto-approve**, for the same reason. A flag
+the server held would be a flag anything able to reach the server could set, and a
+caller that can set it has approved its own change on the reader's behalf.
+
+#### The Auto tick, and where it is remembered
+
+Beside the Edit checkbox, off by default, and independent of it — Edit is about
+whether *you* may type, and this is about what happens to somebody else's
+suggestion, which can arrive while a paper is being read rather than written. With
+it on, the PAGE presses Accept, with the ticket, exactly as a finger would.
+Ticking it does not sweep up suggestions already waiting: those were shown to
+somebody who did not answer them, and applying them retroactively would write
+changes as the side effect of setting a preference.
+
+It is remembered in **`localStorage`, keyed by project and epic**. Not
+`state.set`: that is per MODULE and this is a decision about one PAPER — a reader
+who agreed that an agent may rewrite this epic's paper has not agreed the same
+about the next one — and the unframed page, which this README treats as a
+first-class way to use the module, has no host to keep it. Not on the server,
+because a permission that travels in a git repository is a permission nobody
+granted. `localStorage` works here where it does not work for most modules for one
+specific reason: `manifest.ts` declares `storage: true` and this page therefore has
+a real origin. This is the first thing in the module that uses the storage it has
+been asking for.
+
+#### Two suggestions in one file
+
+Applying one moves every byte offset after it, so the second describes a place
+that no longer means what it meant, and the hash it carries no longer matches the
+file. The answer is **rebase**, in `latex/propose.ts`: a suggestion that does not
+overlap the applied range is shifted by the change in length and restamped with
+the file's new hash, which is not a guess but the same arithmetic the file itself
+underwent. A suggestion that DOES overlap is dropped and said out loud, because it
+described bytes that have been rewritten and there is nowhere honest to put it.
+
+The rebase runs after a typed correction too, not only after an accept: a reader
+fixing a typo two paragraphs above a pending suggestion has moved its bytes just
+as surely.
+
+Accept-all sits beside the count in the chrome row and applies them oldest first,
+one at a time so each is measured against the file the one before it produced. It
+is deliberately **not** in the floating control: a button meaning "and the other
+four as well" repeated above each of five changes is five controls each claiming
+to speak for all of them, and pressing the one above the paragraph you happened to
+be reading writes four changes you have not scrolled to.
+
+Rejecting opens no file at all. There is no path from that branch of the door to a
+filesystem call, and `test/proposals.test.ts` asserts the bytes are identical.
+
+#### What approval does not change
+
+**Anchors still move.** An accepted suggestion writes bytes exactly as a typed
+correction does, so a note or a passage below it shifts by the same amount and
+nothing here migrates it — the section above says so and it is still true.
+Approval changes only who decided. What it does add is that the arithmetic such a
+migration would need is now written down, pure and tested, in `rebase`; it is
+applied to this module's own pending suggestions, which it is the only writer of,
+and to nothing belonging to anybody else.
+
+#### What no test here can prove
+
+happy-dom lays nothing out, so the tests cover which characters are marked, which
+runs refuse the caret, which side the control takes and what the buttons say —
+and cannot cover whether the counter-scaled control is actually legible at 220
+pixels, whether the wrapped button group looks like one control, or whether the
+control clears the paragraph it is about once real type is laid out. Those are
+browser facts and they are stated as unchecked rather than assumed.
+
 ### What was removed, and where it went
 
 **The margin rail is gone**, and so are the pins that anchored it. `notes.ts`
@@ -276,17 +417,25 @@ two-line addition named.
 
 ## What it does not do, on purpose
 
-**It writes two things and no others.** The program this was extracted from was a
+**It writes three things and no others.** The program this was extracted from was a
 workbench: a `POST /api/edits` that rewrote the author's thesis, a SQLite work
 queue, a margin-notice thread, and an MCP surface of eleven tools, seven of which
-mutated. Two doors here write — `POST /api/paper`, which starts a paper where
-there is none and refuses if anything is already there, and `POST /api/edit`,
-which replaces one byte range in one file the paper itself names. There is no
-create, no delete, no rename, no move, no undo table and no queue.
+mutated. Three doors here write — `POST /api/paper`, which starts a paper where
+there is none and refuses if anything is already there, `POST /api/edit`, which
+replaces one byte range in one file the paper itself names, and
+`POST /api/proposal`, which accepts or rejects a change somebody has suggested.
+The third is a decision rather than a new way of writing: accepting one goes
+through the same `writeRange` as a typed correction, with the same hash check and
+the same refusals. There is still no create, no delete, no rename, no move, no
+undo table and no queue.
 
-The MCP door is unchanged and every tool on it reads. An agent editing a paper
-should be editing the `.tex` with the tools it already has, in a repository with
-a history; a person fixing a sentence in front of them is not that.
+**One tool on the MCP door is not a read, and it writes nothing.** `propose_edit`
+puts a change in front of the person reading the paper. It touches no `.tex`: the
+paper is unchanged until somebody presses Accept, and Accept is an HTTP POST
+carrying this process's ticket, which the MCP door neither emits nor can be asked
+for. For markup, a citation, a heading or the structure of a document there is
+still no tool at all, and there should not be — an agent changing those should be
+editing the `.tex` with the tools it already has, in a repository with a history.
 
 That is not only scope. The old program had `app.use(cors())` — no options, wide
 open — in front of its write path, so any page in any tab could read the origin
@@ -398,7 +547,9 @@ below.
 | `/api/paper?epic=…`               | one paper, parsed, chapters folded in |
 | `/api/source?epic=…&file=…`       | the raw `.tex` of one file the paper names |
 | `/api/figure?epic=…&file=…`       | one image the paper names — bytes, not JSON |
-| `/mcp`                            | `list_papers`, `read_paper`, `read_source` |
+| `/api/proposals?epic=…`           | the changes suggested about one paper that nobody has answered — a read, and ungated like the others |
+| `/api/proposal` (POST)            | accept or reject one. Ticketed; accepting is `writeRange` |
+| `/mcp`                            | `list_papers`, `read_paper`, `read_source`, `propose_edit`, `list_proposals` |
 
 All of it is middleware in front of the one Vite server. A module is one origin
 or it is nothing — and two ports is exactly where the wide-open `cors()` in the
@@ -410,21 +561,26 @@ program this replaces came from.
 manifest.ts     what a host reads, and the essays on storage and the protocol
 doors.ts        every door but the page, as one function with no socket
 store.ts        the papers directory, the two fences, \include folded in
+proposals.ts    the suggestions nobody has answered, and why they live in memory
 latex/parse.ts  LaTeX -> source-mapped blocks (carried over; see its own header)
+latex/edit.ts   a typed change -> a byte range, and a byte range -> a place on screen
+latex/propose.ts a quoted sentence -> a proposal, and what an applied edit does to one
+latex/diff.ts   the picture of a change, in tokens rather than characters
 page/           the document shell, and nothing drawn in it
 src/
   main.tsx         mounts React, seeds the theme, imports the mailbox for effect
   app.tsx          the screens and the goto answer
   use-paper.ts     the ONE place the wire and the papers meet
   use-selection.ts what is highlighted, and the open question about publishing it
+  remembered.ts    the one preference this page keeps, and where it keeps it
   index.css        the theme, the dark variant, the sheet, the scroll column
   reader/          pages.ts (the A4 page box and pure pagination),
                    paginated.tsx (the scrolling column and the sections),
-                   blocks.tsx (the gutter), segments.tsx, ask.tsx
+                   blocks.tsx (the gutter), segments.tsx, proposed.tsx, ask.tsx
   lib/             selection.ts (a highlight -> a source range), utils.ts
-  components/ui    shadcn's button, badge and sidebar
+  components/ui    shadcn's button, badge, button group and sidebar
 wire/           the mailbox and the bridge, copied from References and Journeys
-test/           parse, store, doors, wire, reader — 134 tests, no browser needed
+test/           parse, store, doors, wire, reader, proposals — 348 tests, no browser needed
 ```
 
 `src/reader/` knows about LaTeX and nothing about the wire. `wire/` knows about

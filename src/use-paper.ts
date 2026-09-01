@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { connect, type Connection } from 'roadmap-module-protocol/client'
 
+import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { json, post, standIn, standingIn } from './api.ts'
 
@@ -97,6 +98,18 @@ export type Sight =
 export type GotoHandler = (goto: Goto, answer: (found: boolean, why?: string) => void) => void
 
 const ID = 'roadmap.paper'
+
+/**
+ * How often the page asks what has been suggested about the paper it is showing.
+ *
+ * Four seconds, and the number is a judgement rather than a measurement. An
+ * agent proposing a change is not in a hurry — it has just finished reading a
+ * paper — and a person who has one arrive within four seconds of it being made
+ * experiences it as immediate. Below about a second this would be a program
+ * polling a loopback door faster than anybody can read a sentence; above about
+ * ten the feature stops feeling like a conversation.
+ */
+const PROPOSAL_POLL_MS = 4000
 
 /**
  * Which project an unframed page was told to stand in.
@@ -553,8 +566,13 @@ export function usePaper(framed: boolean) {
       if (!was) return `This paper does not name a file called “${edit.file}”.`
       try {
         const body = await post('/api/edit', { epic: paper.epic }, { ...edit, was })
+        /* A write moves every pending suggestion's offsets, and the door rebases
+           them in the same breath and sends them back — so the page never holds
+           a list measured against a file it has stopped believing in. */
+        if (Array.isArray(body.proposals)) setProposals(body.proposals as Proposal[])
         if (body.ok === true && body.paper) {
           setSight({ at: 'reading', paper: body.paper as Paper })
+          if (body.said) setSaid(String(body.said))
           return null
         }
         if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
@@ -565,6 +583,141 @@ export function usePaper(framed: boolean) {
     },
     [],
   )
+
+  /**
+   * What has been suggested about the paper on screen, and nobody has answered.
+   *
+   * ## Polled, and the reason there is no push
+   *
+   * An agent proposes over `/mcp`, which is a request to the SERVER. There is no
+   * channel from the server to this page: `answer()` returns a status and a
+   * document, `vite.config.ts` adapts one request to one response, and adding
+   * an event stream would mean this module holding a socket open per reader for
+   * the sake of a list that changes a few times an hour. So the page asks.
+   *
+   * Every four seconds, and only while the document is visible — a container
+   * scrolled off a canvas, or a tab in the background, is not a reader waiting
+   * for an answer, and a poll that ran there would be this module spending
+   * somebody's battery on a paper nobody is looking at. It resumes on
+   * `visibilitychange`, immediately rather than after the next interval, so
+   * coming back to the tab does not mean waiting.
+   *
+   * The read is ungated and tiny — an epic, a project, and a list that is
+   * almost always empty — which is what makes polling an acceptable answer here
+   * rather than a compromise. What it costs when nothing is happening is one
+   * request every four seconds returning `{"ok":true,"proposals":[]}`.
+   */
+  const [proposals, setProposals] = useState<Proposal[]>([])
+  const epicOnScreen = sight.at === 'reading' ? sight.paper.epic : null
+
+  useEffect(() => {
+    if (epicOnScreen === null) {
+      setProposals([])
+      return
+    }
+    let stopped = false
+    const ask = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      void json('/api/proposals', { epic: epicOnScreen })
+        .then((body) => {
+          /* Dropped if the epic changed while this was in flight. A list of
+             suggestions about the previous paper, drawn against this one's byte
+             offsets, would put a green and red change in the middle of a
+             paragraph it has nothing to do with. */
+          if (stopped) return
+          if (Array.isArray(body.proposals)) setProposals(body.proposals as Proposal[])
+        })
+        .catch(() => {
+          /* Swallowed, like `point`'s refusal and for the same reason: the
+             paper on screen is unaffected, and "the suggestion list could not
+             be fetched" is not something the person reading can act on. The
+             next tick tries again. */
+        })
+    }
+    ask()
+    const every = setInterval(ask, PROPOSAL_POLL_MS)
+    const woke = () => ask()
+    document.addEventListener('visibilitychange', woke)
+    return () => {
+      stopped = true
+      clearInterval(every)
+      document.removeEventListener('visibilitychange', woke)
+    }
+  }, [epicOnScreen])
+
+  /**
+   * Answer one suggestion.
+   *
+   * The door does the deciding — see the essay on `/api/proposal` — and this is
+   * the wiring. What it adds is the ticket, which `post` puts on every write,
+   * and that is the whole of why an agent cannot come this way: the ticket is
+   * printed into this document and the MCP door has no tool that returns one.
+   *
+   * `busy` is a ref rather than state read here, because two presses of Accept
+   * on the same suggestion inside one round trip would send two writes, and the
+   * second would be refused as stale — a confusing sentence about a thing the
+   * reader did not do wrong.
+   */
+  const deciding = useRef(false)
+  const [busy, setBusy] = useState(false)
+
+  const answerOne = useCallback(async (id: string, decision: 'accept' | 'reject'): Promise<void> => {
+    const paper = showing.current
+    if (!paper || deciding.current) return
+    deciding.current = true
+    setBusy(true)
+    try {
+      const body = await post('/api/proposal', { epic: paper.epic }, { id, decision })
+      if (Array.isArray(body.proposals)) setProposals(body.proposals as Proposal[])
+      if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
+      if (body.ok === true) {
+        setSaid(String(body.said ?? ''))
+        return
+      }
+      setSaid(String(body.error ?? 'That suggestion was not answered.'))
+    } catch (e) {
+      setSaid(`That suggestion could not be answered: ${(e as Error).message}`)
+    } finally {
+      deciding.current = false
+      setBusy(false)
+    }
+  }, [])
+
+  /**
+   * Accept everything waiting, oldest first.
+   *
+   * Sequential and not concurrent, and the order is the oldest first rather
+   * than any other. Each accept re-reads the paper and rebases what is left, so
+   * the second request already describes the file the first one produced —
+   * which is the property that makes this safe, and the property that would be
+   * destroyed by sending them all at once: two writes racing against the same
+   * hash means one of them is refused as stale for no reason but the ordering
+   * of two `fetch` calls.
+   *
+   * Oldest first because that is the order they are drawn in, and a control
+   * that applied them in a different order from the one on screen would produce
+   * a paper the reader cannot reconcile with what they just read.
+   *
+   * Reads the list off a ref rather than the state it closes over, so the loop
+   * sees what the last accept left behind rather than what was pending when the
+   * button was pressed. A suggestion dropped by an earlier accept — because it
+   * covered the same words — must not then be sent.
+   */
+  const waiting = useRef<Proposal[]>([])
+  waiting.current = proposals
+
+  const acceptAll = useCallback(async (): Promise<void> => {
+    /* A snapshot of the ids, taken once. `waiting.current` is re-read inside
+       the loop to see whether each is still there, but the SET being answered
+       is the one on screen when the button was pressed — otherwise a suggestion
+       filed by an agent midway through would be accepted without ever having
+       been shown to anybody. */
+    const asked = waiting.current.map((p) => p.id)
+    for (const id of asked) {
+      if (!waiting.current.some((p) => p.id === id)) continue
+      await answerOne(id, 'accept')
+    }
+  }, [answerOne])
 
   /**
    * Say how tall this page would like its frame to be.
@@ -606,8 +759,22 @@ export function usePaper(framed: boolean) {
   }, [])
 
   return useMemo(
-    () => ({ sight, said, setSaid, resize, point, pointed, goto, start, correct }),
-    [sight, said, resize, point, pointed, start, correct],
+    () => ({
+      sight,
+      said,
+      setSaid,
+      resize,
+      point,
+      pointed,
+      goto,
+      start,
+      correct,
+      proposals,
+      answerOne,
+      acceptAll,
+      busy,
+    }),
+    [sight, said, resize, point, pointed, start, correct, proposals, answerOne, acceptAll, busy],
   )
 }
 

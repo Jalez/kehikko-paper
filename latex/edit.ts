@@ -415,3 +415,146 @@ export function onBoundary(bytes: Uint8Array, at: number): boolean {
   if (at === bytes.length) return true
   return (bytes[at]! & 0xc0) !== 0x80
 }
+
+/**
+ * How many UTF-16 units of `text` the first `bytes` bytes of it are.
+ *
+ * The inverse of `bytesOf`, and it refuses rather than rounds. A byte count
+ * that lands in the middle of a character — the second byte of an `ä`, or
+ * between the halves of a surrogate pair — does not name a place in the
+ * rendered text, and the only two things to do about it are to guess at the
+ * nearest boundary or to say so. It says so: this feeds the code that DRAWS a
+ * proposed change, and a drawing that snapped to the nearest character would
+ * paint the letter beside the one that is actually changing.
+ */
+function unitsIn(text: string, bytes: number): number | null {
+  if (bytes === 0) return 0
+  if (bytes < 0) return null
+  let seen = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    seen += code < 0x80 ? 1 : code < 0x800 ? 2 : code >= 0xd800 && code <= 0xdfff ? 2 : 3
+    /* A stop after the HIGH half of a pair is two bytes into a four-byte
+       character, which is exactly the cut `narrow` backs away from at the other
+       end of this journey. */
+    if (seen === bytes) return isHigh(code) ? null : i + 1
+    if (seen > bytes) return null
+  }
+  return null
+}
+
+/**
+ * A byte range of the file, found in the rendered text of one run.
+ *
+ * ## The inverse of `place`, and it is held to the same rule
+ *
+ * `place` turns "somebody typed here" into bytes. This turns "somebody proposed
+ * a change to these bytes" into a place in what is on screen, so the change can
+ * be drawn where it happens rather than described in a panel beside the paper.
+ *
+ * The honesty rule is identical and is not softened because this only draws.
+ * Inside a literal piece the mapping is exact, because those are the same
+ * characters. Inside a `gap` it snaps OUTWARD to the whole gap, for the same
+ * reason `place` does: the gap's rendered text is one space standing for a
+ * whole run of source whitespace, so there is no offset inside it that means
+ * anything, and the honest unit is all of it. Anything else refuses.
+ *
+ * The temptation to soften it is real and worth naming. A proposal overlapping
+ * `\autocite{jones}` COULD be drawn — strike the seven characters `[jones]` and
+ * put the new text beside them — and it would be a lie, because those are not
+ * the bytes being removed. A person approving that would be approving one thing
+ * having read another, which is the single failure this whole feature exists to
+ * prevent. Two doors upstream `sourceRefuses` already refuses to STORE such a
+ * proposal; this is the second fence, and it is here so that the drawing does
+ * not depend on the door having been right.
+ *
+ * The range is clamped to the run, so a proposal spanning three runs asks each
+ * of them separately and each answers about its own share.
+ */
+export function renderedRange(
+  pieces: readonly Piece[],
+  from: number,
+  to: number,
+): { at: number; upto: number } | { why: string } {
+  if (!pieces.length) return { why: 'There is nothing there to draw.' }
+  for (let i = 1; i < pieces.length; i++) {
+    if (pieces[i]!.srcStart !== pieces[i - 1]!.srcEnd) {
+      return { why: 'That run of text does not come from one unbroken piece of the file.' }
+    }
+  }
+
+  const starts: number[] = []
+  let rendered = 0
+  for (const piece of pieces) {
+    starts.push(rendered)
+    rendered += piece.text.length
+  }
+
+  const head = pieces[0]!
+  const tail = pieces[pieces.length - 1]!
+  const wantFrom = Math.max(from, head.srcStart)
+  const wantTo = Math.min(to, tail.srcEnd)
+  if (wantTo < wantFrom) return { why: 'That range is not in this run.' }
+
+  /*
+   * Which piece a byte offset belongs to, leaning the way `place` leans: the
+   * start of a range takes the piece beginning there and the end takes the
+   * piece ending there, so a range that stops exactly on a boundary is not
+   * widened over the piece on the far side of it for nothing.
+   */
+  const found = (offset: number, leaning: 'start' | 'end'): number => {
+    for (let i = pieces.length - 1; i >= 0; i--) {
+      const piece = pieces[i]!
+      if (
+        leaning === 'start'
+          ? offset >= piece.srcStart && offset < piece.srcEnd
+          : offset > piece.srcStart && offset <= piece.srcEnd
+      ) {
+        return i
+      }
+    }
+    return leaning === 'start' ? pieces.length - 1 : 0
+  }
+
+  const first = found(wantFrom, 'start')
+  const last = found(wantTo, 'end')
+
+  let at: number
+  const opening = pieces[first]!
+  if (opening.literal) {
+    const units = unitsIn(opening.text, wantFrom - opening.srcStart)
+    if (units === null) return { why: NOT_A_PLACE }
+    at = starts[first]! + units
+  } else if (opening.gap) {
+    at = starts[first]!
+  } else {
+    return { why: NOT_SOURCE }
+  }
+
+  let upto: number
+  const closing = pieces[last]!
+  if (closing.literal) {
+    const units = unitsIn(closing.text, wantTo - closing.srcStart)
+    if (units === null) return { why: NOT_A_PLACE }
+    upto = starts[last]! + units
+  } else if (closing.gap) {
+    upto = starts[last]! + closing.text.length
+  } else {
+    return { why: NOT_SOURCE }
+  }
+
+  /* Everything the range passes THROUGH, exactly as in `place`. A range with
+     honest ends and a citation in the middle would be drawn as a change to the
+     words either side of a citation that is also being replaced, with nothing
+     on screen saying so. */
+  for (let i = first + 1; i < last; i++) {
+    const piece = pieces[i]!
+    if (!piece.literal && !piece.gap) return { why: NOT_SOURCE }
+  }
+
+  if (upto < at) return { why: 'That range did not resolve to a place in this run.' }
+  return { at, upto }
+}
+
+const NOT_A_PLACE =
+  'That range begins or ends inside a character rather than between two, so there is no place on screen to draw it.'

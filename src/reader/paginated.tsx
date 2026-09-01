@@ -14,7 +14,9 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '@/components/ui/sidebar.tsx'
+import type { Proposal } from '../../latex/propose.ts'
 import { BlockRow, anchorId, type Pen } from './blocks.tsx'
+import { NO_PROPOSALS, type Answering } from './proposed.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
 
 /**
@@ -171,11 +173,38 @@ export interface PaginatedProps {
   pen?: Pen | null
   /** Turn typing on or off. Drawn as the one control beside the page readout. */
   onPen?: (on: boolean) => void
+  /** Every change suggested about this paper that nobody has answered yet. */
+  proposals?: readonly Proposal[]
+  /** How to answer one, or `null` for a view that only shows them. */
+  answering?: Answering | null
+  /**
+   * Whether a suggestion applies the moment it arrives, and how to change that.
+   *
+   * `undefined` for `onAuto` means the control is not drawn at all, which is
+   * what a caller that has not wired the write path gets \u2014 the same rule `onPen`
+   * already follows. `auto` is the state of the tick and is false by default,
+   * because a document that rewrites itself while somebody is reading it is a
+   * document nobody can leave open beside their work.
+   */
+  auto?: boolean
+  onAuto?: (on: boolean) => void
 }
 
 const CAVEAT = 'Page breaks are this reader\u2019s, not the PDF\u2019s.'
 
-export function PaginatedView({ paper, walk, mark, rootRef, onSheet, pen = null, onPen }: PaginatedProps) {
+export function PaginatedView({
+  paper,
+  walk,
+  mark,
+  rootRef,
+  onSheet,
+  pen = null,
+  onPen,
+  proposals = NO_PROPOSALS,
+  answering = null,
+  auto = false,
+  onAuto,
+}: PaginatedProps) {
   const pages = useMemo(() => paginate(paper.blocks), [paper.blocks])
   const count = Math.max(1, pages.length)
 
@@ -496,6 +525,89 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet, pen = null,
               Edit
             </label>
           )}
+          {/*
+            Whether a suggested change applies the moment it arrives.
+
+            ## Beside Edit, and independent of it
+
+            It sits next to the Edit tick because they are the two answers to
+            "how much may this page change the paper", and a reader looking for
+            one will look for the other in the same place. It is NOT gated on
+            Edit being on, and that is a decision rather than an oversight: Edit
+            is about whether YOU may type, and this is about what happens to
+            somebody else's suggestion. An agent can propose at any moment,
+            including while the paper is being read and not edited, and a
+            standing answer to "apply it straight away?" is a thing a person has
+            whether or not they are holding a pen.
+
+            ## Off by default, and it stays off until somebody says otherwise
+
+            The default is the state this module has always been in: nothing is
+            written that a person did not press a button for. Ticking it hands
+            an agent the ability to change a document while it is being read —
+            which is a reasonable thing to want when you are working WITH one,
+            and is not a thing to arrive at by accident.
+
+            The enforcement is not here and not on the server. There is no
+            server-side auto-approve flag at all, deliberately: what this tick
+            does is make the PAGE press Accept, with the ticket, the way a finger
+            would. See the essay on `/api/proposal`.
+          */}
+          {onAuto && (
+            <label className="flex min-w-0 shrink-0 items-center gap-1 text-[0.7rem] text-muted-foreground">
+              <input
+                type="checkbox"
+                className="size-3 accent-[var(--mark)]"
+                checked={auto}
+                onChange={(event) => onAuto(event.currentTarget.checked)}
+                data-auto-approve={auto ? '1' : '0'}
+                title={
+                  'Apply a suggested change as soon as it arrives, instead of showing it for approval. Off by '
+                  + 'default. With it off, a change is drawn into the prose in green and red where it happens and '
+                  + 'nothing is written until you press Accept. With it on, the change is written straight away '
+                  + 'and the paper is re-read — the same as if you had pressed Accept yourself.'
+                }
+              />
+              Auto
+            </label>
+          )}
+          {/*
+            What is waiting, and the one control that answers all of it.
+
+            `Accept all` is here rather than in the floating control above each
+            change, and the reason is that a button meaning "and the other four
+            as well" repeated above each of five changes is five controls each
+            claiming to speak for all of them — press the one above the
+            paragraph you happen to be reading and four changes you have not
+            scrolled to are written. It belongs with the COUNT, which is the
+            only place on this page that is about all of them at once.
+
+            It appears at two or more, because at one it is the Accept button
+            already floating over the change, in a worse place.
+          */}
+          {answering && proposals.length > 0 && (
+            <span className="flex min-w-0 shrink-0 items-center gap-1" data-pending-proposals={proposals.length}>
+              <span className="text-[0.7rem] text-[var(--mark)]">
+                {proposals.length} suggested
+              </span>
+              {proposals.length > 1 && (
+                <button
+                  type="button"
+                  className="rounded border px-1 text-[0.7rem] text-muted-foreground hover:bg-accent disabled:opacity-50"
+                  disabled={answering.busy}
+                  data-accept-all=""
+                  onClick={() => answering.acceptAll()}
+                  title={
+                    'Write every waiting change into the paper, oldest first. Each one is checked against the '
+                    + 'file as it stands after the one before it, so a suggestion covering words another has '
+                    + 'already rewritten is dropped rather than applied blindly.'
+                  }
+                >
+                  Accept all
+                </button>
+              )}
+            </span>
+          )}
           {/* A `span` in a badge and not a button. It says where the reader is;
               there is nothing here to press. */}
           <Badge
@@ -576,6 +688,8 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet, pen = null,
                 blocks={blocks}
                 mark={mark}
                 pen={pen}
+                proposals={proposals}
+                answering={answering}
                 scale={scale}
                 room={room}
                 keep={(el) => {
@@ -607,6 +721,8 @@ function SheetPage({
   blocks,
   mark,
   pen,
+  proposals,
+  answering,
   scale,
   room,
   keep,
@@ -617,6 +733,8 @@ function SheetPage({
   blocks: readonly PlacedBlock[]
   mark: { file: string; id: string; from: number; to: number } | null
   pen: Pen | null
+  proposals: readonly Proposal[]
+  answering: Answering | null
   scale: number
   room: number
   keep: (el: HTMLElement | null) => void
@@ -635,6 +753,27 @@ function SheetPage({
         transform: `scale(${scale})`,
         transformOrigin: 'top left',
         marginLeft: left,
+        /*
+         * The reciprocal of the sheet's scale, and the room the column has, in
+         * real pixels — both published as custom properties so that anything
+         * drawn INSIDE the sheet that is a control rather than a document can
+         * undo the page's scaling for itself.
+         *
+         * A page is scaled and a button is not. Everything on an A4 sheet is
+         * expressed in the sheet's own units on purpose — the essay at the top
+         * of this file is about why — and the whole point of that is that the
+         * type gets smaller when the container does. A control has the opposite
+         * requirement: at 220 pixels the scale is 0.247 and a button drawn in
+         * sheet units would be six pixels tall and unpressable, which is the
+         * same failure as the gutter tag that used to vanish at a narrow width.
+         *
+         * Published as variables rather than passed as props because what needs
+         * them is a floating control several components down, and every one in
+         * between would have to carry a number it has no other use for. CSS
+         * inheritance is the mechanism that already exists for exactly this.
+         */
+        ['--counter-scale' as string]: String(1 / scale),
+        ['--sheet-room' as string]: `${room}px`,
       }}
       aria-label={`Page ${index + 1} of ${count}`}
       /* Readable from the outside, because "is this page whole and in
@@ -661,11 +800,16 @@ function SheetPage({
           </p>
         </header>
       )}
-      {blocks.map((block) => (
+      {blocks.map((block, at) => (
         <BlockRow
           key={`${block.file}#${block.id}`}
           block={block}
           epic={paper.epic}
+          proposals={proposals}
+          answering={answering}
+          /* The first block on a sheet has no room above it inside the page
+             box, which clips. Its control goes below instead. See `BlockRow`. */
+          first={at === 0}
           /* Only where the block is in the marked file, so the range never
              means something in a chapter it was not measured against. */
           mark={mark && mark.file === block.file ? mark : null}

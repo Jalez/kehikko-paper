@@ -212,9 +212,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     'true. Read the relevant sections before changing behaviour: if a sentence in it describes ' +
     'what the code does, your change can make that sentence false, and the paper is then part of ' +
     'the work rather than documentation of it. Cite by section when you say a change follows from ' +
-    'the paper, so a reader can check you. This module reads the .tex files and takes typed corrections to ' +
-    'prose from the person reading it; it offers you no edit tool, so edit the .tex on disk with the tools you ' +
-    'already have. Never restate here what the paper already says, because two copies of an argument drift.',
+    'the paper, so a reader can check you. To change a sentence of PROSE, use propose_edit on this module\'s ' +
+    'MCP door: it draws the change into the paper in green and red where it happens and the person reading it ' +
+    'decides — nothing you can call writes to a .tex, so do not edit prose behind their back while they are ' +
+    'looking at it. For markup, a citation, a heading, a new section or the structure of the document, edit ' +
+    'the .tex on disk with the tools you already have; propose_edit refuses those. Never restate here what ' +
+    'the paper already says, because two copies of an argument drift.',
   entry: '/app',
   modes: [{ id: 'paper', label: 'Paper', scope: 'epic' }],
   mcp: {
