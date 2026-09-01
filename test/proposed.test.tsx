@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test'
-import { fireEvent, render } from '@testing-library/react'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 
 import { parseLatex } from '../latex/parse.ts'
 import type { Proposal } from '../latex/propose.ts'
@@ -12,11 +12,13 @@ import { PaginatedView } from '../src/reader/paginated.tsx'
  *
  * ## What this can prove, and what only a browser can
  *
- * happy-dom lays nothing out. It will not say whether the floating control
- * actually clears the paragraph it is about, what the counter-scale looks like
- * at 220 pixels, or whether a wrapped button group is still readable — those
- * are stated as unverified rather than pretended at, in the report and in the
- * README.
+ * happy-dom lays nothing out, and since the control became a popover it lays
+ * out even less that matters: Floating UI reads `getBoundingClientRect`, which
+ * here is all zeroes, so every rectangle it computes is a rectangle about
+ * nothing. Whether the card actually sits above the changed words, whether it
+ * flips at the top of the column, whether it hides when they scroll away, and
+ * whether the count fits beside the buttons at 220 pixels are all unverifiable
+ * here and are stated as unverified in the report and in the README.
  *
  * What it proves is the part that decides whether somebody approves a change
  * they did not read:
@@ -24,14 +26,33 @@ import { PaginatedView } from '../src/reader/paginated.tsx'
  *  - **Which characters are struck through and which are green.** Both are
  *    `<del>` and `<ins>` with `data-proposed`, so "the right words are marked"
  *    is a query rather than a claim.
+ *  - **That the words are marked ONCE**, in the prose, and that the card no
+ *    longer repeats them.
+ *  - **Which element the control was anchored to.** Not where it landed — that
+ *    needs layout — but which, and that is the whole of the owner's second
+ *    complaint. Radix renders its own anchor element only when it was NOT given
+ *    one, so "there is no anchor div in the block" is a positive statement that
+ *    the changed span was handed over instead.
  *  - **That a run under a suggestion cannot be typed into.** A
  *    `contenteditable` span containing a `<del>` and an `<ins>` has a
  *    `textContent` holding the old text and the new run together, and a
  *    correction committed out of it would splice both into the file.
  *  - **That a suggestion which cannot be placed honestly is not drawn in the
- *    prose at all**, and is still answerable, because the control is anchored
- *    to the block rather than to the run.
+ *    prose at all**, and is still answerable, because the control falls back to
+ *    the block.
+ *  - **That the two counts are one list.**
  *  - **That the control is offered only when the page wired one.**
+ *
+ * ## Everything the control renders is in a PORTAL
+ *
+ * `render`'s `container` is no longer where the card is: `PopoverContent` puts
+ * it at the end of `document.body`, which is the point of it — see
+ * `proposed.tsx`. So the queries here are split deliberately. `container` is
+ * the paper, `cards()` is the controls, and a query that used to find both by
+ * accident now has to say which it meant. `cleanup` after each test matters
+ * more than it did for the same reason: an unmounted render used to take its
+ * container with it and now would leave a card behind for the next test to
+ * count.
  *
  * ## The fixture is hard-wrapped and has a citation in it
  *
@@ -128,18 +149,43 @@ function draw(proposals: Proposal[], options: { wired?: boolean; pen?: boolean }
   return { ...wiring, ...rendered }
 }
 
+afterEach(cleanup)
+
 const out = (c: HTMLElement) => Array.from(c.querySelectorAll('[data-proposed="out"]')).map((e) => e.textContent)
 const arrived = (c: HTMLElement) => Array.from(c.querySelectorAll('[data-proposed="in"]')).map((e) => e.textContent)
+
+/** Every floating control on screen, wherever the portal put it. */
+const cards = () => Array.from(document.body.querySelectorAll<HTMLElement>('[data-proposal]'))
+/** What one control says about where in the paper it is: "2 of 3". */
+const counts = (c: HTMLElement) => c.querySelector('.proposal-count')!.getAttribute('data-proposal-count')
+/** The only one, when a test filed one suggestion. */
+const card = () => {
+  const all = cards()
+  if (all.length !== 1) throw new Error(`expected one control, found ${all.length}`)
+  return all[0]!
+}
 
 describe('the change is drawn where it happens', () => {
   test('what leaves is struck through and what arrives is green, at the right words', () => {
     const { container } = draw([about('tpyo', 'typo')])
-    /* Twice each: once in the prose where the change happens, and once in the
-       floating control — which is deliberate, because at 220 pixels the body
-       type draws at under four pixels and the control's copy is the only
-       readable one. See the essay in `proposed.tsx`. */
-    expect(out(container)).toEqual(['tpyo', 'tpyo'])
-    expect(arrived(container)).toEqual(['typo', 'typo'])
+    expect(out(container)).toEqual(['tpyo'])
+    expect(arrived(container)).toEqual(['typo'])
+  })
+
+  test('once, and not again in the control', () => {
+    /*
+     * It used to be drawn twice on purpose — the essay for that is in
+     * `proposed.tsx`, and it is now the essay for why it is not. The owner:
+     * "repeating the words that were changed there is redundant as they are
+     * also showed in the text itself." Asserted on the whole DOCUMENT rather
+     * than on `container`, because the control is portalled out of it and a
+     * query scoped to the paper would pass whatever the card did.
+     */
+    draw([about('tpyo', 'typo')])
+    expect(document.body.querySelectorAll('[data-proposed]')).toHaveLength(2)
+    expect(card().querySelector('[data-proposed]')).toBeNull()
+    /* And the sentence stays, which is the half of the card the owner kept. */
+    expect(card().querySelector('.proposal-why')!.textContent).toContain('spelled wrong')
   })
 
   test('the rest of the paragraph is untouched around it', () => {
@@ -159,7 +205,18 @@ describe('the change is drawn where it happens', () => {
        rendered space here, and the diff has to land on that space rather than
        on the letter beside it. */
     const { container } = draw([about('that the\nauthor wrapped', 'that the author has wrapped')])
-    expect(out(container).length).toBeGreaterThan(0)
+    /*
+     * What arrives, and nothing leaving. This assertion used to be the other
+     * way round and it was passing on the copy of the diff that lived in the
+     * control, which diffed the RAW source — where the author's newline is a
+     * character that has to leave, so there was a `<del>` for it. The prose
+     * copy diffs the rendered text, where the newline is already the space it
+     * draws as, and the change is then what it really is: the word "has",
+     * inserted, with nothing removed. Deleting the second copy made the two
+     * disagree out loud, which is the argument for having only one.
+     */
+    expect(arrived(container)).toEqual(['has '])
+    expect(out(container)).toEqual([])
     expect(container.textContent).toContain('has wrapped')
   })
 
@@ -195,13 +252,23 @@ describe('a change this reader cannot place honestly', () => {
     expect(container.textContent).toContain('[jones]')
   })
 
-  test('it is still answerable, because the control is anchored to the block', () => {
+  test('it is still answerable, and its control falls back to the block', () => {
     const { container } = draw([about('\\autocite{jones}', 'somebody else')])
-    const control = container.querySelector('[data-proposal]')
-    expect(control).not.toBeNull()
-    /* And the control carries the change, so the reader sees what they are
-       being asked about even though the prose could not show it in place. */
-    expect(control!.textContent).toContain('somebody else')
+    expect(cards()).toHaveLength(1)
+    /*
+     * The fallback IS the assertion. With a change drawn in the prose, the span
+     * is handed to Radix as a `virtualRef` and Radix renders no anchor element
+     * of its own; with nothing to point at, the anchor is a div covering the
+     * block, which is exactly where the control used to live for every
+     * suggestion. So an anchor div in the paper means "this one could not be
+     * placed", and its absence in the next test means "this one could".
+     */
+    const anchor = container.querySelector('[data-slot="popover-anchor"]')
+    expect(anchor).not.toBeNull()
+    expect(anchor!.closest('[data-has-proposals]')).not.toBeNull()
+    /* The card no longer repeats the change — see the essay — so what it can
+       still say about a suggestion it could not draw is the reason for it. */
+    expect(card().querySelector('.proposal-why')!.textContent).toContain('spelled wrong')
   })
 })
 
@@ -228,8 +295,8 @@ describe('typing and a pending change do not share a run', () => {
 
 describe('the control that answers it', () => {
   test('Accept and Reject are one group, and each says which it is', () => {
-    const { container } = draw([about('tpyo', 'typo')])
-    const group = container.querySelector('[data-slot="button-group"]')!
+    draw([about('tpyo', 'typo')])
+    const group = card().querySelector('[data-slot="button-group"]')!
     expect(group.getAttribute('role')).toBe('group')
     expect(group.getAttribute('aria-label')).toContain('spelled wrong')
     expect(Array.from(group.querySelectorAll('button')).map((b) => b.textContent)).toEqual([
@@ -239,8 +306,8 @@ describe('the control that answers it', () => {
   })
 
   test('pressing Accept says accept, and pressing Reject says reject', () => {
-    const { container, answered } = draw([about('tpyo', 'typo')])
-    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-slot="button-group"] button'))
+    const { answered } = draw([about('tpyo', 'typo')])
+    const buttons = Array.from(card().querySelectorAll<HTMLButtonElement>('[data-slot="button-group"] button'))
     fireEvent.click(buttons[0]!)
     fireEvent.click(buttons[1]!)
     expect(answered).toEqual([
@@ -250,19 +317,58 @@ describe('the control that answers it', () => {
   })
 
   test('it carries the reason, so the change is not approved on its own say-so', () => {
-    const { container } = draw([about('tpyo', 'typo', 'The author asked for this in review.')])
-    expect(container.querySelector('.proposal-why')!.textContent).toBe('The author asked for this in review.')
+    draw([about('tpyo', 'typo', 'The author asked for this in review.')])
+    expect(card().querySelector('.proposal-why')!.textContent).toBe('The author asked for this in review.')
   })
 
-  test('the first block on a sheet puts its control below, and the rest above', () => {
-    /* Above the first block is outside the page box, which clips — deliberately,
-       for the phantom-width reason `paginated.tsx` argues. Known from the
-       packing rather than measured, which is why it is assertable here. */
-    const first = draw([about('A claim', 'A different claim')])
-    expect(first.container.querySelector('[data-proposal]')!.getAttribute('data-approval-side')).toBe('below')
-    first.unmount()
-    const later = draw([about('tpyo', 'typo')])
-    expect(later.container.querySelector('[data-proposal]')!.getAttribute('data-approval-side')).toBe('above')
+  test('it is anchored to the changed words, not to the paragraph', () => {
+    /*
+     * The owner's second complaint — "it should be positioned right above the
+     * part where the change took place. right now it is not positioned
+     * correctly" — and the closest a document with no layout can get to it.
+     *
+     * WHERE the card lands needs a browser. WHICH element it was told to
+     * measure does not: Radix's anchor renders as a real div only when it was
+     * given nothing better, so a block with no anchor div in it is a block
+     * whose control was handed the `<del>`/`<ins>` span instead. That span is
+     * the change, so this is the whole of the difference between the old
+     * behaviour and the new one, minus the arithmetic only a browser can do.
+     */
+    const { container } = draw([about('tpyo', 'typo')])
+    expect(container.querySelector('[data-slot="popover-anchor"]')).toBeNull()
+    const change = container.querySelector('[data-proposed-change]')
+    expect(change).not.toBeNull()
+    expect(change!.textContent).toBe('tpyotypo')
+  })
+
+  test('a change spanning two runs is anchored once, where it starts', () => {
+    /* Three spans could claim to be one suggestion's place — the words either
+       side of the author's hard wrap are two runs — and whichever mounted last
+       would win. Only the run the change STARTS in reports itself, so the
+       control points at the first character that moves. */
+    const { container } = draw([about('that the\nauthor wrapped', 'that the author has wrapped')])
+    expect(container.querySelector('[data-slot="popover-anchor"]')).toBeNull()
+    expect(cards()).toHaveLength(1)
+  })
+
+  test('the flip is Floating UI’s now, and the control is portalled out of the page', () => {
+    /*
+     * There was a `side` prop here, set from the packing: the first block on a
+     * sheet had nothing above it inside the page box, which clips, so its
+     * control went below. Both halves of that are gone — the card is no longer
+     * inside the page box, so nothing clips it, and `avoidCollisions` flips it
+     * against the reading column instead.
+     *
+     * What is assertable without layout is that the card left the sheet. That
+     * is also what killed `--counter-scale`: a box outside the transformed
+     * subtree needs no reciprocal, and there is none anywhere in the codebase
+     * now.
+     */
+    const { container } = draw([about('A claim', 'A different claim')])
+    expect(container.querySelector('[data-proposal]')).toBeNull()
+    expect(cards()).toHaveLength(1)
+    expect(card().closest('.sheet')).toBeNull()
+    expect(card().getAttribute('data-side')).toBe('top')
   })
 
   test('with nothing wired to answer it, the change is drawn and no control is', () => {
@@ -270,7 +376,7 @@ describe('the control that answers it', () => {
        gets, which is the same rule the Edit checkbox already follows. */
     const { container } = draw([about('tpyo', 'typo')], { wired: false })
     expect(out(container)).toEqual(['tpyo'])
-    expect(container.querySelector('[data-proposal]')).toBeNull()
+    expect(cards()).toHaveLength(0)
   })
 })
 
@@ -293,17 +399,78 @@ describe('what is waiting, and the one control that answers all of it', () => {
       about('prose after them', 'the prose after them', 'It reads better.'),
     ])
     expect(container.querySelectorAll('[data-accept-all]')).toHaveLength(1)
-    expect(container.querySelector('[data-proposal] [data-accept-all]')).toBeNull()
+    expect(document.body.querySelectorAll('[data-accept-all]')).toHaveLength(1)
+    expect(document.body.querySelector('[data-proposal] [data-accept-all]')).toBeNull()
     fireEvent.click(container.querySelector<HTMLButtonElement>('[data-accept-all]')!)
     expect(countAll()).toBe(1)
   })
 
   test('two suggestions in two paragraphs get one control each', () => {
-    const { container } = draw([
+    draw([
       about('tpyo', 'typo'),
       about('prose after them', 'the prose after them', 'It reads better.'),
     ])
-    expect(container.querySelectorAll('[data-proposal]')).toHaveLength(2)
+    expect(cards()).toHaveLength(2)
+  })
+})
+
+describe('x of y, beside the buttons', () => {
+  /*
+   * The owner asked for "x of y changes" beside the button group "so a reader
+   * can see this is the second of four without counting". There was already a
+   * count in the chrome row next to `Accept all`, and two counts that could
+   * disagree would be worse than one — so they are not two numbers. They are
+   * the length and the index of one list, sorted once by `PaginatedView` into
+   * the order a reader meets them, and these tests hold that join.
+   */
+  const three = () => [
+    /* Filed in an order that is NOT document order, on purpose: `at` says the
+       middle paragraph's suggestion arrived first. If the ordinal came from the
+       filing order this fixture would number them 2, 1, 3. */
+    { ...about('prose after them', 'the prose after them', 'It reads better.'), at: 1 },
+    { ...about('tpyo', 'typo'), at: 2 },
+    { ...about('A claim', 'A better claim', 'The section is misnamed.'), at: 3 },
+  ]
+
+  test('the count is beside the two buttons, in the same row', () => {
+    draw([about('tpyo', 'typo')])
+    const row = card().querySelector('.proposal-answer')!
+    expect(row.querySelector('[data-slot="button-group"]')).not.toBeNull()
+    expect(row.querySelector('.proposal-count')!.textContent).toBe('1 of 1')
+  })
+
+  test('it counts down the paper, not up the filing order', () => {
+    const { container } = draw(three())
+    /* Heading first, then the first paragraph, then the second — which is the
+       order these blocks appear in the fixture and not the order `at` gives. */
+    const counted = cards().map(counts)
+    expect(counted.sort()).toEqual(['1 of 3', '2 of 3', '3 of 3'])
+    const byId = new Map(cards().map((c) => [c.getAttribute('data-proposal'), counts(c)]))
+    expect(byId.get('p-A claim')).toBe('1 of 3')
+    expect(byId.get('p-tpyo')).toBe('2 of 3')
+    expect(byId.get('p-prose after them')).toBe('3 of 3')
+    /* And nothing about the paper moved to make that true. */
+    expect(container.querySelectorAll('[data-has-proposals]')).toHaveLength(3)
+  })
+
+  test('the y is the chrome row’s number, because it is the same list', () => {
+    const { container } = draw(three())
+    const chrome = container.querySelector('[data-pending-proposals]')!
+    expect(chrome.getAttribute('data-pending-proposals')).toBe('3')
+    expect(chrome.textContent).toContain('3 suggested')
+    for (const c of cards()) expect(counts(c)).toEndWith('of 3')
+  })
+
+  test('the word “changes” is said where it costs no line', () => {
+    /* Not in the visible text: at 220 pixels it is what pushes the count onto a
+       line of its own. In the title and in the group's accessible name, which
+       is the same move the page readout's caveat made. */
+    draw(three())
+    const one = cards().find((c) => c.getAttribute('data-proposal') === 'p-tpyo')!
+    const count = one.querySelector<HTMLElement>('.proposal-count')!
+    expect(count.textContent).toBe('2 of 3')
+    expect(count.title).toContain('2nd of 3 suggested changes')
+    expect(one.getAttribute('aria-label')).toContain('Suggested change 2 of 3')
   })
 })
 

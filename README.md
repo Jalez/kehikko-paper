@@ -247,8 +247,9 @@ An agent can now suggest a change to the prose, and the person reading the paper
 answers it. `propose_edit` on the MCP door takes the text to replace and the text
 to put there — not a byte range — and files the suggestion. **Nothing is written
 to the `.tex`.** The change is drawn into the paper where it happens, what leaves
-struck through in red and what arrives in green, with a small shadcn button group
-floating above the block: Accept, Reject.
+struck through in red and what arrives in green, with a small shadcn popover
+anchored to the changed words themselves: the reason for the change, Accept,
+Reject, and where in the paper this one is.
 
 **A byte range is not something a person can check before approving it.** That is
 the whole reason the change is drawn in the prose and not listed in a panel. A
@@ -257,14 +258,40 @@ the reader find the place themselves and then trust that the panel was talking
 about it, which is exactly what goes wrong when a program asks for approval it has
 not made checkable.
 
-**It is drawn twice, on purpose.** The same red and green appear in the floating
-control as well as in the prose. At 220 pixels the sheet is scaled to 0.247 and
-the body type draws at under four pixels: the inline diff is correctly placed and
-completely illegible. The control is counter-scaled — `--counter-scale` on the
-sheet is the reciprocal — so its copy is drawn at true size at every width, and at
-narrow widths it is the only readable one. The control sits entirely above the
-block it is about and never over it; a block at the top of a sheet puts it below
-instead, because above is outside the page box, which clips.
+**It is drawn once, and the control points at it.** It used to be drawn twice —
+the same red and green in the card as well as in the prose — because at 220
+pixels the sheet is scaled to 0.25, the body type draws at 3.7 real pixels
+(measured), and the inline diff is correctly placed and illegible. The owner read
+it at that width and said the repetition was redundant, and the argument for it
+had quietly expired: it was doing two jobs, saying what the change is and saying
+where in the paragraph it is, and only the first was ever a duplicate. The card
+is now anchored to the changed span, so the second job is done by the anchoring.
+
+**It is a Radix popover, and that removed a hack rather than adding a
+dependency.** The card renders in a portal at the end of `document.body`, outside
+the sheet's `transform: scale`, and Floating UI positions it from the anchor's
+`getBoundingClientRect` — which already reports the post-transform rectangle. So
+`--counter-scale`, the hand-written reciprocal the control used to multiply
+itself back up by, and `--sheet-room`, the column width it used to bound itself
+against, are both deleted; there is no reciprocal left anywhere in this codebase.
+The manual "first block on a sheet flips below" rule went with them, because
+`avoidCollisions` against the reading column does it against the real geometry.
+
+Measured in a headless Chrome at 220 and at 900: the card is never scaled
+(`selfTransform: none`, 11.2px type at both widths), the arrow lands within 0.2px
+of the horizontal centre of the words it points at even when collision detection
+has shifted the card sideways to stay in a 196px column, and `hideWhenDetached`
+turns the card `visibility: hidden` exactly when its anchor leaves the column —
+sixteen scroll observations, no disagreement. The findability the second copy
+used to provide is now the arrow plus the coloured wash, which survives the scale
+where the letterforms do not: the ink is 5.2px tall and 4–21px wide at 220.
+
+**Two counts, one list.** `x of y` sits beside Accept and Reject, and the chrome
+row still says `y suggested` next to `Accept all`. They are the length and the
+index of the same array, which `PaginatedView` sorts once into document order, so
+they cannot drift. That order is the order a reader meets the changes by
+scrolling — not the oldest-first order `Accept all` writes in, which nothing on
+screen prints.
 
 **The diff is at token level and the write is at character level**, and the two
 are different jobs. `narrow` decides which bytes are replaced and works in
@@ -358,7 +385,8 @@ one at a time so each is measured against the file the one before it produced. I
 is deliberately **not** in the floating control: a button meaning "and the other
 four as well" repeated above each of five changes is five controls each claiming
 to speak for all of them, and pressing the one above the paragraph you happened to
-be reading writes four changes you have not scrolled to.
+be reading writes four changes you have not scrolled to. What IS in the control is
+a readout of which change this is — `2 of 4` — which speaks only for itself.
 
 Rejecting opens no file at all. There is no path from that branch of the door to a
 filesystem call, and `test/proposals.test.ts` asserts the bytes are identical.
@@ -375,12 +403,20 @@ and to nothing belonging to anybody else.
 
 #### What no test here can prove
 
-happy-dom lays nothing out, so the tests cover which characters are marked, which
-runs refuse the caret, which side the control takes and what the buttons say —
-and cannot cover whether the counter-scaled control is actually legible at 220
-pixels, whether the wrapped button group looks like one control, or whether the
-control clears the paragraph it is about once real type is laid out. Those are
-browser facts and they are stated as unchecked rather than assumed.
+happy-dom lays nothing out, and since the control became a popover it lays out
+even less that matters: Floating UI reads `getBoundingClientRect`, which there is
+all zeroes, so every rectangle it computes is about nothing. The tests cover which
+characters are marked, which runs refuse the caret, which ELEMENT the control was
+anchored to, that the card no longer repeats the diff, that the two counts are one
+list, and what the buttons say. They cannot cover where the card lands, whether it
+flips, whether it hides on scroll, or whether the count fits beside the buttons.
+
+Those were checked in a headless Chrome instead — the numbers are in the section
+above — and the checking was a throwaway CDP probe rather than a suite, so it is
+evidence that this landed and not a guard that it stays landed. What is still
+unchecked by anything: how it looks and reads to a person, whether the card covers
+prose somebody wanted at either width, and the whole of the framed case, since the
+probe ran the page unframed at `?project=…&epic=…`.
 
 ### What was removed, and where it went
 
