@@ -351,6 +351,43 @@
     text-underline-offset: 0.18em;
   }
 
+  /*
+   * The paper with the pen out: which words may be typed into, and which not.
+   *
+   * Drawn only while editing — neither class is emitted otherwise — because a
+   * reader who has not asked to edit should be shown the paper and not a map of
+   * it.
+   *
+   * The distinction has to be visible BEFORE somebody tries, which is the whole
+   * argument for marking anything here at all. A citation looks exactly like
+   * the prose around it, so a reader whose cursor simply refuses to enter one
+   * learns that this page is broken rather than that this span is a rendering.
+   * The typeable text gets a hairline under it, the rest gets the cursor that
+   * means "not here", and the sentence explaining it arrives on the press.
+   *
+   * Both are drawn in the sheet's own units, like everything else on an A4
+   * page: a decoration in screen pixels would be four times as heavy at 220
+   * pixels as at 1100, which is where every other fixed-pixel measurement in
+   * this file went wrong.
+   */
+  .typeable {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: color-mix(in oklch, var(--pencil) 45%, transparent);
+    text-decoration-thickness: 0.05em;
+    text-underline-offset: 0.22em;
+  }
+
+  .typeable:focus {
+    outline: none;
+    background-color: color-mix(in oklch, var(--mark) 14%, var(--paper));
+    border-radius: 2px;
+  }
+
+  .not-typeable {
+    cursor: not-allowed;
+  }
+
   /* ---- The column the pages lie in ------------------------------------- */
 
   /*

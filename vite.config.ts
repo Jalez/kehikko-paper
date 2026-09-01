@@ -7,7 +7,7 @@ import { WELL_KNOWN } from 'roadmap-module-protocol'
 import { serves } from 'roadmap-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
-import { MANIFEST, answer, type Reply } from './doors.ts'
+import { MANIFEST, TICKET, answer, type Reply } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { page } from './page/document.ts'
 
@@ -118,7 +118,10 @@ function doors(): Plugin {
 
         if (path === '/app' || path === '/app/' || path === '/') {
           void server
-            .transformIndexHtml(request.url ?? '/app', page(), request.originalUrl)
+            /* The ticket goes into the document here rather than being fetched
+               by the page, because a door that hands tickets out is a door
+               anything on this machine can ask. See the essay on `TICKET`. */
+            .transformIndexHtml(request.url ?? '/app', page(TICKET), request.originalUrl)
             .then((html) => {
               response.statusCode = 200
               response.setHeader('content-type', 'text/html; charset=utf-8')
@@ -217,14 +220,21 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown> |
  *     Access-Control-Allow-Origin: *
  *     ...ticket" type="application/json">"e75d4d01-…
  *
- * This app has no ticket to leak, being read-only — so the leak here would be
- * smaller and the fix is the same one, taken for a second reason besides. The
- * program this was extracted from ran `app.use(cors())` with no options in
- * front of a `POST /api/edits` that wrote to the author's thesis. The lesson
- * from that is not "be careful with the write path", it is "do not put a
- * permissive header on an origin that answers anything you care about". So the
- * manifest declares `storage: true`, this line is gone, and the page's own
- * `/api` calls are ordinary same-origin requests with no CORS involved at all.
+ * This app used to have no ticket to leak, being read-only, so the leak here
+ * would have been the smaller one. That has stopped being true: a reader can
+ * correct a sentence in place now, `doors.ts` mints a `TICKET`, and
+ * `page/document.ts` prints it into the document — which is exactly the string
+ * the `curl` above pulled out of Journeys. So the argument for this line's
+ * absence is no longer "the leak would be small"; it is the same argument
+ * Journeys makes, with the same thing at stake.
+ *
+ * The second reason stands unchanged and is the older one. The program this was
+ * extracted from ran `app.use(cors())` with no options in front of a
+ * `POST /api/edits` that wrote to the author's thesis. The lesson from that is
+ * not "be careful with the write path", it is "do not put a permissive header
+ * on an origin that answers anything you care about". So the manifest declares
+ * `storage: true`, this line is gone, and the page's own `/api` calls are
+ * ordinary same-origin requests with no CORS involved at all.
  *
  * ## No alias for `roadmap-module-protocol`
  *

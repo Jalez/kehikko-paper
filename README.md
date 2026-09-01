@@ -167,6 +167,49 @@ citation. `≈` means the selection crossed a macro expansion and was widened
 outward to a boundary this program can justify rather than to a fabricated
 offset. It posts nothing.
 
+### Correcting a sentence, in the prose rather than in the source
+
+Tick **Edit** beside the page number and the paper becomes typeable in place: a
+typo is fixed where you are reading it, and the `.tex` file on disk is what
+changes. There is no raw-source box, and this is not one in disguise.
+
+**Only text that IS the source may be typed into.** Every span the parser
+produces says whether its rendered characters are character-for-character the
+bytes it came from (`literal`) or a rendering of them (`derived` —
+`\autocite{jones}` shown as `[jones]`, an escape, a macro the paper defines for
+itself). Only a literal span is `contentEditable`, because only there does an
+offset inside what you see mean an offset into the file. A derived span refuses
+the cursor — a browser will not place a caret outside an editing host, so the
+refusal costs no code and cannot be got round by a keyboard, a drag or a paste —
+and pressing one selects it whole and says why. Its source form is deliberately
+not revealed: rendered prose with markup showing in the middle of it is two
+languages on one page, and editing the revealed markup is a source editor, which
+is the thing this view exists not to be.
+
+**LaTeX markup is refused rather than escaped.** Typing `50%` gets a sentence,
+not a silently written `\%`. Escaping is exact in prose and wrong inside
+`verbatim`, inside `lstlisting` and inside maths, and a span knows its styles
+rather than its environment — so a door that transformed what you typed would be
+right in the common case and wrong wherever people put code. Enter commits,
+Escape puts it back, and a line break is refused because a blank one ends a
+paragraph.
+
+**A file that moved is refused, and nothing is written.** Every edit carries the
+SHA-256 of the file as this page last read it; the server re-reads and compares
+before it splices, and answers 409 with the paper as it now is. Not
+`sourceLength`, which is blind to every same-length rewrite — and a spelling
+correction made by the author in their real editor is a same-length rewrite
+almost by construction. Not the old `expectedText` match either: an edit *above*
+a range makes that range name different text, which a quote check cannot see.
+The cost is stated rather than hidden — a paper being autosaved from an editor
+will refuse corrections from this page until it re-reads, which is one round
+trip.
+
+**What an edit does to anchors.** A passage or a note anchored below the edit
+point moves by the change in length, and this module does not move it. That is
+part of why the range written is narrowed to the characters that actually
+changed rather than to the whole span.
+
 ### What was removed, and where it went
 
 **The margin rail is gone**, and so are the pins that anchored it. `notes.ts`
@@ -202,28 +245,56 @@ two-line addition named.
 
 ## What it does not do, on purpose
 
-**It writes nothing.** The program this was extracted from was a workbench: a
-`POST /api/edits` that rewrote the author's thesis, a SQLite work queue, a
-margin-notice thread, and an MCP surface of eleven tools, seven of which
-mutated. None of it is here.
+**It writes two things and no others.** The program this was extracted from was a
+workbench: a `POST /api/edits` that rewrote the author's thesis, a SQLite work
+queue, a margin-notice thread, and an MCP surface of eleven tools, seven of which
+mutated. Two doors here write — `POST /api/paper`, which starts a paper where
+there is none and refuses if anything is already there, and `POST /api/edit`,
+which replaces one byte range in one file the paper itself names. There is no
+create, no delete, no rename, no move, no undo table and no queue.
 
-That is not only scope. It had `app.use(cors())` — no options, wide open — in
-front of that write path, so any page in any tab could read the origin and post
-to it. The lesson taken from that is not "be careful with the write path"; it is
-**do not put a permissive header on an origin that answers anything you care
-about.** So:
+The MCP door is unchanged and every tool on it reads. An agent editing a paper
+should be editing the `.tex` with the tools it already has, in a repository with
+a history; a person fixing a sentence in front of them is not that.
+
+That is not only scope. The old program had `app.use(cors())` — no options, wide
+open — in front of its write path, so any page in any tab could read the origin
+and post to it. The lesson taken from that is not "be careful with the write
+path"; it is **do not put a permissive header on an origin that answers anything
+you care about.** So:
 
 - `manifest.ts` declares `storage: true`, which makes a host frame this page
   with `allow-same-origin`. With a real origin, this page's own `/api` calls are
-  ordinary same-origin requests and no CORS is involved at all.
+  ordinary same-origin requests and no CORS is involved at all. That was a
+  convenience for the reads; it is load-bearing for the writes.
 - `vite.config.ts` has **no `server.cors`**, and must not grow one. Measured:
   `curl -H 'Origin: https://evil.example' http://127.0.0.1:7870/app` comes back
   with no `Access-Control-Allow-Origin` at all.
-- There is no ticket, because there is nothing to gate. If a write path is ever
-  added it needs all three back — a per-process ticket printed into the page,
-  `storage: true` kept so the ticket is not readable cross-origin, and a comment
-  saying plainly what the ticket does and does not separate. The essay is at the
-  top of `doors.ts`.
+- There is a ticket now, and it is exactly what this section used to say a write
+  path would need: minted per process, printed into the page, demanded by both
+  writers in the body. It separates "this app's own page" from "something else
+  on this machine that guessed the port", and it separates nothing else — it is
+  not an authorization check, and anything that can read the page can read it,
+  which is why the two bullets above are the ones holding it up. The essay is at
+  the top of `doors.ts`.
+
+### Anchors move, and this module does not move them
+
+An edit shifts every byte offset after it by the change in length. Passages
+published to the canvas and notes held in other modules are absolute byte ranges
+into these files, so an anchor **below** an edit point now names text a little
+to the left or right of what it named, and an anchor **inside** the replaced
+range names bytes that no longer exist as they were.
+
+Nothing here migrates them, and this is the honest statement of that rather than
+a plan. What the design does do is keep the damage as small as it can be: the
+range written is narrowed to the characters that actually changed, so fixing one
+letter shifts everything after it by zero or one byte and leaves every anchor in
+the same paragraph inside a range that was never touched. A correction that
+changes no lengths — a letter for a letter — moves nothing at all.
+
+The two mitigations that are NOT claimed: nothing rewrites another module's
+stored ranges, and nothing warns before an edit that an anchor sits in it.
 
 ### Figures are drawn, and two kinds deliberately are not
 

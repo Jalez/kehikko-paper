@@ -4,9 +4,10 @@
  * ## Why this is a string and not an `index.html`
  *
  * Journeys generates its document because it has to carry a write ticket into
- * the page without a door that hands the ticket out. There is no ticket here —
- * this app takes no writes — so that reason does not apply, and the shape is
- * kept for the other one from that file: `entry` is `/app`, and under Vite dev
+ * the page without a door that hands the ticket out. That is now the first
+ * reason here as well — this app takes writes, so this prints a ticket — and
+ * the shape was already here for the other one from that file, which still
+ * holds on its own: `entry` is `/app`, and under Vite dev
  * an extensionless path is not free. A request for `/app` sitting next to an
  * `app.tsx` resolves to that module and answers `200 text/javascript` with
  * compiled source. A browser loads such a document happily and runs nothing in
@@ -48,7 +49,7 @@
  * browser, with `tsc` and `bun test` both clean, and the symptom is identical
  * to the CORS one — a page that loads and never answers the greeting.
  */
-const PAGE_SHELL = `<!doctype html>
+const PAGE_SHELL = (ticket: string) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -57,12 +58,36 @@ const PAGE_SHELL = `<!doctype html>
 </head>
 <body>
 <div id="root"></div>
+<script id="${TICKET_ID}" type="application/json">${JSON.stringify(ticket)}</script>
 <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
 `
 
-/** The page. */
-export function page(): string {
-  return PAGE_SHELL
+/**
+ * Where the ticket is written, spelled once for the two files that need it.
+ *
+ * The server prints it and `src/api.ts` reads it, and a page whose two halves
+ * disagreed about the id would be a page where every write is refused with a
+ * sentence about a ticket that is sitting three lines above the script that
+ * could not find it. Exported rather than typed twice for that reason alone.
+ */
+export const TICKET_ID = 'roadmap-paper-ticket'
+
+/**
+ * The page, with this process's write ticket in it.
+ *
+ * `<script type="application/json">` and not a `data-` attribute or a global:
+ * a browser does not execute it, `JSON.stringify` is what escapes it — so a
+ * ticket containing a `<` could not close the tag even if one ever did — and it
+ * is one `getElementById().textContent` on the other side. The same shape
+ * Journeys uses, deliberately, because two modules inventing two ways to hand
+ * one string to their own page is two things to check when neither works.
+ *
+ * It is a per-process secret in a document served over loopback to a page this
+ * process also serves. It is NOT an authorization check, and the essay on
+ * `TICKET` in `doors.ts` is the one to read before treating it as one.
+ */
+export function page(ticket: string): string {
+  return PAGE_SHELL(ticket)
 }

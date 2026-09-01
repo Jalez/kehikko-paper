@@ -51,7 +51,7 @@ import { useSelection } from './use-selection.ts'
 const FRAMED = typeof window !== 'undefined' && window.parent !== window
 
 export function App() {
-  const { sight, said, setSaid, resize, point, pointed, goto, start } = usePaper(FRAMED)
+  const { sight, said, setSaid, resize, point, pointed, goto, start, correct } = usePaper(FRAMED)
   const root = useRef<HTMLElement | null>(null)
   /**
    * A walk asked for from outside, and nothing else.
@@ -94,6 +94,24 @@ export function App() {
    * a property of what has happened since one arrived. See `shouldPublish`.
    */
   const [adopted, setAdopted] = useState(false)
+  /**
+   * Whether the reader has asked to be able to type into the paper.
+   *
+   * ## A mode, and off is the state this module has always been in
+   *
+   * With it off, nothing on the page is `contentEditable`, no span carries
+   * `data-editable`, and the whole of the reading view behaves exactly as it
+   * did before any of this existed. That is worth keeping literally true rather
+   * than approximately: this container is read at 220 pixels beside other
+   * people's work, and a paper that can be changed by leaning on a keyboard is
+   * a paper nobody can leave open.
+   *
+   * ## It is dropped when the paper changes
+   *
+   * Below, with the selection, and for the same reason: a mode carried across
+   * from one document to another is a mode nobody switched on for THIS one.
+   */
+  const [editing, setEditing] = useState(false)
 
   const paper = sight.at === 'reading' ? sight.paper : null
 
@@ -260,7 +278,36 @@ export function App() {
     if (wasOn.current === epic) return
     wasOn.current = epic
     forget()
+    /* And the pen with it. Editing is something a reader turns on for a
+       document they are looking at, and carrying it into the next one would
+       hand somebody a typeable thesis they never asked to be able to change. */
+    setEditing(false)
   }, [epic, forget])
+
+  /**
+   * What a finished edit in a span does, assembled once.
+   *
+   * ## Everything hard about this is somewhere else, on purpose
+   *
+   * Which spans may be typed into is `segments.tsx` and comes from one field on
+   * the segment. What counts as the edit — the narrowed range, the refused
+   * characters — is `latex/edit.ts`, which is pure and has tests. Whether it may
+   * be written is `writeRange`, which is where the concurrency check lives.
+   * This is the wiring between them, and it is a `useMemo` rather than an
+   * object built inline because it is handed to every span in the document
+   * through a context: a fresh identity on each render would be a new context
+   * value for every paragraph every time the page number changed.
+   *
+   * `say` goes to the same line at the foot of the page that a `roadmap.goto`
+   * announces itself on, and that is the right home for it rather than a toast
+   * or a red box. It is the module's one place for "something happened that you
+   * did not do and can see the result of", which is exactly what a refused
+   * correction is.
+   */
+  const pen = useMemo(
+    () => (editing ? { commit: correct, say: setSaid } : null),
+    [editing, correct, setSaid],
+  )
 
   /*
    * Re-measure when the container is resized, and after every paint that could have
@@ -397,9 +444,35 @@ export function App() {
       {!FRAMED && <h1 className="mb-2 shrink-0 text-base font-semibold tracking-tight">Paper</h1>}
 
       {/* A finished drag over the pages becomes a citable source range. */}
-      <div className="flex min-h-0 flex-1 flex-col" onMouseUp={() => selected.read(root.current, filesByAnchor)}>
+      {/*
+        While the pen is out, a drag is not a citation.
+
+        The popover this opens says "this module only reads, take the citation
+        to an agent", offers a copy button, and sits over the words somebody is
+        in the middle of correcting. Both halves are wrong in edit mode: the
+        sentence has stopped being true of the span underneath it, and a panel
+        that appears every time a reader selects a word to replace it is a panel
+        in the way of the thing they are doing. So the reading gesture is left
+        to mean what it means while reading, and nothing is published to the
+        canvas from a selection made in order to type over it.
+      */}
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        onMouseUp={() => {
+          if (editing) return
+          selected.read(root.current, filesByAnchor)
+        }}
+      >
         {paper ? (
-          <PaginatedView paper={paper} walk={walk} mark={mark} rootRef={root} onSheet={setSheet} />
+          <PaginatedView
+            paper={paper}
+            walk={walk}
+            mark={mark}
+            rootRef={root}
+            onSheet={setSheet}
+            pen={pen}
+            onPen={setEditing}
+          />
         ) : (
           <Screen sight={sight} onStart={(epic) => void start(epic)} />
         )}

@@ -127,11 +127,37 @@ export const PREFERRED_PORT = 7870
  * adds a line and its absence removes one, and neither is a state a reader has
  * to wait in.
  *
+ * ## The write needs no capability, and that is worth writing down
+ *
+ * A reader can now correct a sentence in the paper in place, and it is fair to
+ * look here for the declaration that permits it. There is none, and there is no
+ * field it would go in.
+ *
+ * `CAPABILITIES` in the protocol is a list of things a module asks a HOST to do
+ * for it: read the epics, report a stage, move the canvas, set the passage
+ * every other container is told about. This write is none of those. It goes to
+ * this module's own `/api`, on this module's own origin, into a file in the
+ * project the host already said was open — the host is not asked, is not
+ * involved, and would have nothing to answer. Inventing a `paper:write` here
+ * would declare a permission over a method nobody implements, which is the
+ * failure the `epics:read` paragraph above is about and worse: a request a
+ * person has to grant, for a program that will never call it, standing in front
+ * of a write that happens anyway.
+ *
+ * What the write DOES depend on in this file is `storage: true`, one section
+ * down, and that dependency is real rather than incidental — read the two
+ * together.
+ *
+ * `guidance` changed with it. It used to end by telling every agent on the
+ * canvas that this module only reads, and an agent acting on a sentence that
+ * has stopped being true is the thing a manifest exists to prevent.
+ *
  * ## Storage, and why THIS module asks for it
  *
- * The argument is Journeys', unchanged, and it is worth restating because the
- * conclusion looks wrong from the outside: this module is read-only, so surely
- * it needs no origin?
+ * The argument is Journeys', unchanged, and it used to be worth restating
+ * because the conclusion looked wrong from the outside: this module is
+ * read-only, so surely it needs no origin? It is not read-only any more, which
+ * removes the paradox and raises the stakes — see the end of this section.
  *
  * It needs one because it SERVES ITS OWN `/api`. Without `storage: true` a host
  * frames the page without `allow-same-origin`, the page runs on an opaque
@@ -144,9 +170,13 @@ export const PREFERRED_PORT = 7870
  *
  * The module this was extracted from went further and had `app.use(cors())`
  * with no options at all, in front of a `POST /api/edits` that wrote to the
- * author's thesis. That combination is not carried across in any form. There is
- * no `server.cors` line in `vite.config.ts`, and there is no write path here at
- * all — see the essay on that in `doors.ts`.
+ * author's thesis. Half of that combination is now here: there IS a write path,
+ * because a reader can correct a sentence in place. The other half is not, and
+ * this declaration is what keeps it out — there is no `server.cors` line in
+ * `vite.config.ts`, so the page keeps a real origin and the ticket printed into
+ * it stays unreadable from any other page. `storage: true` was a convenience
+ * for the reads and it is load-bearing for the writes. See the essay at the
+ * head of `doors.ts`.
  *
  * What the sandbox gives up is small and worth naming. The origin this page
  * regains is `127.0.0.1:7870`; a host is on `127.0.0.1:4181`. Different ports
@@ -182,8 +212,9 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     'true. Read the relevant sections before changing behaviour: if a sentence in it describes ' +
     'what the code does, your change can make that sentence false, and the paper is then part of ' +
     'the work rather than documentation of it. Cite by section when you say a change follows from ' +
-    'the paper, so a reader can check you. This module only reads — edit the .tex on disk, and ' +
-    'never restate here what the paper already says, because two copies of an argument drift.',
+    'the paper, so a reader can check you. This module reads the .tex files and takes typed corrections to ' +
+    'prose from the person reading it; it offers you no edit tool, so edit the .tex on disk with the tools you ' +
+    'already have. Never restate here what the paper already says, because two copies of an argument drift.',
   entry: '/app',
   modes: [{ id: 'paper', label: 'Paper', scope: 'epic' }],
   mcp: {

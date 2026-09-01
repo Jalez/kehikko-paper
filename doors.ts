@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto'
+
+import { MAX_EDIT_BYTES } from './latex/edit.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
 import {
   MAIN,
@@ -11,6 +14,7 @@ import {
   readSource,
   startPaper,
   whereItWouldGo,
+  writeRange,
 } from './store.ts'
 
 /**
@@ -29,32 +33,49 @@ import {
  * path, a query and a body and returns a status and a document; `vite.config.ts`
  * adapts a node request to it in a dozen lines.
  *
- * ## There is no write path here, and that is the headline
+ * ## There are two write paths here now, and that is the headline
  *
- * The program this was extracted from had one. `POST /api/edits` wrote to the
- * author's thesis on disk, guarded by an `expectedText` match — a good guard —
- * and sat behind `app.use(cors())` with no options at all. That is a
- * wide-open cross-origin policy in front of a path that mutates somebody's
+ * This file used to open by saying there were none. The paragraph is kept
+ * rather than deleted, because the shape it refused is the shape that must not
+ * come back. The program this was extracted from had `POST /api/edits`: it
+ * wrote to the author's thesis on disk, guarded by an `expectedText` match — a
+ * good guard — and sat behind `app.use(cors())` with no options at all. That is
+ * a wide-open cross-origin policy in front of a path that mutates somebody's
  * writing: any page in any tab, on any site, could read that origin and post to
- * it. Nothing of that shape is carried across, in any form:
+ * it.
  *
- *  - There is no route here that writes a byte. `readPaper` and `readSource`
- *    open files; nothing in this repository has a `writeFileSync` in it.
- *  - There is therefore no ticket. Journeys mints one because it takes writes,
- *    and is careful to say in its own comments that a ticket is not an
- *    authorization check. A ticket here would protect nothing and would be a
- *    secret printed into a page for decoration.
- *  - There is no `server.cors` line in `vite.config.ts`, and `manifest.ts`
- *    declares `storage: true` instead, so the page keeps a real origin and its
- *    own `/api` calls are ordinary same-origin requests that involve no CORS at
- *    all. The essay is in both those files.
+ * That paragraph then said what a write path would have to arrive with if one
+ * were ever wanted — "accepting a correction to a paragraph, say". This is that
+ * day: a reader can now correct a sentence in the paper they are reading, in
+ * place. So here is the list it named, kept as a list because it was written as
+ * a condition rather than as an aspiration:
  *
- * If a write path is ever wanted here — accepting a correction to a paragraph,
- * say — it must arrive with all three of those back: a ticket minted per
- * process and printed into the page, `storage: true` kept so the ticket is not
- * readable cross-origin, and a comment saying plainly that the ticket separates
- * "this app's own page" from "something else on this machine that guessed the
- * port", and separates nothing else.
+ *  - **A ticket minted per process and printed into the page.** `TICKET`,
+ *    below; `page/document.ts` puts it in the document; both write doors demand
+ *    it in the body. It separates "this app's own page" from "something else on
+ *    this machine that guessed the port", and it separates NOTHING else. It is
+ *    not an authorization check, anybody who can read the page can read the
+ *    ticket, and it is worth nothing at all the moment this origin becomes
+ *    readable cross-origin — which is the next point.
+ *  - **`storage: true` kept, so the ticket is not readable cross-origin.**
+ *    There is still no `server.cors` line in `vite.config.ts` and the manifest
+ *    still declares storage, so the page keeps a real origin and its own `/api`
+ *    calls are ordinary same-origin requests involving no CORS at all. Journeys
+ *    demonstrated the alternative rather than arguing it: `curl -H 'Origin:
+ *    https://evil.example'` against a permissive origin printed its ticket
+ *    straight out of the page. This app now has a ticket, so it now has that to
+ *    lose.
+ *  - **A guard on the CONTENT of the write and not only on the caller.** The
+ *    `expectedText` match is not carried over as such, and what replaced it is
+ *    stronger: a hash of the whole file as the caller last read it, refused
+ *    when it no longer matches. The argument is in `writeRange` — an edit ABOVE
+ *    a range makes that range name different text, and a quote check cannot see
+ *    that.
+ *
+ * The reads are unchanged and stay ungated, for the reason below. What is gated
+ * is exactly the two doors that write: `POST /api/paper`, which starts a paper
+ * where there is none, and `POST /api/edit`, which replaces bytes in one that
+ * is already there.
  *
  * ## Reads are not gated, and that is deliberate
  *
@@ -111,6 +132,71 @@ const MAX_SLUG = 80
 const MAX_PATH = 200
 /** As long as a path may be, matching the protocol's own `LIMITS.PATH`. */
 const MAX_PROJECT = 4096
+/**
+ * As much text as one edit may carry, in UTF-16 units.
+ *
+ * `MAX_EDIT_BYTES` is the real bound and it is measured in bytes by `whyNot`,
+ * one layer down. This is the cruder cut applied before the string is looked at
+ * at all, in the same spirit as every other constant here: a string has a
+ * length before it has a meaning. It is deliberately generous against the byte
+ * bound rather than equal to it, so that the sentence somebody reads about an
+ * over-long edit is the one written for that, and not a silent truncation.
+ */
+const MAX_TEXT = MAX_EDIT_BYTES
+
+/**
+ * The write ticket, minted once per process.
+ *
+ * ## What it is for, and the much longer list of what it is not
+ *
+ * It says "this request came from the page this process served". That is all.
+ * It is printed into the document by `page/document.ts`, so anything that can
+ * READ the page can read it, and it therefore proves nothing about who the
+ * person at the keyboard is, what they are allowed to change, or whether they
+ * meant it. Journeys mints one and is careful to write the same sentence beside
+ * it, and the sentence is worth repeating rather than referring to, because a
+ * ticket is exactly the kind of thing a later reader assumes is an
+ * authorization check.
+ *
+ * What it actually excludes is narrow and real: this server listens on
+ * loopback, which is a fence around the MACHINE and not around the programs on
+ * it, so any process here can find the port and post to it. Reads are ungated
+ * on purpose — a paper is a document its author is publishing — but a write is
+ * different in kind, and something that guessed 7870 should not be able to
+ * rewrite a thesis by accident.
+ *
+ * It is only worth having while this origin is unreadable from other pages,
+ * which is what `storage: true` and the absent `server.cors` line buy. See the
+ * head of this file.
+ *
+ * Per process, and never written down. A ticket in a file is a ticket that
+ * outlives the process that minted it and can be replayed against the next one.
+ */
+export const TICKET = randomUUID()
+
+/**
+ * Whether a body carried this process's ticket.
+ *
+ * Compared as a plain string. A timing-safe compare would be the reflex, and it
+ * would be theatre here: the caller is a process on this machine that can read
+ * the page and simply take the ticket, so there is no secret to extract one
+ * byte at a time.
+ */
+function ticketed(body: Record<string, unknown> | null): boolean {
+  return typeof body?.ticket === 'string' && body.ticket === TICKET
+}
+
+/**
+ * What to say when it did not.
+ *
+ * A 403 and a sentence naming what is missing rather than a bare refusal,
+ * because the caller who hits this is almost always a person's own script or a
+ * page served by a stale process — and "no ticket" is a thing they can act on,
+ * unlike "forbidden".
+ */
+const NO_TICKET =
+  'A write here has to carry this process’s ticket, which is printed into the page it serves. Reload the page — '
+  + 'a ticket from an earlier run of this server is not this one.'
 
 function str(value: unknown, max: number): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value).slice(0, max)
@@ -378,10 +464,12 @@ function mcp(rpc: Rpc): Reply {
       capabilities: { tools: {} },
       serverInfo: { name: ID, version: VERSION },
       instructions:
-        'The papers the epics in this roadmap are aimed at: LaTeX on disk, read as prose. This server reads ' +
-        'files and writes none — there is deliberately no edit tool, because a paper lives in a repository ' +
-        'with a history and should be edited there. It reads no tracker and holds no credential, so nothing ' +
-        'here can tell you whether the work a paper cites has landed.',
+        'The papers the epics in this roadmap are aimed at: LaTeX on disk, read as prose. Every tool here ' +
+        'reads, and there is deliberately no edit tool: a paper lives in a repository with a history, and you ' +
+        'have better tools for changing a file than an HTTP door with an undo table. (The PAGE this server ' +
+        'serves does take corrections a reader types into the rendered prose — that is a person fixing a ' +
+        'sentence in front of them, not an agent rewriting a chapter.) It reads no tracker and holds no ' +
+        'credential, so nothing here can tell you whether the work a paper cites has landed.',
     })
   }
   /* A notification carries no id and is answered with nothing. */
@@ -518,6 +606,13 @@ export function answer(
    * ordinary way to get here.
    */
   if (path === '/api/paper' && method === 'POST') {
+    /* The ticket, on this door as well as on the edit door. It predates the
+       ticket and did without one, which was survivable only because the worst
+       it can do is nothing — it refuses rather than overwrites. Both writers
+       demanding the same thing is one rule to read instead of two, and a reader
+       who found one write gated and the other not would reasonably conclude the
+       gate was decorative. */
+    if (!ticketed(body)) return bad(NO_TICKET, 403)
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
@@ -525,6 +620,73 @@ export function answer(
     const started = startPaper(epic, project)
     if (!started.ok) return bad(started.why, 409)
     return ok({ ok: true, dir: started.dir, paper: readPaper(epic, project) })
+  }
+
+  /*
+   * Replace one byte range in one file of one paper: the door a reader's
+   * correction arrives through.
+   *
+   * ## Everything that decides anything is in `writeRange`
+   *
+   * This is a shape check and a ticket check and nothing else. Which file may
+   * be written, whether the range is inside it, whether the file has moved
+   * since the page read it, whether the text is markup — all of that is one
+   * function in `store.ts`, so that the browser, an agent and a test are
+   * refused by the same code rather than by three copies of a rule.
+   *
+   * ## The answer carries the paper, re-read
+   *
+   * Not a bare `ok`. Every offset the page is holding shifted the moment this
+   * wrote, and a page that had to ask for the paper in a second request would
+   * spend the gap between the two able to send a second edit against offsets it
+   * already knows are wrong. So the write and the re-read are one answer, and
+   * they cannot disagree about which paper they are describing. This module
+   * caches nothing, so the re-read is just another open of the file — the same
+   * property the head of `store.ts` argues for, used for the thing it was for.
+   *
+   * ## The refusal carries the paper too, when it is a stale one
+   *
+   * `stale` means the page's copy is out of date, which is the one refusal it
+   * has to ACT on rather than report, and the thing it must do is exactly the
+   * re-read this door has already performed. Sending it on the refusal is what
+   * makes "your edit did not land, and here is what the file says now" one
+   * round trip instead of a race between two.
+   *
+   * A 409 for stale — the request arrived second, which is not malformed — and
+   * a 400 for everything else, which is the same distinction `POST /api/paper`
+   * draws about a folder that already exists.
+   */
+  if (path === '/api/edit' && method === 'POST') {
+    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+
+    const file = str(body?.file, MAX_PATH)
+    if (!file) return bad('which file')
+    /* Numbers only. `str` would happily turn a number into a string here and
+       `Number('')` is 0, which is a byte offset — so a missing `from` would
+       become "the top of the file" rather than a refusal. */
+    const from = typeof body?.from === 'number' ? body.from : NaN
+    const to = typeof body?.to === 'number' ? body.to : NaN
+    const text = typeof body?.text === 'string' ? body.text.slice(0, MAX_TEXT) : null
+    if (text === null) return bad('there is nothing to write there')
+    const was = str(body?.was, 200)
+
+    const written = writeRange(epic, { file, from, to, text, was }, project)
+    if (!written.ok) {
+      return {
+        status: written.stale ? 409 : 400,
+        body: {
+          ok: false,
+          error: written.why,
+          stale: written.stale,
+          paper: written.stale ? readPaper(epic, project) : undefined,
+        },
+      }
+    }
+    return ok({ ok: true, paper: readPaper(epic, project) })
   }
 
   if (path === '/api/figure' && method === 'GET') {

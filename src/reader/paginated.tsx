@@ -14,7 +14,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '@/components/ui/sidebar.tsx'
-import { BlockRow, anchorId } from './blocks.tsx'
+import { BlockRow, anchorId, type Pen } from './blocks.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
 
 /**
@@ -157,13 +157,60 @@ export interface PaginatedProps {
    * sheet started in is a property of the packing, and the packing is here.
    */
   onSheet?: (sheet: { page: number; file: string | null }) => void
+  /**
+   * What a finished edit does, or `null` for a paper that is only read.
+   *
+   * Null is the default state and the one this module spent its life in: no
+   * span is `contentEditable`, nothing carries `data-editable`, and every
+   * gesture over the prose still means what it meant — a drag makes a passage,
+   * a press moves nothing. Editing is a mode a reader turns on, and the reason
+   * it is a mode rather than always available is one sentence long: a document
+   * you can change by leaning on the keyboard is a document you cannot read
+   * over somebody's shoulder.
+   */
+  pen?: Pen | null
+  /** Turn typing on or off. Drawn as the one control beside the page readout. */
+  onPen?: (on: boolean) => void
 }
 
 const CAVEAT = 'Page breaks are this reader\u2019s, not the PDF\u2019s.'
 
-export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: PaginatedProps) {
+export function PaginatedView({ paper, walk, mark, rootRef, onSheet, pen = null, onPen }: PaginatedProps) {
   const pages = useMemo(() => paginate(paper.blocks), [paper.blocks])
   const count = Math.max(1, pages.length)
+
+  /**
+   * A number that changes when the paper is REPLACED, used to rebuild the
+   * sheets from scratch.
+   *
+   * ## The bug this exists to prevent, which only a browser can produce
+   *
+   * A `contenteditable` span is a subtree the browser is allowed to rearrange.
+   * Typing into one routinely splits its text node in two; a paste can leave
+   * three. React does not see any of that — it remembers the node it created
+   * and, when the text changes, writes the new value into that node. If the
+   * browser has since split it, the remembered half is updated and the other
+   * half is left standing, so a corrected sentence draws with a fragment of the
+   * old one still in it. The FILE is right; the page is not, which is the worst
+   * combination available here, because the reader has no reason to doubt it.
+   *
+   * A key that changes discards those elements instead of patching them, and
+   * the paper's identity is exactly the right trigger: it is replaced when a
+   * write lands, when a stale write is refused, and when a new epic arrives —
+   * the three moments the DOM must stop being trusted — and never on a scroll,
+   * a resize, or a re-sent context.
+   *
+   * The reader does not move for it. The scroll lives on the column, which is
+   * not keyed and is not rebuilt, and each page's box keeps the height it was
+   * measured at because `heights` is state on this component rather than a
+   * property of the elements being replaced.
+   */
+  const revision = useRef(0)
+  const wasPaper = useRef<Paper | null>(null)
+  if (wasPaper.current !== paper) {
+    wasPaper.current = paper
+    revision.current += 1
+  }
 
   const column = useRef<HTMLDivElement | null>(null)
   const wraps = useRef<(HTMLDivElement | null)[]>([])
@@ -412,6 +459,43 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
           <span className="min-w-0 text-[0.7rem] text-muted-foreground">
             {paper.outline.length} {paper.outline.length === 1 ? 'section' : 'sections'}
           </span>
+          {/*
+            The one control that turns the paper into something typeable.
+
+            A checkbox and not a button, because it has a state somebody has to
+            be able to see rather than an action: "am I editing this document"
+            is exactly the question a control that toggled silently would leave
+            open. It is drawn only when there is somewhere for an edit to go —
+            `onPen` absent means the page did not offer one — so the reading
+            view in a test, or in any caller that has not wired the write, is
+            the reading view unchanged.
+
+            No icon and no label longer than a word. At 220 pixels this row
+            already wraps.
+          */}
+          {onPen && (
+            <label className="flex min-w-0 shrink-0 items-center gap-1 text-[0.7rem] text-muted-foreground">
+              <input
+                type="checkbox"
+                className="size-3 accent-[var(--mark)]"
+                checked={pen !== null}
+                onChange={(event) => onPen(event.currentTarget.checked)}
+                data-editing={pen !== null ? '1' : '0'}
+                /* The whole rule, where somebody meets the thing it is about.
+                   It is a `title` rather than a line of prose under the row for
+                   the reason the page-break caveat became one: a permanent
+                   strip of explanation across a 340px container is height taken
+                   from the paper forever. */
+                title={
+                  'Type corrections straight into the prose. Only text that is character-for-character what the '
+                  + '.tex file says can be typed into — a citation or a macro shows as what this reader makes of '
+                  + 'it, so there is no place in the file for a cursor inside it. Enter commits, Escape puts it '
+                  + 'back, and LaTeX markup is refused rather than escaped.'
+                }
+              />
+              Edit
+            </label>
+          )}
           {/* A `span` in a badge and not a button. It says where the reader is;
               there is nothing here to press. */}
           <Badge
@@ -467,7 +551,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
         >
           {pages.map((blocks, i) => (
             <div
-              key={i}
+              key={`${revision.current}#${i}`}
               ref={(el) => {
                 wraps.current[i] = el
               }}
@@ -491,6 +575,7 @@ export function PaginatedView({ paper, walk, mark, rootRef, onSheet }: Paginated
                 paper={paper}
                 blocks={blocks}
                 mark={mark}
+                pen={pen}
                 scale={scale}
                 room={room}
                 keep={(el) => {
@@ -521,6 +606,7 @@ function SheetPage({
   paper,
   blocks,
   mark,
+  pen,
   scale,
   room,
   keep,
@@ -530,6 +616,7 @@ function SheetPage({
   paper: Paper
   blocks: readonly PlacedBlock[]
   mark: { file: string; id: string; from: number; to: number } | null
+  pen: Pen | null
   scale: number
   room: number
   keep: (el: HTMLElement | null) => void
@@ -582,6 +669,7 @@ function SheetPage({
           /* Only where the block is in the marked file, so the range never
              means something in a chapter it was not measured against. */
           mark={mark && mark.file === block.file ? mark : null}
+          pen={pen}
         />
       ))}
       {!blocks.length && (

@@ -86,22 +86,21 @@ const post = (path: string, body: Record<string, unknown> | null) =>
 const inProject = (project: string, query = '') =>
   query ? `${query}&project=${encodeURIComponent(project)}` : `project=${encodeURIComponent(project)}`
 
-describe('there is no write path', () => {
+describe('the write paths are exactly two, and both are ticketed', () => {
   /*
-   * Every POST this app will accept, enumerated. `/mcp` is the only one, and
-   * every tool behind it reads. If a route is ever added that writes, this test
-   * fails and whoever added it has to come and read the essay in `doors.ts`
-   * about the ticket, the origin and the CORS header that must arrive with it.
+   * This block used to be called "there is no write path" and enumerated every
+   * POST as refused. There are two now — starting a paper, and correcting a
+   * sentence — so the enumeration is the other way up: these are the paths that
+   * do NOT write, and a new one appearing here is somebody who has to go and
+   * read the essay in `doors.ts` about the ticket, the origin and the CORS
+   * header that must arrive with a write.
+   *
+   * `/api/edits` is in the list on purpose and always will be. It is the name
+   * the door had in the program this was extracted from, where it sat behind an
+   * unconfigured `cors()`, and a request arriving at it is a request from
+   * something built against that program.
    */
-  test.each([
-    '/api/edits',
-    '/api/paper',
-    '/api/papers',
-    '/api/source',
-    '/api/figure',
-    '/api/notice',
-    '/api/work',
-  ])(
+  test.each(['/api/edits', '/api/papers', '/api/source', '/api/figure', '/api/notice', '/api/work'])(
     'POST %s is refused',
     (path) => {
       const reply = post(path, { anything: 'at all' })
@@ -109,7 +108,42 @@ describe('there is no write path', () => {
     },
   )
 
+  /*
+   * The property that matters more than which paths exist: neither writer can
+   * be reached without the ticket printed into this process's own page. It is
+   * not an authorization check — see the essay — and this is not a test that it
+   * is one. It is the test that the gate is WIRED, because a ticket the doors
+   * forget to ask for is a ticket that protects nothing while looking like it
+   * does, and nothing else on the page would ever show it.
+   */
+  test.each(['/api/paper', '/api/edit'])('POST %s without the ticket is 403', (path) => {
+    const reply = answer('POST', path, new URLSearchParams(inProject(roadmap, 'epic=a-paper')), {
+      file: 'main.tex',
+      from: 0,
+      to: 1,
+      text: 'x',
+      was: 'whatever',
+    })
+    expect(reply?.status).toBe(403)
+  })
+
+  test('a ticket from some other process is refused the same way', () => {
+    const reply = answer('POST', '/api/edit', new URLSearchParams(inProject(roadmap, 'epic=a-paper')), {
+      ticket: '00000000-0000-4000-8000-000000000000',
+      file: 'main.tex',
+      from: 0,
+      to: 1,
+      text: 'x',
+      was: 'whatever',
+    })
+    expect(reply?.status).toBe(403)
+  })
+
   test('the MCP door offers only tools that read', () => {
+    /* Unchanged, and it is the half of the old claim that is still true. An
+       agent editing a paper should be editing the `.tex` file with the tools it
+       already has, in a repository with a history. The page taking a
+       correction from the person reading it is not that. */
     const reply = post('/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' })
     const tools = ((reply?.body as { result: { tools: { name: string }[] } }).result.tools ?? []).map(
       (t) => t.name,

@@ -74,6 +74,11 @@ function fixture(): Paper {
       .filter((b) => b.kind === 'heading')
       .map((b, i) => ({ id: b.id, level: b.kind === 'heading' ? b.level : 2, text: `Section ${i + 1}` })),
     files: ['main.tex'],
+    /* What the file was when it was read. A fixture's hash is never compared
+       against a disk — nothing in these tests writes — but it is on `Paper`
+       because the write door stands on it, and a fixture without one would be a
+       shape the server never produces. */
+    hashes: { 'main.tex': 'this-fixture-was-never-on-disk' },
   }
 }
 

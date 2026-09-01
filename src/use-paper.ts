@@ -491,6 +491,82 @@ export function usePaper(framed: boolean) {
   }, [])
 
   /**
+   * The paper on screen, where a callback can reach it.
+   *
+   * Assigned during render rather than in an effect, the way `told.current` is
+   * in `paginated.tsx` and for the same reason: `correct` below must not be
+   * rebuilt every time the paper object is replaced, because it is handed to
+   * every editable span in the document and a new identity would re-bind all of
+   * them on every keystroke's worth of state change. A ref is the current value
+   * without being a dependency.
+   */
+  const showing = useRef<Paper | null>(null)
+  showing.current = sight.at === 'reading' ? sight.paper : null
+
+  /**
+   * Write one correction back into the `.tex` file, and catch the reading up.
+   *
+   * ## What it adds to what the caller sent
+   *
+   * The epic, and `was` — the hash of that file as this page last read it,
+   * which `readPaper` handed out on the paper itself. That is the whole
+   * concurrency story from this side: the page does not decide whether the file
+   * has moved and cannot, it says which version its offsets were measured
+   * against and the server refuses if that is no longer the file. The essay is
+   * on `writeRange`.
+   *
+   * Taken from the paper on screen rather than passed in by the caller,
+   * because the caller is a span in the middle of a paragraph and the one thing
+   * it must not be trusted with is which document it is part of.
+   *
+   * ## Both answers replace the paper, and that is the point
+   *
+   * A write that landed returns the file re-read, so every offset on screen is
+   * about the bytes that are now on disk. A write refused as STALE returns the
+   * same thing, because the reason it was refused is that the page's copy was
+   * out of date and the fix is the read it was already going to need. Any other
+   * refusal leaves the paper alone: the file did not change, so neither should
+   * what is drawn.
+   *
+   * The reader does not move for any of it. `PaginatedView` resets the scroll
+   * on the EPIC changing and never on the paper object being replaced — see the
+   * note beside that effect, which was written for the re-sent context and
+   * holds unchanged here. Nobody is thrown to the top of a thesis for fixing a
+   * typo.
+   *
+   * ## It answers with a sentence or with nothing
+   *
+   * `null` means it landed. A string is what to tell the person, and it is the
+   * server's own words rather than this file's: the server is the only one that
+   * knows which of a dozen refusals applied, and a page that paraphrased would
+   * be a second, worse copy of that list.
+   */
+  const correct = useCallback(
+    async (edit: { file: string; from: number; to: number; text: string }): Promise<string | null> => {
+      const paper = showing.current
+      if (!paper) return 'There is no paper open to correct.'
+      const was = paper.hashes[edit.file]
+      /* No hash means this page never opened that file, which makes every
+         offset in the request meaningless. Refused here rather than sent with
+         an empty `was`, which the server would answer as staleness — a true
+         sentence about the wrong problem. */
+      if (!was) return `This paper does not name a file called “${edit.file}”.`
+      try {
+        const body = await post('/api/edit', { epic: paper.epic }, { ...edit, was })
+        if (body.ok === true && body.paper) {
+          setSight({ at: 'reading', paper: body.paper as Paper })
+          return null
+        }
+        if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
+        return String(body.error ?? 'That correction was not written.')
+      } catch (e) {
+        return `That correction could not be sent: ${(e as Error).message}`
+      }
+    },
+    [],
+  )
+
+  /**
    * Say how tall this page would like its frame to be.
    *
    * A request, not an instruction: the host clamps whatever arrives. It is
@@ -530,8 +606,8 @@ export function usePaper(framed: boolean) {
   }, [])
 
   return useMemo(
-    () => ({ sight, said, setSaid, resize, point, pointed, goto, start }),
-    [sight, said, resize, point, pointed, start],
+    () => ({ sight, said, setSaid, resize, point, pointed, goto, start, correct }),
+    [sight, said, resize, point, pointed, start, correct],
   )
 }
 

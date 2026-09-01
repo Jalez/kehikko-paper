@@ -1,8 +1,20 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'roadmap-module-protocol'
 
+import { onBoundary, whyNot } from './latex/edit.ts'
 import { findMacros, parseLatex, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
 import { ID } from './manifest.ts'
 
@@ -102,6 +114,30 @@ import { ID } from './manifest.ts'
  * read, that is an ordinary state, and the page has a screen for it. The
  * protocol package's `kehikotDir` makes this argument first and this file is
  * not going to reach a different conclusion.
+ *
+ * ## This module is no longer read-only, and that is worth saying at the top
+ *
+ * It was, apart from `startPaper`, and several essays here leaned on it: a
+ * reader that has never written cannot have a bug that destroys somebody's
+ * afternoon. There are two writers now, and the second one is the serious one.
+ * `startPaper` makes a file where there was none and refuses if anything is
+ * already there, so the worst it can do is nothing. `writeRange` REPLACES BYTES
+ * IN A FILE SOMEBODY IS WRITING, which is the one operation in this repository
+ * that can destroy work.
+ *
+ * It is fenced by everything `startPaper` is fenced by — the slug, the paper's
+ * own root, `confine` — plus two of its own:
+ *
+ *  - **It never creates.** The file must be there already and must be a file.
+ *    A write door that can bring a path into being is a write door that can be
+ *    talked into planting one.
+ *  - **It refuses a file that changed under it.** The caller says what it
+ *    believed the file was and this re-reads and compares before it splices.
+ *    See the essay on `writeRange`, which is mostly about that, because the
+ *    section at the top of this file — nothing is cached, because a paper is
+ *    being edited WHILE this is running — is precisely the statement that
+ *    somebody else may be in the file, and a blind range-replace against a file
+ *    somebody else has edited is the worst thing this module could learn to do.
  */
 
 /**
@@ -537,8 +573,53 @@ export interface Paper {
   outline: { id: string; level: number; text: string }[]
   /** Every file that was opened, in the order it was reached. */
   files: string[]
+  /**
+   * What each of those files WAS when this read opened it, as a hash.
+   *
+   * ## This is the field the write door stands on
+   *
+   * Every offset in this structure describes the bytes that were on disk at the
+   * moment of this read. A page holding this paper and asking to replace bytes
+   * 4120–4380 of a chapter is making a claim that is only true of that version
+   * of the file, and this is the evidence it sends back to prove which version
+   * it meant — see `writeRange`, which refuses when the file no longer hashes
+   * to what the caller was given.
+   *
+   * ## Why a hash and not `sourceLength`
+   *
+   * `ParsedDocument.sourceLength` exists and its comment says "for staleness
+   * checks", and it is not enough. Length is blind to every edit that does not
+   * change it, and the edits this module has to survive are exactly those: an
+   * author fixing a typo in a real editor, an agent rewriting a sentence, this
+   * app's own door writing four characters over four other characters from a
+   * second container. Two of those are same-length rewrites almost by
+   * construction — a spelling correction usually is — and a length check would
+   * wave every one of them through and splice into a file whose bytes had moved
+   * underneath the offsets.
+   *
+   * SHA-256 over the file's bytes, which costs microseconds on the tens of
+   * kilobytes a paper actually is, and the collision this would need in order
+   * to be wrong is not something a text editor produces by accident.
+   *
+   * Keyed by the same relative path as `files`, so the two cannot describe
+   * different sets, and computed from the bytes as read rather than from the
+   * decoded string, so nothing in the round trip through UTF-16 can make a file
+   * hash differently here than it does at the door.
+   */
+  hashes: Record<string, string>
   /** Every `\includegraphics` target the paper names, in document order. */
   figures: string[]
+}
+
+/**
+ * What a file was, as one comparable string.
+ *
+ * Spelled once, because the read and the write both compute it and a hash
+ * computed two ways is not a check — it is a check that passes until somebody
+ * changes one of the two.
+ */
+function hashOf(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex')
 }
 
 /**
@@ -683,9 +764,17 @@ export function readPaper(epic: string, project: string | null): Paper | null {
   if (!main || !existsSync(main)) return null
 
   let source: string
+  const hashes: Record<string, string> = {}
   try {
     if (statSync(main).size > MAX_TEX_BYTES) return null
-    source = readFileSync(main, 'utf8')
+    /* The bytes, hashed, and only then decoded. Reading the string and encoding
+       it again to hash it would be a hash of what this program made of the file
+       rather than of the file, and the two differ for anything that is not
+       valid UTF-8 — which would then hash differently at the write door and
+       refuse an edit for a reason nobody could see. */
+    const bytes = readFileSync(main)
+    hashes[MAIN] = hashOf(bytes)
+    source = bytes.toString('utf8')
   } catch {
     return null
   }
@@ -716,7 +805,11 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     let chapter: ParsedDocument | null = null
     if (child && existsSync(child)) {
       try {
-        if (statSync(child).size <= MAX_TEX_BYTES) chapter = parseLatex(readFileSync(child, 'utf8'), relative, macros)
+        if (statSync(child).size <= MAX_TEX_BYTES) {
+          const bytes = readFileSync(child)
+          chapter = parseLatex(bytes.toString('utf8'), relative, macros)
+          hashes[relative] = hashOf(bytes)
+        }
       } catch {
         chapter = null
       }
@@ -782,6 +875,7 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     blocks,
     outline,
     files,
+    hashes,
     figures,
   }
 }
@@ -882,4 +976,184 @@ export function readSource(epic: string, file: string, project: string | null): 
   } catch {
     return null
   }
+}
+
+/** One replacement asked for: which file, which bytes, what goes there. */
+export interface Edit {
+  /** Relative to the paper's root, and it must be a file the paper names. */
+  file: string
+  /** Byte offsets into that file. `from === to` is an insertion. */
+  from: number
+  to: number
+  /** What goes there. Empty is a deletion, which is an ordinary edit. */
+  text: string
+  /** What the caller believed that file was — `Paper.hashes[file]`. */
+  was: string
+}
+
+export type Written =
+  | { ok: true; bytes: number; hash: string }
+  /**
+   * A refusal, with `stale` set when the reason was that the file moved.
+   *
+   * The flag is not decoration: staleness is the one refusal the page must ACT
+   * on rather than only report. Every other refusal here means "that edit was
+   * not allowed" and the paper on screen is still right; stale means the paper
+   * on screen is out of date, so the page has to re-read before it draws
+   * anything else. One boolean is cheaper and steadier than parsing a sentence.
+   */
+  | { ok: false; why: string; stale: boolean }
+
+/**
+ * Replace one byte range in one file of one paper.
+ *
+ * ## The narrowest write that answers the question
+ *
+ * One file, one contiguous range, one replacement, and no way to name a second.
+ * There is no create, no delete, no rename and no move. The reason is the one
+ * `startPaper` gives for having no force flag: a door that cannot do a thing
+ * does not have to be careful about when it does it, and the things ruled out
+ * here are the ones with no undo.
+ *
+ * ## Concurrency, which is the part that can destroy work
+ *
+ * Nothing in this module is cached, on purpose, because a paper is being edited
+ * WHILE this is running — the author may be in a real editor, an agent may be
+ * rewriting a chapter, and a second container may be sending an edit of its
+ * own. That is stated at the top of this file as a virtue of the READS, and it
+ * is the whole hazard of the writes: every offset a caller holds was derived
+ * from a version of the file, and applying it to a different version does not
+ * fail. It succeeds, splicing text into the middle of a sentence somebody else
+ * wrote, and the reader watching this app sees a paragraph that has gone subtly
+ * wrong with nothing on screen saying why.
+ *
+ * So an edit carries `was`, the hash of the file as the caller last read it —
+ * `Paper.hashes[file]`, handed out by `readPaper` — and this re-reads and
+ * compares before it touches anything. A different hash means no write and a
+ * sentence saying the file moved.
+ *
+ * The check is deliberately over the WHOLE FILE and not over the replaced
+ * range. Range-local checking — "are the bytes I am about to replace still the
+ * bytes I saw?" — is the guard the program this was extracted from had
+ * (`expectedText`), it is cheaper, and it is not enough: an edit ABOVE the
+ * range shifts everything below it, so the old offsets now name different text
+ * which may happen to match the quote, and even when it does not, an edit whose
+ * offsets are stale is an edit in the wrong place. The hash asks the only
+ * question with a safe answer: is this the document those offsets were measured
+ * against?
+ *
+ * The cost is stated rather than hidden: a paper being written in an editor
+ * with autosave will refuse edits from this page until the page re-reads. That
+ * is the correct trade, it costs one round trip to recover from, and the
+ * alternative is a corruption nobody notices for a week.
+ *
+ * ## The ends have to be real places in a real file
+ *
+ * `from` and `to` are bytes and they arrive over the wire. They are checked to
+ * be whole numbers, in order, inside the file, and on UTF-8 character
+ * boundaries — see `onBoundary`. That last one is not paranoia: a cut through
+ * the middle of an `ä` writes two half-characters into a file that had none,
+ * and this codebase has already lost a bug to characters and bytes being
+ * confused for one another (`inBytes`, in the parser).
+ *
+ * ## And what may be written is not "anything"
+ *
+ * `whyNot` in `latex/edit.ts` holds that rule, along with the argument for
+ * refusing LaTeX's special characters rather than escaping them. It is applied
+ * here as well as in the browser, because the browser is one caller of three
+ * and the other two were never asked to be polite.
+ *
+ * ## Written by rename, so a failure leaves the old file standing
+ *
+ * `writeFileSync` truncates and then writes, so a process killed between the
+ * two leaves an empty or half-written thesis. The bytes go to a temporary file
+ * beside the real one and are renamed over it, which is atomic within a
+ * filesystem: either the whole new file is there or the whole old one is. The
+ * mode is copied across, so a file somebody had made read-only for themselves
+ * does not come back wearing this process's umask.
+ */
+export function writeRange(epic: string, edit: Edit, project: string | null): Written {
+  const no = (why: string, stale = false): Written => ({ ok: false, why, stale })
+
+  if (!isEpic(epic)) return no('That is not an epic name.')
+  const paper = readPaper(epic, project)
+  if (!paper) return no('There is no paper for that epic in this project.')
+  /* The rule `readSource` applies, for the reason it gives: a check against the
+     filesystem would let a caller name any `.tex` under the epic's directory,
+     so "correct the paper" would quietly become "write to whatever is lying
+     around beside it". A file the paper does not include is not the paper. */
+  if (!paper.files.includes(edit.file)) {
+    return no(`This paper does not name a file called “${edit.file}”. It is made of: ${paper.files.join(', ')}`)
+  }
+  const root = rootFor(epic, project)
+  if (!root) return no('There is no paper for that epic in this project.')
+  const path = confine(root, edit.file)
+  if (!path) return no('That file is not inside this paper.')
+
+  /* It never creates, and this is where that is enforced. `existsSync` alone
+     would not be the check: a directory exists too, and `writeFileSync` onto
+     one throws out of a request handler rather than answering. */
+  let bytes: Buffer
+  try {
+    const found = statSync(path)
+    if (!found.isFile()) return no('That is not a file.')
+    if (found.size > MAX_TEX_BYTES) return no('That file is too large for this program to rewrite.')
+    bytes = readFileSync(path)
+  } catch {
+    /* Undifferentiated, like every other refusal in this file: "it is not
+       there", "it cannot be read" and "it is not a file" told apart is a way of
+       asking this door what exists. */
+    return no('That file could not be read.')
+  }
+
+  if (typeof edit.was !== 'string' || edit.was.length === 0) {
+    return no('An edit has to say which version of the file it was measured against.', true)
+  }
+  if (hashOf(bytes) !== edit.was) {
+    return no(
+      `${edit.file} has changed since this page read it, so those byte offsets no longer describe it. Nothing was `
+        + 'written.',
+      true,
+    )
+  }
+
+  const { from, to, text } = edit
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return no('That is not a byte range.')
+  if (from < 0 || to < from || to > bytes.length) return no('That range is not inside the file.')
+  if (!onBoundary(bytes, from) || !onBoundary(bytes, to)) {
+    return no('That range cuts a character in half, so it does not name a place in this file.')
+  }
+  if (typeof text !== 'string') return no('There is nothing to write there.')
+  const refused = whyNot(text)
+  if (refused) return no(refused)
+
+  const replacement = Buffer.from(text, 'utf8')
+  /* A no-op is refused rather than performed. Writing identical bytes moves the
+     file's mtime, wakes every watcher on it, and invalidates the hash every
+     other reader of this paper is holding, in order to change nothing. */
+  if (bytes.subarray(from, to).equals(replacement)) return no('That edit changes nothing.')
+
+  const next = Buffer.concat([bytes.subarray(0, from), replacement, bytes.subarray(to)])
+
+  /* Beside the file rather than under `/tmp`, because a rename is only atomic
+     within one filesystem and a paper's folder may be on a different one. The
+     name carries this process's pid and a random tail so that two writers
+     cannot choose the same scratch file. */
+  const scratch = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  try {
+    writeFileSync(scratch, next, { mode: statSync(path).mode })
+    renameSync(scratch, path)
+  } catch (error) {
+    /* The real file is untouched on either failure — that is what the temporary
+       is for — so all that is left is not to litter. */
+    try {
+      rmSync(scratch, { force: true })
+    } catch {
+      /* Nothing to do and nothing to say: the edit has already failed, and a
+         leftover `.tmp` is not the thing the person needs to hear about. */
+    }
+    return no(`That could not be written: ${(error as Error).message}`)
+  }
+
+  return { ok: true, bytes: next.length, hash: hashOf(next) }
 }

@@ -1,10 +1,20 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import type { Block } from '../../latex/parse.ts'
 import type { PlacedBlock } from '../../store.ts'
 import { apiUrl } from '../api.ts'
 import { cn } from '@/lib/utils.ts'
-import { Marked, Segments } from './segments.tsx'
+import { Marked, Segments, Typed, type Typing } from './segments.tsx'
+
+/**
+ * Everything the paper needs in order to be typeable EXCEPT which file it is.
+ *
+ * The file is supplied by `BlockRow`, because that is the only place that knows
+ * it — the same division `Marked` already makes, and for the same reason: a
+ * byte range with no file named is a range in whichever of a paper's chapters
+ * the reader happened to think of.
+ */
+export type Pen = Omit<Typing, 'file'>
 
 /**
  * One block, drawn, with the gutter tag that says what it is.
@@ -95,9 +105,20 @@ export interface BlockProps {
    * inside this block gets it without six call sites having to remember.
    */
   mark?: { id: string; from: number; to: number } | null
+  /**
+   * The paper is typeable, and this is what a finished edit does.
+   *
+   * `null` — the default, and what a reader gets until they ask otherwise — is
+   * the module exactly as it was: nothing is `contentEditable`, no span carries
+   * `data-editable`, and dragging across the prose still makes a passage. That
+   * is the property worth keeping cheap. A reader who has not asked to edit
+   * cannot edit by accident, and every essay in this repository about this
+   * being a reading view stays true for them.
+   */
+  pen?: Pen | null
 }
 
-export function BlockRow({ block, epic, mark = null }: BlockProps) {
+export function BlockRow({ block, epic, mark = null, pen = null }: BlockProps) {
   /*
    * Narrowed to this block before it is supplied. A block the mark does not
    * touch gets `null`, which is the same value every unmarked block gets, so
@@ -121,6 +142,13 @@ export function BlockRow({ block, epic, mark = null }: BlockProps) {
    */
   const overlaps = mark !== null && block.srcStart < mark.to && mark.from < block.srcEnd
   const here = mark && (overlaps || block.id === mark.id) ? mark : null
+  /* The file joined on here, once per block, and memoised so that a scroll —
+     which re-renders every sheet in order to move a page number — does not hand
+     every span in the document a new context value on the way past. */
+  const typing = useMemo<Typing | null>(
+    () => (pen ? { ...pen, file: block.file } : null),
+    [pen, block.file],
+  )
   return (
     <div
       className="block-row group relative"
@@ -135,7 +163,9 @@ export function BlockRow({ block, epic, mark = null }: BlockProps) {
         <span className="gutter-mark">{GUTTER[block.kind]}</span>
       </div>
       <Marked.Provider value={here}>
-        <BlockBody block={block} epic={epic} />
+        <Typed.Provider value={typing}>
+          <BlockBody block={block} epic={epic} />
+        </Typed.Provider>
       </Marked.Provider>
     </div>
   )

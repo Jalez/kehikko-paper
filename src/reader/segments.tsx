@@ -1,6 +1,8 @@
 import { createContext, useContext, type ReactNode } from 'react'
 
+import { narrow, whyNot } from '../../latex/edit.ts'
 import type { Segment, SegmentStyle } from '../../latex/parse.ts'
+import { cn } from '@/lib/utils.ts'
 
 /**
  * Segments to elements, and the two things every span has to carry.
@@ -133,13 +135,107 @@ function coalesce(segments: readonly Segment[]): Segment[] {
  */
 export const Marked = createContext<{ from: number; to: number } | null>(null)
 
+/**
+ * Typing in the paper, and the one rule that decides what may be typed into.
+ *
+ * ## Only a literal span, because that is what `literal` MEANS
+ *
+ * A literal segment's rendered text is character-identical to
+ * `source[srcStart..srcEnd]`, so an offset inside what the reader sees is an
+ * offset into the file, and a change to the characters on screen is the same
+ * change to the characters on disk. That equivalence is the entire licence for
+ * editing in place. A derived segment does not have it: `\autocite{jones}`
+ * renders as `[jones]`, five characters standing in for seventeen, and there is
+ * no honest way to say which byte a cursor between the `j` and the `o` is
+ * sitting on. Typing there and splicing the result into the file would produce
+ * markup nobody wrote, in a place nobody was looking at.
+ *
+ * ## So what happens when the cursor reaches a derived span
+ *
+ * It is refused entry, and this is the decision written down rather than left
+ * to be inferred. Three options were on the table:
+ *
+ *  - **Refuse to enter it** — the caret cannot go there at all.
+ *  - **Select it whole** — pressing it highlights the whole span, so the reader
+ *    can see the unit they are being refused.
+ *  - **Offer its source form** — reveal `\autocite{jones}` and let them edit
+ *    that.
+ *
+ * The first two are both taken, because they are the same answer at two
+ * moments. Only literal spans are `contentEditable`, and a span that is not
+ * inside an editing host is a span a browser will not put a caret in — so
+ * refusal costs no code and cannot be got round by a keyboard, a drag, or a
+ * paste. Pressing one then selects it whole and says why, which is the
+ * difference between a refusal and nothing happening.
+ *
+ * The third is refused on purpose. Revealing source inside rendered prose makes
+ * the page show two languages at once, and the reader who edits the revealed
+ * `\autocite{jones}` is editing markup — which is a raw-source editor, which is
+ * the thing this view exists not to be. `read_source` on the MCP door and the
+ * file on disk are both still there for that, and the popover on a selection
+ * already says so.
+ *
+ * ## Why a context, and why it carries the file
+ *
+ * The same reason `Marked` is one: an editable span is reached through five
+ * signatures in `blocks.tsx` and the failure mode of forgetting one is a
+ * paragraph that can be typed into and a caption that silently cannot. And the
+ * file, because a byte range means nothing without one — `main.tex` and every
+ * chapter each have a byte 4120, and an edit sent against the wrong one of them
+ * would land in a real place in the wrong document.
+ */
+export interface Typing {
+  /** Which file the segments under this context came out of. */
+  file: string
+  /**
+   * A finished edit of one span. Answers `null` when it landed, or the sentence
+   * to show when it did not — at which point the span puts back what was there.
+   */
+  commit: (edit: { file: string; from: number; to: number; text: string }) => Promise<string | null>
+  /** Something to tell the reader: a refusal, or why a span cannot be entered. */
+  say: (sentence: string) => void
+}
+
+export const Typed = createContext<Typing | null>(null)
+
 /** Whether a segment's source overlaps the marked range. Touching is not overlapping. */
 function isMarked(segment: Segment, mark: { from: number; to: number } | null): boolean {
   if (!mark) return false
   return segment.srcStart < mark.to && mark.from < segment.srcEnd
 }
 
-function styled(segment: Segment, key: string, mark: { from: number; to: number } | null): ReactNode {
+/**
+ * What the browser did to the text, undone, before it is compared to the file.
+ *
+ * A `contenteditable` region does not hold exactly what somebody typed. A space
+ * at the end of a run, or one typed twice, comes back as U+00A0 — a no-break
+ * space — because that is how a browser stops collapsing whitespace it has been
+ * asked to preserve. Written through to the `.tex` file, that is a character
+ * the author never typed, invisible in every editor, and different from the
+ * space beside it in ways LaTeX cares about.
+ *
+ * So it is turned back into a space. That is a transformation of what somebody
+ * typed, which this file otherwise refuses to do — see `whyNot`, which refuses
+ * rather than escapes — and the difference is that this is not an
+ * interpretation of their intent. It is the removal of a character the editing
+ * surface inserted on its own behalf. Somebody who genuinely wants a no-break
+ * space in their LaTeX writes `~`, which is on the refused list precisely
+ * because it is markup.
+ */
+export function asTyped(text: string): string {
+  /* Written as an escape rather than as the character itself, because a
+     no-break space in a source file is indistinguishable from a space to
+     everybody who reads that line, which is most of why it is worth keeping
+     out of somebody's thesis. */
+  return text.replace(/\u00a0/g, ' ')
+}
+
+function styled(
+  segment: Segment,
+  key: string,
+  mark: { from: number; to: number } | null,
+  typing: Typing | null,
+): ReactNode {
   let node: ReactNode = segment.text
   for (const style of NESTING) {
     if (!segment.styles.includes(style)) continue
@@ -148,6 +244,66 @@ function styled(segment: Segment, key: string, mark: { from: number; to: number 
     node = <Tag className={spec.className}>{node}</Tag>
   }
   const marked = isMarked(segment, mark)
+  /* Only a literal span is typeable, and the whole argument is on `Typing`. */
+  const editable = typing !== null && segment.literal
+
+  /**
+   * A finished edit of this span, narrowed to what actually changed.
+   *
+   * `narrow` is where the arithmetic is and it is a pure function with its own
+   * tests, because this is the line that decides which bytes of somebody's
+   * thesis get replaced. What it returns is relative to the span; the span's
+   * own `srcStart` puts it in the file.
+   *
+   * Nothing is sent when nothing changed, which is the ordinary case: a reader
+   * who clicks into a sentence, reads it and clicks away has made no edit, and
+   * a write that rewrote the same bytes would move the file's mtime and
+   * invalidate every other reader's hash for nothing.
+   *
+   * A refusal puts the original text back into the element. It has to be done
+   * by hand rather than left to React: React's last-rendered value for this
+   * child is still `segment.text`, so from its point of view nothing changed
+   * and there is no re-render that would restore it. A span left holding text
+   * that is not in the file is the page telling the reader their correction
+   * landed when it did not — which is the failure this whole feature is most
+   * able to commit.
+   */
+  const finish = (element: HTMLElement) => {
+    if (!typing) return
+    const after = asTyped(element.textContent ?? '')
+    const change = narrow(segment.text, after)
+    if (!change) {
+      /* Not even a restore: the text is already what it was, and writing to the
+         DOM here would move the caret of somebody who has not finished. */
+      return
+    }
+    const put = () => {
+      element.textContent = segment.text
+    }
+    /* Checked here as well as at the door, so the sentence appears under the
+       reader's cursor instead of after a round trip. `whyNot` is the same
+       function the server runs — one rule, imported twice, rather than two
+       copies that can disagree about whether a per cent sign is markup. */
+    const refused = whyNot(change.text)
+    if (refused) {
+      put()
+      typing.say(refused)
+      return
+    }
+    void typing
+      .commit({
+        file: typing.file,
+        from: segment.srcStart + change.at,
+        to: segment.srcStart + change.upto,
+        text: change.text,
+      })
+      .then((why) => {
+        if (!why) return
+        put()
+        typing.say(why)
+      })
+  }
+
   return (
     <span
       key={key}
@@ -156,9 +312,76 @@ function styled(segment: Segment, key: string, mark: { from: number; to: number 
       data-literal={segment.literal ? '1' : '0'}
       /* Readable from the outside, so "did the right words get marked" is a
          thing a probe can answer by measuring rather than by looking at a
-         picture of a page. */
+         picture of a page. `data-editable` is here for the same reason, and it
+         is the one property of this feature a test without a browser can
+         actually assert: which spans a reader is allowed to type into. */
       data-marked={marked ? '1' : undefined}
-      className={marked ? 'passage-mark' : undefined}
+      data-editable={typing === null ? undefined : editable ? '1' : '0'}
+      contentEditable={editable ? true : undefined}
+      /* React warns about a `contentEditable` element with children, because it
+         cannot see what the browser does to them. That is exactly the
+         arrangement here and it is deliberate: React never re-renders this
+         subtree while it is being typed in — the props do not change — and
+         after a commit the paper is re-read and every span is rebuilt from the
+         file. */
+      suppressContentEditableWarning={editable ? true : undefined}
+      spellCheck={editable ? true : undefined}
+      onBlur={editable ? (event) => finish(event.currentTarget) : undefined}
+      onKeyDown={
+        editable
+          ? (event) => {
+              if (event.key === 'Enter') {
+                /* Enter commits rather than breaking the line. A blank line in
+                   LaTeX ends a paragraph, and `whyNot` refuses line breaks for
+                   that reason — so the key that would produce one is given the
+                   meaning somebody actually wants from it here. */
+                event.preventDefault()
+                event.currentTarget.blur()
+                return
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                event.currentTarget.textContent = segment.text
+                event.currentTarget.blur()
+              }
+            }
+          : undefined
+      }
+      onMouseDown={
+        typing && !editable
+          ? (event) => {
+              /*
+               * A derived span, pressed while the paper is editable: selected
+               * whole, and said out loud.
+               *
+               * The caret cannot enter it — it is not in an editing host — so
+               * without this the press does nothing at all, which reads as the
+               * page being broken rather than as a rule. Selecting the span is
+               * the honest unit: it is exactly the range a passage touching
+               * this span already snaps to, in `lib/selection.ts`.
+               */
+              event.preventDefault()
+              const selection = window.getSelection()
+              selection?.removeAllRanges()
+              const range = document.createRange()
+              range.selectNodeContents(event.currentTarget)
+              selection?.addRange(range)
+              typing.say(
+                'That is not what the source says — it is what this reader makes of it, so there is no place in '
+                  + 'the file for a cursor inside it. Edit the .tex to change it.',
+              )
+            }
+          : undefined
+      }
+      title={
+        typing && !editable
+          ? 'This is a rendering of the source rather than the source, so it cannot be typed into.'
+          : undefined
+      }
+      className={cn(
+        marked && 'passage-mark',
+        typing !== null && (editable ? 'typeable' : 'not-typeable'),
+      )}
     >
       {node}
     </span>
@@ -191,7 +414,8 @@ export function plain(segments: readonly Segment[]): string {
 
 export function Segments({ segments }: { segments: readonly Segment[] }) {
   const mark = useContext(Marked)
-  return <>{coalesce(withoutNotes(segments)).map((s, i) => styled(stripPin(s), String(i), mark))}</>
+  const typing = useContext(Typed)
+  return <>{coalesce(withoutNotes(segments)).map((s, i) => styled(stripPin(s), String(i), mark, typing))}</>
 }
 
 /**
