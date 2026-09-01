@@ -25,12 +25,11 @@ bun run typecheck
 is the one the host names in `roadmap.context.projectPath` — the same
 convention notes, checklist and journeys already keep. There is nothing to set.
 
-| Where                                    | Means                                        |
-| ---------------------------------------- | -------------------------------------------- |
-| `<project>/data/papers/<epic>/main.tex`  | the default, found by looking                |
-| `<project>/.kehikot/paper/papers.json`   | the exceptions, one line per epic            |
-| `PORT`                                   | 7870 by default                              |
-| `ROADMAP_ORIGIN`                         | who may frame this page; the local host by default |
+| Where                                        | Means                                              |
+| -------------------------------------------- | -------------------------------------------------- |
+| `<project>/.kehikot/paper/<epic>/main.tex`   | a paper. The only place one is looked for          |
+| `PORT`                                       | 7870 by default                                    |
+| `ROADMAP_ORIGIN`                             | who may frame this page; the local host by default |
 
 A paper is that directory's `main.tex`, plus whatever it `\include`s. Nothing
 is cached: the file is opened on every read, so a paper edited in an editor is
@@ -41,33 +40,30 @@ not an error and deliberately not a guess. The program this was extracted from
 had `../05_drafts/thesis_latex` compiled into it, which is the line that made it
 one person's app rather than a module.
 
-### The pointer file, for a project whose paper is somewhere else
+### One place, and why there is no second one
 
-```json
-{ "papers": { "thesis": "." } }
-```
+A paper is a folder with a `main.tex` in it, under
+`<project>/.kehikot/paper/`, named for the epic it belongs to. That is the
+whole rule. A thesis is not a special case: it is one paper in that folder,
+with its `chapters/`, `figures/`, `.cls` and `references.bib` beside it.
 
-One entry per epic; the value is a path **relative to the project root**. `"."`
-means the paper IS the project, which is the thesis case: `main.tex` at the top
-of its own repository with `chapters/`, `figures/`, a `.cls` and a
-`references.bib` beside it, and no `data/papers` anywhere.
+There used to be two roads. The default was `<project>/data/papers/<epic>/`,
+and a `<project>/.kehikot/paper/papers.json` named the exceptions — one line
+per epic, `{"papers": {"thesis": "."}}` for a project that was itself one
+paper. It went because it was config that grows an entry every time somebody's
+layout does not match a guess, and because two roads to a paper meant reading
+either one alone never told you which had applied.
 
-This is what `KEHIKKO_THESIS_DIR` used to be, and it is better on every axis
-that mattered. It is per-project rather than per-shell, so it travels with the
-repository it is about; it is versioned with the person's own work; and it
-cannot go missing when somebody restarts this module from a different terminal —
-which is exactly what happened to the variable, after which this app answered,
-correctly and uselessly, that nothing on this machine held a paper for the
-thesis.
+The argument that put papers outside `.kehikot/` was that the folder is a
+program's working material and a paper is the opposite — the thing the person
+is writing, with its own history. That was true while `.kehikot/` was ignored by
+git, which would have made a thesis a document with no history. It is not true
+now: whether that folder is committed is a per-project setting in the host, so
+a project whose papers live there keeps it in its history and says so in one
+place.
 
-A malformed or missing file means "this project declares no exceptions". It is
-hand-edited, so a stray comma must degrade to the default rather than to a page
-that will not draw. A value pointing out of the project is refused by `confine`,
-not by the parser, and a directory with no `main.tex` in it is not a root.
-
-An exception **wins** over a `data/papers/<epic>/` that happens to exist. The
-directory was found by looking; the pointer is a sentence somebody wrote on
-purpose, and when they disagree the one with an author behind it is the answer.
+A project with an unusual layout moves its files. It does not declare itself
+special.
 
 ### One project at a time, and each confined to itself
 

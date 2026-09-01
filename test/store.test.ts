@@ -28,7 +28,7 @@ import { confine, isEpic, listPapers, readPaper, readSource } from '../store.ts'
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'kehikko-paper-')))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-const papers = join(root, 'data', 'papers')
+const papers = join(root, '.kehikot', 'paper')
 mkdirSync(join(papers, 'good-epic', 'chapters'), { recursive: true })
 writeFileSync(
   join(papers, 'good-epic', 'main.tex'),

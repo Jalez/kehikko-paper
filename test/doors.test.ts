@@ -30,15 +30,16 @@ import { ID } from '../manifest.ts'
  */
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'kehikko-paper-doors-')))
 
-/** A project of the ordinary shape: papers under `data/papers`, nothing else. */
+/** A project holding one paper among its other things. */
 const roadmap = join(root, 'roadmap')
-/** A project that IS one paper, which needs the pointer file to be found. */
-const thesis = join(root, 'thesis')
+/** A project whose one paper is a thesis. Same folder, same rule. */
+const thesisProject = join(root, 'thesis')
+const thesis = join(thesisProject, '.kehikot', 'paper', 'thesis')
 
 beforeAll(() => {
-  mkdirSync(join(roadmap, 'data', 'papers', 'a-paper'), { recursive: true })
+  mkdirSync(join(roadmap, '.kehikot', 'paper', 'a-paper'), { recursive: true })
   writeFileSync(
-    join(roadmap, 'data', 'papers', 'a-paper', 'main.tex'),
+    join(roadmap, '.kehikot', 'paper', 'a-paper', 'main.tex'),
     [
       '\\title{Something argued}',
       '\\begin{document}',
@@ -49,13 +50,11 @@ beforeAll(() => {
       '\\end{document}',
     ].join('\n'),
   )
-  /* The shape a thesis actually has: one document at the top of its own
-     repository with a `figures/` folder beside it, rather than a subdirectory
-     of a directory of papers. One line in `.kehikot/paper/papers.json` is the
-     whole of what `KEHIKKO_THESIS_DIR` used to be. */
+  /* A thesis, with a `figures/` folder beside its `main.tex`. Under the old
+     model this was the shape that needed a pointer file, because the document
+     sat at the top of its own repository. It sits where papers sit now, and
+     nothing about this fixture says which kind of paper it is. */
   mkdirSync(join(thesis, 'figures'), { recursive: true })
-  mkdirSync(join(thesis, '.kehikot', 'paper'), { recursive: true })
-  writeFileSync(join(thesis, '.kehikot', 'paper', 'papers.json'), JSON.stringify({ papers: { thesis: '.' } }))
   writeFileSync(
     join(thesis, 'main.tex'),
     [
@@ -138,7 +137,7 @@ describe('the ordinary doors', () => {
     expect(body.keeps).toBe(true)
     expect(body.papers.map((p) => p.epic)).toEqual(['a-paper'])
 
-    const other = get('/api/papers', inProject(thesis))?.body as { papers: { epic: string }[] }
+    const other = get('/api/papers', inProject(thesisProject))?.body as { papers: { epic: string }[] }
     expect(other.papers.map((p) => p.epic)).toEqual(['thesis'])
   })
 
@@ -162,7 +161,7 @@ describe('the ordinary doors', () => {
     expect(unset.keeps).toBe(false)
 
     const empty = join(root, 'empty-roadmap')
-    mkdirSync(join(empty, 'data', 'papers'), { recursive: true })
+    mkdirSync(join(empty, '.kehikot', 'paper'), { recursive: true })
     const nonePlease = get('/api/papers', inProject(empty))?.body as {
       keeps: boolean
       papers: unknown[]
@@ -184,7 +183,7 @@ describe('the ordinary doors', () => {
     /* The property the two-root arrangement had to keep and the two-project one
        still does: nothing resolves against a root it does not belong to. The
        slug is right, the paper exists on this disk, and the answer is still no. */
-    expect(get('/api/paper', inProject(thesis, 'epic=a-paper'))?.status).toBe(404)
+    expect(get('/api/paper', inProject(thesisProject, 'epic=a-paper'))?.status).toBe(404)
     expect(get('/api/paper', inProject(roadmap, 'epic=thesis'))?.status).toBe(404)
   })
 
@@ -286,7 +285,7 @@ describe('the MCP door', () => {
     }
     expect(ask(roadmap)).toContain('a-paper')
     expect(ask(roadmap)).not.toContain('thesis')
-    expect(ask(thesis)).toContain('thesis')
+    expect(ask(thesisProject)).toContain('thesis')
   })
 
   test('a notification is answered with nothing at all', () => {
@@ -314,7 +313,7 @@ describe('the figure door', () => {
    */
 
   test('a raster the paper named comes back as bytes with a type, not as JSON', () => {
-    const reply = get('/api/figure', inProject(thesis, 'epic=thesis&file=figures%2Fplot.png'))
+    const reply = get('/api/figure', inProject(thesisProject, 'epic=thesis&file=figures%2Fplot.png'))
     expect(reply?.status).toBe(200)
     expect(reply?.body).toBeNull()
     expect(reply?.binary?.type).toBe('image/png')
@@ -325,7 +324,7 @@ describe('the figure door', () => {
     /* The check that stops this being a file server. `figures/private.png`
        exists, is a PNG, and is inside the root; it is refused because the paper
        does not name it. */
-    const reply = get('/api/figure', inProject(thesis, 'epic=thesis&file=figures%2Fprivate.png'))
+    const reply = get('/api/figure', inProject(thesisProject, 'epic=thesis&file=figures%2Fprivate.png'))
     expect(reply?.status).toBe(404)
     expect(reply?.binary).toBeUndefined()
   })
@@ -336,14 +335,14 @@ describe('the figure door', () => {
       'epic=thesis&file=main.tex',
       'epic=thesis',
     ]) {
-      const reply = get('/api/figure', inProject(thesis, query))
+      const reply = get('/api/figure', inProject(thesisProject, query))
       expect(reply?.binary).toBeUndefined()
       expect(reply?.status).toBeGreaterThanOrEqual(400)
     }
   })
 
   test('an epic name that is not one is refused before any filesystem call', () => {
-    expect(get('/api/figure', inProject(thesis, 'epic=..%2F..&file=figures%2Fplot.png'))?.status).toBe(400)
+    expect(get('/api/figure', inProject(thesisProject, 'epic=..%2F..&file=figures%2Fplot.png'))?.status).toBe(400)
   })
 
   test('one root cannot be asked for the other root’s figure', () => {

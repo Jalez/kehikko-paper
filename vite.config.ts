@@ -76,9 +76,9 @@ function doors(): Plugin {
        * see why it has stopped doing anything.
        */
       server.config.logger.info(
-        'paper: papers come from the open project — <project>/data/papers/<epic>/main.tex, or wherever that '
-          + 'project’s .kehikot/paper/papers.json says. KEHIKKO_PAPERS_DIR and KEHIKKO_THESIS_DIR are gone, and '
-          + 'are ignored if they are still set.',
+        'paper: papers come from the open project — <project>/.kehikot/paper/<epic>/main.tex, and nowhere else. '
+          + 'KEHIKKO_PAPERS_DIR and KEHIKKO_THESIS_DIR are gone, and so is the papers.json that briefly replaced '
+          + 'them; all three are ignored if they are still there.',
       )
 
       server.middlewares.use((request, response, next) => {

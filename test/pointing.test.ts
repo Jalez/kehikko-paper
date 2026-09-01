@@ -24,7 +24,7 @@ import { shouldPublish } from '../src/use-published-passage.ts'
  * checked. So the guard is a pure function and it is tested like one.
  */
 
-const DIR = '/Users/x/Projects/roadmap/data/papers/modes-are-modules'
+const DIR = '/Users/x/Projects/roadmap/.kehikot/paper/modes-are-modules'
 
 function block(over: Partial<PlacedBlock> = {}): PlacedBlock {
   return {

@@ -38,10 +38,11 @@
 # single document, because a thesis has no parent full of sibling papers to
 # point at. Both are gone.
 #
-# A paper now lives in the project it is about — `<project>/data/papers/<epic>/`
-# by default, or wherever that project's `.kehikot/paper/papers.json` says — and
-# the project is the one the host names in every context it sends. So there is
-# nothing for this script to export and nothing for somebody to remember.
+# A paper now lives in the project it is about, at
+# `<project>/.kehikot/paper/<epic>/main.tex` — one place, the same folder every
+# other module keeps its material for a project in — and the project is the one
+# the host names in every context it sends. So there is nothing for this script
+# to export and nothing for somebody to remember.
 #
 # The block that used to sit at the bottom of this file, defaulting both
 # variables to paths under `$HOME`, is gone with them. It was written after a

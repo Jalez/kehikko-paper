@@ -15,7 +15,7 @@ import type { Passage as Highlighted } from '../src/use-selection.ts'
  * notes container blank whenever nobody happened to be dragging.
  */
 
-const paper = { epic: 'modes-are-modules', dir: '/Users/x/Projects/roadmap/data/papers/modes-are-modules' } as Paper
+const paper = { epic: 'modes-are-modules', dir: '/Users/x/Projects/roadmap/.kehikot/paper/modes-are-modules' } as Paper
 
 const highlight = (over: Partial<Highlighted> = {}): Highlighted => ({
   srcStart: 4120,
@@ -43,7 +43,7 @@ describe('the three rungs, and no fourth', () => {
        which is the ask the field was designed for. */
     const passage = passageFor(paper, { page: 7, file: 'chapters/bridge.tex' }, null)
     expect(passage).toEqual({
-      path: '/Users/x/Projects/roadmap/data/papers/modes-are-modules/chapters/bridge.tex',
+      path: '/Users/x/Projects/roadmap/.kehikot/paper/modes-are-modules/chapters/bridge.tex',
       page: 7,
       from: null,
       to: null,
@@ -73,7 +73,7 @@ describe('the path is one absolute string, spelled one way', () => {
        sharing one. A consumer handed `chapters/bridge.tex` would have to guess
        which of eleven projects on this machine it is relative to. */
     expect(passageFor(paper, { page: 1, file: 'chapters/bridge.tex' }, null)?.path).toBe(
-      '/Users/x/Projects/roadmap/data/papers/modes-are-modules/chapters/bridge.tex',
+      '/Users/x/Projects/roadmap/.kehikot/paper/modes-are-modules/chapters/bridge.tex',
     )
   })
 

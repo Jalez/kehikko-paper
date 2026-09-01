@@ -487,8 +487,8 @@ export function wordsFor(sight: Sight): string[] {
            next. The fallback is for the case where the fetch answered without
            one, which is not a state worth a screen of its own. */
         sight.why ||
-          `That project holds no paper for “${sight.epic}”. That is not a failure to read one — there is no folder ` +
-            'for it, or the folder has no main.tex in it.',
+          `That project holds no paper for “${sight.epic}”. That is not a failure to read one — there is no ` +
+            '.kehikot/paper folder of that name, or the folder is there and has no main.tex in it.',
       ]
     case 'no-project':
       return [
@@ -496,9 +496,10 @@ export function wordsFor(sight: Sight): string[] {
         sight.why ||
           'A paper lives in the project it is about, so there is nowhere to look until one is open. Open a project ' +
             'on the canvas and the paper for whichever epic is open appears here.',
-        'This is where the papers are looked for: <project>/data/papers/<epic>/main.tex. If a project’s paper is ' +
-          'somewhere else — a thesis, where the paper IS the project — .kehikot/paper/papers.json inside it says ' +
-          'so, one line per epic: {"papers":{"thesis":"."}}.',
+        'This is where a paper is looked for, and it is the only place: ' +
+          '<project>/.kehikot/paper/<epic>/main.tex. There is no second layout and nothing to configure — a ' +
+          'project has a paper once that folder holds a document, whether the project is one thesis or a dozen ' +
+          'papers.',
       ]
     case 'asking':
       return ['Reading…', `Opening the paper for “${sight.epic}”.`]

@@ -1,5 +1,5 @@
 import { ID, MANIFEST, VERSION } from './manifest.ts'
-import { isEpic, keepsPapers, listPapers, projectOf, readFigure, readPaper, readSource } from './store.ts'
+import { MAIN, PAPERS_AT, isEpic, keepsPapers, listPapers, projectOf, readFigure, readPaper, readSource } from './store.ts'
 
 /**
  * Every door this app answers on that is not the page itself.
@@ -57,9 +57,9 @@ import { isEpic, keepsPapers, listPapers, projectOf, readFigure, readPaper, read
  *
  * ## Every door here now names a project, and none of them defaults one
  *
- * A paper lives in the project it is about — `<project>/data/papers/<epic>/`,
- * or wherever that project's `.kehikot/paper/papers.json` says — so "which
- * paper" is not answerable without "whose". Every read takes a `project` and
+ * A paper lives in the project it is about, at
+ * `<project>/.kehikot/paper/<epic>/`, so "which paper" is not answerable
+ * without "whose". Every read takes a `project` and
  * nothing here supplies a default. The available defaults are each wrong in a
  * way that is silent: `process.cwd()` is THIS MODULE's directory; "the only
  * project that has papers" is right until there are two; a compiled-in path is
@@ -144,30 +144,49 @@ const bad = (why: string, status = 400): Reply => ({ status, body: { ok: false, 
  */
 const NOWHERE =
   'No project is open, so there is nowhere to look for a paper. A paper lives in the project it is about: ' +
-  'data/papers/<epic>/main.tex by default, or wherever that project’s .kehikot/paper/papers.json says. Open a ' +
+  '.kehikot/paper/<epic>/main.tex, in the project the canvas is standing in. Open a ' +
   'project on the canvas, or pass one — `project` on the MCP door, `?project=` in this page’s own URL.'
 
 /**
  * What to say about a project that is open and holds no paper for an epic.
  *
  * Two different sentences, because they are two different things to do next.
- * A project with `data/papers/` or a `.kehikot/` in it is a project this app
- * understands and simply has no paper for THIS epic — write one, or accept that
- * this epic is not about a paper. A project with neither has never been set up
- * for papers at all, and the answer is the layout rather than the file.
+ * A project with a `.kehikot/paper/` in it is one this app understands and
+ * simply has no paper for THIS epic — write one, or accept that this epic is
+ * not about a paper. A project without that folder has never held a paper at
+ * all, and the answer is where papers go rather than which file is missing.
  *
  * The distinction is the same one `/api/papers` has always drawn between "there
  * are no papers here" and "nobody said where to look": an app that offers one
  * sentence for both has told somebody the opposite of the truth half the time.
  */
 function noPaper(epic: string | null, project: string): string {
+  /*
+   * Two sentences, and the whole job of having two is that they are different.
+   *
+   * A project that keeps papers and has none for this epic is one situation; a
+   * project that has never held a paper at all is another, and what a person
+   * does next is different in each. The bug worth remembering is not that the
+   * sentences were wrong, it is that `keepsPapers` used to answer for the wrong
+   * folder — it asked whether `.kehikot/` existed, which it does in any project
+   * where another module has ever saved anything — so a project with no papers
+   * got the sentence written for a project with papers.
+   *
+   * It is written for a person reading it in a container. This is not a log
+   * line: it goes on screen, under a heading, in the space the paper would have
+   * been, and it was previously terse enough to read as one — which is what
+   * `no paper for "tables-declare-themselves" in /Users/…/hippos-portal` is.
+   */
   if (keepsPapers(project)) {
-    return epic === null ? `${project} holds no papers yet.` : `no paper for "${epic}" in ${project}`
+    return epic === null
+      ? 'This project keeps papers, but has none in it yet.'
+      : `This project has no paper for “${epic}”. There is no folder of that name under ` +
+        `${PAPERS_AT}/, or the folder is there and has no ${MAIN} in it.`
   }
   return (
-    `${project} keeps no papers. This app looks in data/papers/<epic>/main.tex, and reads ` +
-    '.kehikot/paper/papers.json for any epic whose paper is somewhere else — `{"papers":{"thesis":"."}}` for a ' +
-    'project that IS one paper.'
+    `This project keeps no papers. A paper lives in ${PAPERS_AT}/<epic>/${MAIN}, beside ` +
+    'whatever else this project keeps for its modules — so a project has papers once there is a folder there ' +
+    'with a document in it, and needs nothing configured to say so.'
   )
 }
 
@@ -427,9 +446,11 @@ export function answer(
      *  - `project: null` — nobody has said which project. Not a fault: it is
      *    where a page starts before a host greets it, and where an unframed
      *    page stays until somebody puts `?project=` in the URL.
-     *  - `project` set, `keeps: false` — the project is open and has never been
-     *    set up for papers: no `data/papers/`, no `.kehikot/`. The answer is a
-     *    layout, not a missing file.
+     *  - `project` set, `keeps: false` — the project is open and has never held
+     *    a paper: there is no `.kehikot/paper/` in it. The answer is where
+     *    papers go, not which file is missing. It asks about that folder and
+     *    not about `.kehikot/`, which exists wherever any module has saved
+     *    anything and would answer yes for a project with no papers at all.
      *  - `project` set, `keeps: true`, `papers: []` — an ordinary project that
      *    has no papers yet, which is a true and unremarkable thing to say.
      *
