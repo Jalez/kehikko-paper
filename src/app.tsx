@@ -51,7 +51,7 @@ import { useSelection } from './use-selection.ts'
 const FRAMED = typeof window !== 'undefined' && window.parent !== window
 
 export function App() {
-  const { sight, said, setSaid, resize, point, pointed, goto } = usePaper(FRAMED)
+  const { sight, said, setSaid, resize, point, pointed, goto, start } = usePaper(FRAMED)
   const root = useRef<HTMLElement | null>(null)
   /**
    * A walk asked for from outside, and nothing else.
@@ -401,7 +401,7 @@ export function App() {
         {paper ? (
           <PaginatedView paper={paper} walk={walk} mark={mark} rootRef={root} onSheet={setSheet} />
         ) : (
-          <Screen sight={sight} />
+          <Screen sight={sight} onStart={(epic) => void start(epic)} />
         )}
       </div>
 
@@ -446,8 +446,24 @@ function textOf(block: Paper['blocks'][number]): string {
  * and after they close what they had open — a state a reader passes through
  * several times an hour.
  */
-export function Screen({ sight }: { sight: Sight }) {
+export function Screen({ sight, onStart }: { sight: Sight; onStart?(epic: string): void }) {
   const [heading, ...lines] = wordsFor(sight)
+  /*
+   * The empty state is a place and a button, not a paragraph.
+   *
+   * What stood here explained the convention — where papers live, that nothing
+   * needs configuring, that a project has papers once a folder holds a
+   * document. All true, and the wrong answer to the question somebody is
+   * actually asking, which is "where does it go" and then "make it". The
+   * user's word for the paragraph was "silly".
+   *
+   * So the path is shown as a path: monospace, selectable, breakable, the thing
+   * you copy into a terminal. And the button is drawn only when there is
+   * somewhere for it to write and somebody to write it — see `where` on the
+   * refusal, which is null when the server did not say.
+   */
+  const start = sight.at === 'no-paper' && sight.where && onStart ? sight : null
+
   return (
     <div className="rounded-md border bg-card p-3 text-[0.85rem] leading-relaxed">
       <h2 className="mb-1 text-[0.95rem] font-semibold text-card-foreground">{heading}</h2>
@@ -456,6 +472,22 @@ export function Screen({ sight }: { sight: Sight }) {
           {line}
         </p>
       ))}
+      {start && (
+        <div className="mt-2">
+          <p className="text-muted-foreground mb-1">It would go here:</p>
+          {/* `break-all` and `min-w-0`, because a path is the long unbreakable
+              string this workspace has already had set an eleven-hundred pixel
+              floor under a 220-pixel container. It wraps rather than widening. */}
+          <p className="text-foreground mb-2 min-w-0 font-mono text-[0.75rem] break-all">{start.where}</p>
+          <button
+            type="button"
+            className="border-input hover:bg-accent rounded border px-2 py-1 text-[0.75rem] font-medium"
+            onClick={() => onStart?.(start.epic)}
+          >
+            Start one there
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -480,15 +512,15 @@ export function wordsFor(sight: Sight): string[] {
       ]
     case 'no-paper':
       return [
-        'This epic has no paper',
+        'This epic has no paper yet',
         /* The server's own sentence when there is one, because only the server
            knows whether the project has never been set up for papers or simply
            has none for this epic — and those are two different things to do
            next. The fallback is for the case where the fetch answered without
            one, which is not a state worth a screen of its own. */
-        sight.why ||
-          `That project holds no paper for “${sight.epic}”. That is not a failure to read one — there is no ` +
-            '.kehikot/paper folder of that name, or the folder is there and has no main.tex in it.',
+        /* The server's sentence when there is one, and it is now short: the
+           place is drawn below as a path rather than described in prose. */
+        sight.where ? '' : sight.why,
       ]
     case 'no-project':
       return [

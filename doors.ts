@@ -1,5 +1,17 @@
 import { ID, MANIFEST, VERSION } from './manifest.ts'
-import { MAIN, PAPERS_AT, isEpic, keepsPapers, listPapers, projectOf, readFigure, readPaper, readSource } from './store.ts'
+import {
+  MAIN,
+  PAPERS_AT,
+  isEpic,
+  keepsPapers,
+  listPapers,
+  projectOf,
+  readFigure,
+  readPaper,
+  readSource,
+  startPaper,
+  whereItWouldGo,
+} from './store.ts'
 
 /**
  * Every door this app answers on that is not the page itself.
@@ -484,8 +496,35 @@ export function answer(
        thing at the same door, in the same words, for the same reason. */
     if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
     const paper = readPaper(epic, project)
-    if (!paper) return bad(noPaper(epic, project), 404)
+    /* `where` rides along on the refusal, because the next thing anybody wants
+       to know is where it would have been — and the page draws a button that
+       needs it. It is on the refusal rather than fetched separately so the two
+       cannot disagree about which epic they are talking about. */
+    if (!paper) return { status: 404, body: { ok: false, error: noPaper(epic, project), where: whereItWouldGo(epic, project) } }
     return ok({ ok: true, paper })
+  }
+
+  /*
+   * Start a paper for an epic: the one door here that writes.
+   *
+   * A POST because it makes something, and the only body it takes is the epic
+   * and the project — there is no content to send. What gets written is in
+   * `startPaper`, along with why it refuses rather than overwrites and why this
+   * module having exactly one writer is worth saying out loud.
+   *
+   * The refusal is a 409 and not a 400: "there is already something there" is
+   * not a malformed request, it is a request that arrived second, and a page
+   * that had drawn the button before somebody else made the folder is the
+   * ordinary way to get here.
+   */
+  if (path === '/api/paper' && method === 'POST') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+    const started = startPaper(epic, project)
+    if (!started.ok) return bad(started.why, 409)
+    return ok({ ok: true, dir: started.dir, paper: readPaper(epic, project) })
   }
 
   if (path === '/api/figure' && method === 'GET') {

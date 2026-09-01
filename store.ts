@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'roadmap-module-protocol'
@@ -201,6 +201,103 @@ export function roots(project: string | null): PaperRoot[] {
     out.push({ epic: entry, dir: at })
   }
   return out
+}
+
+/**
+ * Where this epic's paper would go, whether or not one is there.
+ *
+ * A path a person can read, copy, and `cd` to. The screen that says "there is
+ * no paper here" was a paragraph explaining a convention, which is the wrong
+ * shape for the question somebody is actually asking — they want to know where
+ * it goes and, most of the time, to put one there. The user's word for the
+ * paragraph was "silly", and they were right: a path and a button say it.
+ *
+ * `null` when there is no project or the epic is not one, because there is no
+ * such place then and inventing a plausible-looking path would be worse than
+ * saying nothing.
+ */
+export function whereItWouldGo(epic: string, project: string | null): string | null {
+  if (project === null || !isEpic(epic)) return null
+  /*
+   * `join` and not `confine`, and a test caught the difference.
+   *
+   * `confine` resolves a real path, which means it answers null for a path that
+   * does not exist — and the whole subject here is a directory that does not
+   * exist yet, in a project that may have no `.kehikot/paper` at all. Confining
+   * would refuse in exactly the case this function was written for: a project
+   * that has never held a paper, which is when somebody wants to start one.
+   *
+   * What makes the shape check enough on its own is that it is the ONLY input.
+   * `SLUG` forbids a dot and a slash, so nothing shaped like a traversal can be
+   * an epic; the other half of `confine`'s job — resolving symlinks — has
+   * nothing to resolve, because there is no entry there to be a symlink. Every
+   * path that goes on to be READ still goes through `confine`, in `roots`,
+   * against a directory that exists by then.
+   */
+  return join(papersDir(project), epic)
+}
+
+export type Started = { ok: true; dir: string } | { ok: false; why: string }
+
+/**
+ * Make the folder for an epic's paper, with a document in it.
+ *
+ * ## This module was read-only, and this is the one thing it writes
+ *
+ * Every other door here reads. That was worth keeping and is worth naming when
+ * it changes: a reader that has never written cannot have a bug that destroys
+ * somebody's afternoon, and every argument in this file about fences was made
+ * easier by it. So this is deliberately the narrowest write that answers the
+ * question — one directory, one file, and never a second time.
+ *
+ * ## It refuses rather than overwrites, always
+ *
+ * If anything is already at that path this returns a refusal and touches
+ * nothing, whether that is a paper, a folder somebody made by hand, or a file
+ * of the same name. There is no flag to force it. The failure this forecloses
+ * is the only one that matters here — a button labelled "start a paper"
+ * replacing a paper somebody had already started — and a program that can never
+ * do it does not need to be careful about when it does.
+ *
+ * ## What it writes is a document and not a template
+ *
+ * `\documentclass{article}`, a title taken from the epic, and an empty
+ * `document`. It compiles, the reader draws it immediately, and there is
+ * nothing in it to delete before writing. A scaffold full of commented-out
+ * suggestions would be this app having opinions about somebody's paper.
+ */
+export function startPaper(epic: string, project: string | null): Started {
+  const dir = whereItWouldGo(epic, project)
+  if (dir === null) return { ok: false, why: 'There is nowhere to start a paper: no project is open.' }
+  if (existsSync(dir)) return { ok: false, why: `There is already something at ${dir}.` }
+
+  try {
+    mkdirSync(dir, { recursive: true })
+    const main = join(dir, MAIN)
+    /* Checked again after the directory exists, for the reason `makeDir` gives
+       in the sibling modules: the only honest moment to ask what is at a path
+       is once you are standing on it. */
+    if (existsSync(main)) return { ok: false, why: `There is already a ${MAIN} at ${dir}.` }
+    writeFileSync(
+      main,
+      [
+        '\\documentclass{article}',
+        '',
+        `\\title{${epic}}`,
+        '',
+        '\\begin{document}',
+        '',
+        '\\maketitle',
+        '',
+        '\\end{document}',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    return { ok: true, dir }
+  } catch (error) {
+    return { ok: false, why: `That folder could not be made: ${(error as Error).message}` }
+  }
 }
 
 /**

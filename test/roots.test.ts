@@ -3,7 +3,17 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { keepsPapers, listPapers, projectOf, readFigure, readPaper, readSource, roots } from '../store.ts'
+import {
+  keepsPapers,
+  listPapers,
+  projectOf,
+  readFigure,
+  readPaper,
+  readSource,
+  roots,
+  startPaper,
+  whereItWouldGo,
+} from '../store.ts'
 
 /**
  * Where a paper is, now that the answer is "in the project".
@@ -361,5 +371,55 @@ describe('each root is confined to itself, and each project to itself', () => {
 
     expect(keepsPapers(roadmap)).toBe(true)
     expect(keepsPapers(thesisProject)).toBe(true)
+  })
+})
+
+describe('starting a paper, which is the one thing this module writes', () => {
+  test('says where a paper would go, whether or not one is there', () => {
+    expect(whereItWouldGo('good-epic', roadmap)).toBe(join(papers, 'good-epic'))
+    expect(whereItWouldGo('not-written-yet', roadmap)).toBe(join(papers, 'not-written-yet'))
+    /* No project and no epic are both "there is no such place", and inventing a
+       plausible-looking path would be worse than saying nothing. */
+    expect(whereItWouldGo('good-epic', null)).toBeNull()
+    expect(whereItWouldGo('../climb', roadmap)).toBeNull()
+  })
+
+  test('makes a folder with a document in it, and the paper reads immediately', () => {
+    const fresh = join(root, 'starting-here')
+    mkdirSync(fresh, { recursive: true })
+    const made = startPaper('a-new-one', fresh)
+    expect(made.ok).toBe(true)
+
+    /* The point of writing a real document rather than a template: what appears
+       is a paper, not a message about one. */
+    const paper = readPaper('a-new-one', fresh)
+    expect(paper).not.toBeNull()
+    expect(paper!.title).toBe('a-new-one')
+    expect(roots(fresh).map((r) => r.epic)).toEqual(['a-new-one'])
+    expect(keepsPapers(fresh)).toBe(true)
+  })
+
+  /*
+   * The failure this forecloses is the only one that matters: a button labelled
+   * "start a paper" replacing a paper somebody had already started. There is no
+   * flag to force it, so it cannot happen by being called wrongly.
+   */
+  test('refuses rather than overwriting, and touches nothing when it does', () => {
+    const before = readSource('good-epic', 'main.tex', roadmap)
+    const again = startPaper('good-epic', roadmap)
+    expect(again.ok).toBe(false)
+    expect(readSource('good-epic', 'main.tex', roadmap)).toBe(before)
+  })
+
+  test('refuses a folder that is there but empty, rather than filling it in', () => {
+    /* `empty-epic` is a directory with no `main.tex` — an epic with no paper.
+       Writing into it would be this app deciding what somebody's empty folder
+       was for. */
+    const said = startPaper('empty-epic', roadmap)
+    expect(said.ok).toBe(false)
+  })
+
+  test('with no project there is nowhere to write, and nothing is invented', () => {
+    expect(startPaper('anything', null).ok).toBe(false)
   })
 })

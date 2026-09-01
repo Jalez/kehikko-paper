@@ -75,3 +75,18 @@ export async function json(path: string, params: Record<string, string> = {}): P
   if (!body || typeof body !== 'object') throw new Error('that answer was not a document')
   return body as Record<string, unknown>
 }
+
+/**
+ * A write, which is the only kind this app makes.
+ *
+ * Same URL builder as `json`, so the project rides along the way it does on
+ * every read — a POST that forgot it would ask the server to make a folder in
+ * a project nobody named. The body is empty on purpose: what is being made is
+ * decided by the epic and the project, and there is no content to send.
+ */
+export async function post(path: string, params: Record<string, string> = {}): Promise<Record<string, unknown>> {
+  const response = await fetch(apiUrl(path, params), { method: 'POST', headers: { accept: 'application/json' } })
+  const body: unknown = await response.json()
+  if (!body || typeof body !== 'object') throw new Error('that answer was not a document')
+  return body as Record<string, unknown>
+}

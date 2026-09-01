@@ -547,7 +547,7 @@ describe('the screens that are not a paper', () => {
    */
   const cases: { sight: Sight; says: RegExp }[] = [
     { sight: { at: 'no-epic' }, says: /No epic is open/ },
-    { sight: { at: 'no-paper', epic: 'unwritten', why: '' }, says: /This epic has no paper/ },
+    { sight: { at: 'no-paper', epic: 'unwritten', why: '', where: null }, says: /This epic has no paper yet/ },
     /* `unconfigured` was here, saying "nobody has said where the papers are" —
        a sentence about environment variables. There are none: a paper is in the
        project, so the only way to have nowhere to look is to have no project,

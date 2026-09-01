@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { connect, type Connection } from 'roadmap-module-protocol/client'
 
 import type { Paper } from '../store.ts'
-import { json, standIn, standingIn } from './api.ts'
+import { json, post, standIn, standingIn } from './api.ts'
 
 /**
  * What this page can see, and the one place the wire and the papers meet.
@@ -61,7 +61,22 @@ export type Sight =
    * composes it, because the server is the only one that knows whether the
    * project keeps papers at all — see `noPaper` in `doors.ts`.
    */
-  | { at: 'no-paper'; epic: string; why: string }
+  | {
+      at: 'no-paper'
+      epic: string
+      why: string
+      /**
+       * Where the paper would go, as the server names it.
+       *
+       * Carried on the refusal rather than fetched, so the path on screen and
+       * the epic in the sentence cannot be about two different things. `null`
+       * when the server did not say — an older build, or a refusal that came
+       * from somewhere other than the paper door — and the screen then shows
+       * the sentence and no button, which is the honest reading of "I do not
+       * know where it goes".
+       */
+      where: string | null
+    }
   /**
    * Nobody has said which project, so there is nowhere to look.
    *
@@ -263,7 +278,12 @@ export function usePaper(framed: boolean) {
         setSight({ at: 'no-project', why: String(body.error ?? '') })
         return
       }
-      setSight({ at: 'no-paper', epic, why: String(body.error ?? '') })
+      setSight({
+        at: 'no-paper',
+        epic,
+        why: String(body.error ?? ''),
+        where: typeof body.where === 'string' && body.where ? body.where : null,
+      })
       setSaid('')
     } catch (e) {
       if (mine !== asking.current) return
@@ -446,6 +466,31 @@ export function usePaper(framed: boolean) {
   }, [look])
 
   /**
+   * Start a paper for the epic that has none, and show it.
+   *
+   * The whole of the interaction is one press: the folder is made with a
+   * document in it and the same read that would have run anyway runs again, so
+   * what appears is the paper rather than a message about a paper. If the door
+   * refuses — something is already there, which is what a second press or a
+   * second container would find — the refusal replaces the sentence and the
+   * button goes, because the reason it was drawn has stopped being true.
+   */
+  const start = useCallback(async (epic: string) => {
+    if (standingIn() === null) return
+    try {
+      const body = await post('/api/paper', { epic })
+      if (body.ok === true && body.paper) {
+        setSight({ at: 'reading', paper: body.paper as Paper })
+        setSaid('')
+        return
+      }
+      setSight({ at: 'no-paper', epic, why: String(body.error ?? ''), where: null })
+    } catch (e) {
+      setSight({ at: 'broke', why: `A paper for ${epic} could not be started: ${(e as Error).message}` })
+    }
+  }, [])
+
+  /**
    * Say how tall this page would like its frame to be.
    *
    * A request, not an instruction: the host clamps whatever arrives. It is
@@ -485,8 +530,8 @@ export function usePaper(framed: boolean) {
   }, [])
 
   return useMemo(
-    () => ({ sight, said, setSaid, resize, point, pointed, goto }),
-    [sight, said, resize, point, pointed],
+    () => ({ sight, said, setSaid, resize, point, pointed, goto, start }),
+    [sight, said, resize, point, pointed, start],
   )
 }
 
