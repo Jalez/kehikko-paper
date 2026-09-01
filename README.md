@@ -173,18 +173,41 @@ Tick **Edit** beside the page number and the paper becomes typeable in place: a
 typo is fixed where you are reading it, and the `.tex` file on disk is what
 changes. There is no raw-source box, and this is not one in disguise.
 
-**Only text that IS the source may be typed into.** Every span the parser
-produces says whether its rendered characters are character-for-character the
-bytes it came from (`literal`) or a rendering of them (`derived` —
-`\autocite{jones}` shown as `[jones]`, an escape, a macro the paper defines for
-itself). Only a literal span is `contentEditable`, because only there does an
-offset inside what you see mean an offset into the file. A derived span refuses
-the cursor — a browser will not place a caret outside an editing host, so the
-refusal costs no code and cannot be got round by a keyboard, a drag or a paste —
-and pressing one selects it whole and says why. Its source form is deliberately
-not revealed: rendered prose with markup showing in the middle of it is two
-languages on one page, and editing the revealed markup is a source editor, which
-is the thing this view exists not to be.
+**Text whose source can be reproduced from what you see may be typed into.**
+That is ordinary prose, including a paragraph the author hard-wrapped: a run of
+whitespace in the source draws as one space, and the rule inverts, so one space
+written back over the whole run draws as one space. It is not a citation:
+`\autocite{jones}` draws as `[jones]`, seven characters standing in for
+seventeen, and nothing recovers the command from them. Nor an escape — `\%`
+drawn as `%` would comment out the rest of the line if it were written back as
+itself, and `~` is a non-breaking space somebody chose.
+
+Those refuse the cursor — a browser will not place a caret outside an editing
+host, so the refusal costs no code and cannot be got round by a keyboard, a drag
+or a paste — and pressing one selects it whole and says why. Their source form
+is deliberately not revealed: rendered prose with markup showing in the middle
+of it is two languages on one page, and editing the revealed markup is a source
+editor, which is the thing this view exists not to be. On the real thesis this
+leaves 97% of the characters typeable; `dev/typeable.probe.ts` is how that is
+measured, and the remainder is citations, references, inline maths and 56
+characters of escapes.
+
+**This is deliberately NOT the `literal` flag**, and one flag doing both jobs
+was a real bug rather than a tidiness point. `literal` says the rendered
+characters are the source characters one for one — a claim about MAPPING, which
+`src/lib/selection.ts` depends on and must never be told wrongly. A wrapped
+paragraph fails it, correctly. Editing was hung off the same flag, so every
+paragraph in a hard-wrapped thesis was locked while its headings, having no wrap
+inside them, stayed editable: measured at 1% against 100%, and reported as "so I
+can edit the titles of sections but not the text itself?". `literal` is
+unchanged; `typeable` is the separate claim, and `place()` in `latex/edit.ts`
+maps a change in what you see onto the file through the pieces a run was merged
+from — exactly inside a literal piece, snapped over a whitespace gap, refused
+anywhere else.
+
+An edit that consumes a gap turns that one hard wrap into a space. The document
+is unchanged and the source line gets longer; an edit that merely abuts a wrap
+leaves it alone.
 
 **LaTeX markup is refused rather than escaped.** Typing `50%` gets a sentence,
 not a silently written `\%`. Escaping is exact in prose and wrong inside
@@ -193,6 +216,14 @@ rather than its environment — so a door that transformed what you typed would 
 right in the common case and wrong wherever people put code. Enter commits,
 Escape puts it back, and a line break is refused because a blank one ends a
 paragraph.
+
+**The server checks what it is about to overwrite.** Every legitimate edit
+replaces either the inside of a literal run — which holds no LaTeX special
+character, because the parser breaks a literal run at every one of them — or a
+run of whitespace. So a range whose bytes contain a `\`, a `{`, a `%` or an `&`
+is refused outright, whatever the caller claims about it. That is what stops a
+bug in the page, an agent that guessed, or a replayed request with the numbers
+changed from deleting a command, a citation or a comment.
 
 **A file that moved is refused, and nothing is written.** Every edit carries the
 SHA-256 of the file as this page last read it; the server re-reads and compares

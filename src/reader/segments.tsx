@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react'
 
-import { narrow, whyNot } from '../../latex/edit.ts'
+import { narrow, place, whyNot } from '../../latex/edit.ts'
 import type { Segment, SegmentStyle } from '../../latex/parse.ts'
 import { cn } from '@/lib/utils.ts'
 
@@ -79,6 +79,24 @@ const INLINE: Record<SegmentStyle, { tag: 'em' | 'strong' | 'code' | 'span' | 'q
 const NESTING: SegmentStyle[] = ['todo', 'cite', 'ref', 'math', 'quote', 'bold', 'emph', 'code']
 
 /**
+ * A drawn span: one or more segments merged, and the pieces it was made of.
+ *
+ * The pieces are what let the run be written back without `literal` having to
+ * lie. See `coalesce`.
+ */
+export interface Run extends Segment {
+  /** The segments this run was merged from, in source order and contiguous. */
+  pieces: Segment[]
+  /**
+   * Whether a person may type into this run.
+   *
+   * A DIFFERENT claim from `literal`, and separating the two is the whole of
+   * this pass — see the essay below.
+   */
+  typeable: boolean
+}
+
+/**
  * Adjacent segments that are styled identically, merged into one.
  *
  * The parser splits on the source and is right to: `\texttt{gh\##1}` expanded
@@ -93,27 +111,123 @@ const NESTING: SegmentStyle[] = ['todo', 'cite', 'ref', 'math', 'quote', 'bold',
  * last end and is marked non-literal, because its rendered characters no longer
  * correspond one-for-one to that whole range — which is precisely the thing
  * `selection.ts` must not be lied to about.
+ *
+ * ## `literal` stays exactly as it was, and `typeable` is the new claim
+ *
+ * All of the paragraph above is unchanged and still true. What changed is that
+ * something else was being read off `literal` that was never in it.
+ *
+ * Editability was hung on this flag, and in ordinary prose it locked
+ * everything. The gaps between words are their own segments — a hard wrap in
+ * the source collapsing to one rendered space — and they carry the same styles
+ * as the words either side, so a whole paragraph merges into one run and the
+ * single non-contiguous join flips it non-literal. A heading is one short
+ * segment with no collapsed whitespace in it, so it survived. Measured on the
+ * real thesis with `dev/typeable.probe.ts`: headings 100% typeable, paragraphs
+ * 1%. The person editing said the only useful thing about it — "so I can edit
+ * the titles of sections but not the text itself? Why would I ever want this
+ * setup?"
+ *
+ * One flag was doing two jobs. `literal` is a claim about MAPPING: an offset
+ * inside the rendered text is an offset in the file, which is what
+ * `lib/selection.ts` needs and must never be told wrongly. "You may type here"
+ * is a claim about WRITING BACK: replacing this run's source span reproduces
+ * what the person now sees. A paragraph with collapsed whitespace fails the
+ * first and passes the second, and there is no contradiction in that.
+ *
+ * So the merged run keeps `literal` computed exactly as before, and carries
+ * `pieces` — the segments it came from — plus `typeable`, which is true when
+ * every piece is either literal or a `gap`. `latex/edit.ts`'s `place` walks
+ * those pieces to turn what somebody typed into a byte range, exactly inside a
+ * literal piece and snapped over a gap. A citation is neither, so a run holding
+ * one is not typeable and nothing about it has changed.
  */
-function coalesce(segments: readonly Segment[]): Segment[] {
-  const out: Segment[] = []
+export function coalesce(segments: readonly Segment[]): Run[] {
+  const out: Run[] = []
   for (const segment of segments) {
     const last = out[out.length - 1]
     const same =
       last &&
       last.styles.length === segment.styles.length &&
       last.styles.every((style, i) => segment.styles[i] === style)
-    if (same && last) {
+    /*
+     * Merging happens for one of two reasons, and only one of them survives an
+     * unwritable segment.
+     *
+     * The VISUAL reason is the original one and it is about styles: a `code`
+     * run split in three draws three chips with three lots of padding, so
+     * `gh#111` must be one element even though the `#` in the middle is a
+     * derived escape. That reason applies whatever the pieces are, so a styled
+     * run merges exactly as it always did and comes out untypeable.
+     *
+     * The EDITING reason applies to unstyled prose, where merging costs nothing
+     * visually — adjacent bare `<span>`s draw identically to one — and buys a
+     * paragraph-sized editing host instead of one per word. There, a segment
+     * that cannot be written BREAKS the run rather than poisoning it.
+     *
+     * That distinction is worth 33,394 characters on the real thesis. There are
+     * exactly 125 unstyled unwritable segments in the whole document — 82 `~`,
+     * 17 `\%`, and 26 smart quotes — and under the old rule each one made its
+     * entire paragraph untypeable. Breaking instead leaves 125 single-character
+     * runs that say what they are, and the prose around them editable. The
+     * escapes themselves stay unwritable for the reason they always were:
+     * `\%` rendered back as `%` would comment out the rest of the line, and a
+     * `~` rendered back as a space is a non-breaking space the author chose.
+     *
+     * A HOLE in the source breaks an unstyled run for the same reason and is
+     * worth another 3,845 characters. `withoutNotes` lifts every `\todo{}` out
+     * before this runs, so the segments either side of one no longer meet — and
+     * a run assembled across that hole cannot be written, because `place`
+     * replaces a single source range and would swallow the note. Poisoning the
+     * rest of the paragraph over it was the same mistake one layer along; the
+     * paragraph is two typeable runs with the note's place between them.
+     */
+    const merges =
+      same &&
+      last &&
+      (segment.styles.length > 0 ||
+        (last.typeable && writable(segment) && last.srcEnd === segment.srcStart))
+    if (merges && last) {
       out[out.length - 1] = {
         ...last,
         text: last.text + segment.text,
         srcEnd: segment.srcEnd,
         literal: last.literal && segment.literal && last.srcEnd === segment.srcStart,
+        /* Contiguity is required here too, and for a stronger reason than it is
+           required for `literal`: `place` replaces ONE source range, so a run
+           assembled across a hole would write over whatever was in the hole. */
+        typeable: last.typeable && writable(segment) && last.srcEnd === segment.srcStart,
+        pieces: [...last.pieces, segment],
       }
       continue
     }
-    out.push(segment)
+    out.push({ ...segment, typeable: writable(segment), pieces: [segment] })
   }
-  return out
+  /*
+   * A run of nothing but gaps is not offered, and says nothing about itself.
+   *
+   * It arises between two things that are each their own span — two citations
+   * with a space between them — and it is a one-character editing host in the
+   * gap between two words. Nobody is trying to correct it, it is too small to
+   * put a cursor in, and marking it would draw a "you cannot type here" onto
+   * the space between two words. Left untypeable and left silent; `styled` says
+   * nothing about a run with no visible content in it.
+   */
+  return out.map((run) => (run.text.trim() === '' ? { ...run, typeable: false } : run))
+}
+
+/**
+ * Whether one segment's source can be reproduced from what it renders as.
+ *
+ * Literal, trivially — the characters are the same characters. A `gap`,
+ * because the rule collapsing whitespace to one space inverts: one space
+ * written over the whole run renders as one space. Nothing else, and in
+ * particular not a derived segment that merely LOOKS like a space, which is
+ * what `~` renders as and which is a non-breaking space the author chose. The
+ * parser marks the real ones; see the essay on `Segment.gap`.
+ */
+function writable(segment: Segment): boolean {
+  return segment.literal || segment.gap === true
 }
 
 /**
@@ -138,19 +252,25 @@ export const Marked = createContext<{ from: number; to: number } | null>(null)
 /**
  * Typing in the paper, and the one rule that decides what may be typed into.
  *
- * ## Only a literal span, because that is what `literal` MEANS
+ * ## A run whose source can be reproduced from what it shows
  *
- * A literal segment's rendered text is character-identical to
- * `source[srcStart..srcEnd]`, so an offset inside what the reader sees is an
- * offset into the file, and a change to the characters on screen is the same
- * change to the characters on disk. That equivalence is the entire licence for
- * editing in place. A derived segment does not have it: `\autocite{jones}`
- * renders as `[jones]`, five characters standing in for seventeen, and there is
- * no honest way to say which byte a cursor between the `j` and the `o` is
- * sitting on. Typing there and splicing the result into the file would produce
- * markup nobody wrote, in a place nobody was looking at.
+ * The rule is not `literal`, and the difference matters enough that `coalesce`
+ * carries a whole essay about it. `literal` means the rendered characters ARE
+ * the source characters, one for one; it is what `lib/selection.ts` needs, and
+ * hanging editing off it locked every paragraph in a hard-wrapped document
+ * while leaving its headings editable.
  *
- * ## So what happens when the cursor reaches a derived span
+ * What licenses typing is weaker and sufficient: replacing this run's source
+ * span reproduces what the person now sees. Ordinary prose qualifies even with
+ * its hard wraps collapsed, because the collapsing rule inverts — a run of
+ * whitespace draws as one space, and one space written back over the whole run
+ * draws as one space. A citation does not qualify: `\autocite{jones}` renders
+ * as `[jones]`, seven characters standing in for seventeen, and there is no
+ * honest way to say which byte a cursor between the `j` and the `o` is sitting
+ * on. Typing there and splicing the result in would produce markup nobody
+ * wrote, in a place nobody was looking at.
+ *
+ * ## So what happens when the cursor reaches one of those
  *
  * It is refused entry, and this is the decision written down rather than left
  * to be inferred. Three options were on the table:
@@ -162,11 +282,16 @@ export const Marked = createContext<{ from: number; to: number } | null>(null)
  *    that.
  *
  * The first two are both taken, because they are the same answer at two
- * moments. Only literal spans are `contentEditable`, and a span that is not
+ * moments. Only a writable run is `contentEditable`, and a span that is not
  * inside an editing host is a span a browser will not put a caret in — so
  * refusal costs no code and cannot be got round by a keyboard, a drag, or a
  * paste. Pressing one then selects it whole and says why, which is the
  * difference between a refusal and nothing happening.
+ *
+ * A run holding nothing but whitespace is the exception to the saying-why: it
+ * is the gap between two things that are each their own span, nobody is trying
+ * to correct it, and a "you cannot type here" drawn onto the space between two
+ * words is noise about a thing that was never offered.
  *
  * The third is refused on purpose. Revealing source inside rendered prose makes
  * the page show two languages at once, and the reader who edits the revealed
@@ -231,7 +356,7 @@ export function asTyped(text: string): string {
 }
 
 function styled(
-  segment: Segment,
+  segment: Run,
   key: string,
   mark: { from: number; to: number } | null,
   typing: Typing | null,
@@ -244,16 +369,31 @@ function styled(
     node = <Tag className={spec.className}>{node}</Tag>
   }
   const marked = isMarked(segment, mark)
-  /* Only a literal span is typeable, and the whole argument is on `Typing`. */
-  const editable = typing !== null && segment.literal
+  /*
+   * `typeable`, and NOT `literal`. The two are different claims and the
+   * difference is the whole of `coalesce`'s second essay: a paragraph whose
+   * hard wraps have been collapsed is not one-for-one with its source and is
+   * still perfectly safe to write back, piece by piece.
+   */
+  const editable = typing !== null && segment.typeable
+  /*
+   * Whether this run is worth saying anything about when it refuses.
+   *
+   * A run with no visible content in it is the space between two things, and a
+   * "you cannot type here" drawn on the gap between two words is noise about
+   * something nobody was trying to edit. It stays untypeable and stays silent.
+   */
+  const speaks = segment.text.trim() !== ''
 
   /**
-   * A finished edit of this span, narrowed to what actually changed.
+   * A finished edit of this run, narrowed to what changed and placed in the file.
    *
-   * `narrow` is where the arithmetic is and it is a pure function with its own
-   * tests, because this is the line that decides which bytes of somebody's
-   * thesis get replaced. What it returns is relative to the span; the span's
-   * own `srcStart` puts it in the file.
+   * Two pure functions with their own tests, because this is the line that
+   * decides which bytes of somebody's thesis get replaced. `narrow` says what
+   * changed in what the reader SEES; `place` walks the pieces this run was
+   * merged from and turns that into a byte range — exactly, inside a literal
+   * piece, and snapped over a whitespace gap. It refuses outright rather than
+   * guessing when the change reaches anything else.
    *
    * Nothing is sent when nothing changed, which is the ordinary case: a reader
    * who clicks into a sentence, reads it and clicks away has made no edit, and
@@ -280,28 +420,29 @@ function styled(
     const put = () => {
       element.textContent = segment.text
     }
+    const where = place(segment.pieces, change)
+    if ('why' in where) {
+      put()
+      typing.say(where.why)
+      return
+    }
     /* Checked here as well as at the door, so the sentence appears under the
        reader's cursor instead of after a round trip. `whyNot` is the same
        function the server runs — one rule, imported twice, rather than two
-       copies that can disagree about whether a per cent sign is markup. */
-    const refused = whyNot(change.text)
+       copies that can disagree about whether a per cent sign is markup. It is
+       applied to what `place` composed rather than to what `narrow` returned,
+       because a snap over a gap adds the space back into the replacement. */
+    const refused = whyNot(where.text)
     if (refused) {
       put()
       typing.say(refused)
       return
     }
-    void typing
-      .commit({
-        file: typing.file,
-        from: segment.srcStart + change.at,
-        to: segment.srcStart + change.upto,
-        text: change.text,
-      })
-      .then((why) => {
-        if (!why) return
-        put()
-        typing.say(why)
-      })
+    void typing.commit({ file: typing.file, from: where.from, to: where.to, text: where.text }).then((why) => {
+      if (!why) return
+      put()
+      typing.say(why)
+    })
   }
 
   return (
@@ -348,7 +489,7 @@ function styled(
           : undefined
       }
       onMouseDown={
-        typing && !editable
+        typing && !editable && speaks
           ? (event) => {
               /*
                * A derived span, pressed while the paper is editable: selected
@@ -373,14 +514,24 @@ function styled(
             }
           : undefined
       }
+      /*
+       * Said only about a run with something in it to say it about.
+       *
+       * This tooltip used to fire across whole paragraphs, because a paragraph
+       * with a hard wrap in it was not typeable — and the reader met it as "why
+       * is my prose a rendering?" It fires on citations and escapes now, which
+       * is what it was written for. The whitespace-only runs it also used to
+       * cover are silent, because the gap between two words is not something
+       * anybody was trying to edit.
+       */
       title={
-        typing && !editable
+        typing && !editable && speaks
           ? 'This is a rendering of the source rather than the source, so it cannot be typed into.'
           : undefined
       }
       className={cn(
         marked && 'passage-mark',
-        typing !== null && (editable ? 'typeable' : 'not-typeable'),
+        typing !== null && (editable ? 'typeable' : speaks && 'not-typeable'),
       )}
     >
       {node}
@@ -428,9 +579,17 @@ export function Segments({ segments }: { segments: readonly Segment[] }) {
  * they still describe where the note came from and `selection.ts` still has to
  * be able to read them; it is marked non-literal, because after this its
  * rendered characters no longer line up with the source one for one.
+ *
+ * It is marked untypeable for a stronger reason than that. This is the one
+ * place where text is dropped from a run AFTER `coalesce` has recorded the
+ * pieces it was built from, so the pieces no longer add up to what is on
+ * screen and `place` would map every offset in the run short by the length of
+ * the pin. Nothing here may be typed into, which was already true — a todonote
+ * is filtered out before it reaches this file — and this is the line that keeps
+ * it true if one ever escapes the filter.
  */
-function stripPin(segment: Segment): Segment {
-  if (!segment.text.startsWith('◆')) return segment
-  const text = segment.text.replace(/^◆ ?\s*/, '')
-  return { ...segment, text, literal: false }
+function stripPin(run: Run): Run {
+  if (!run.text.startsWith('◆')) return run
+  const text = run.text.replace(/^◆ ?\s*/, '')
+  return { ...run, text, literal: false, typeable: false }
 }

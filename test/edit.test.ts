@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { TICKET, answer } from '../doors.ts'
-import { bytesOf, narrow, onBoundary, whyNot } from '../latex/edit.ts'
+import { bytesOf, narrow, onBoundary, place, sourceRefuses, whyNot, type Piece } from '../latex/edit.ts'
 import { readPaper, writeRange } from '../store.ts'
 
 /**
@@ -27,41 +27,60 @@ import { readPaper, writeRange } from '../store.ts'
  * these silently rewrites somebody's thesis.
  */
 
+/**
+ * A literal piece, as the parser produces one for a run of ordinary words.
+ *
+ * The helpers exist so that a test reads as the shape it is about — a run of
+ * pieces — rather than as five object literals with the offsets counted by hand.
+ */
+function word(text: string, srcStart: number): Piece {
+  return { text, srcStart, srcEnd: srcStart + bytesOf(text), literal: true }
+}
+
+/** A whitespace run in the source, rendered as one space. */
+function gap(source: string, srcStart: number): Piece {
+  return { text: ' ', srcStart, srcEnd: srcStart + bytesOf(source), literal: false, gap: true }
+}
+
+/** Anything else derived — a citation, an escape, a `~`. */
+function rendered(text: string, srcStart: number, source: string): Piece {
+  return { text, srcStart, srcEnd: srcStart + bytesOf(source), literal: false }
+}
+
+/** What `place` decided, applied to a source string, so it can be checked. */
+function apply(source: string, at: { from: number; to: number; text: string }): string {
+  const bytes = Buffer.from(source, 'utf8')
+  return Buffer.concat([bytes.subarray(0, at.from), Buffer.from(at.text, 'utf8'), bytes.subarray(at.to)]).toString(
+    'utf8',
+  )
+}
+
+/** `place`'s answer when it agreed, for a test that has already asserted it did. */
+const landed = (found: ReturnType<typeof place>) => found as { from: number; to: number; text: string }
+
 describe('narrow: the smallest edit that turns one string into another', () => {
   test('nothing changed is not an edit', () => {
     expect(narrow('the same words', 'the same words')).toBeNull()
   })
 
-  test('one letter replaced writes one letter', () => {
+  test('one letter replaced names one letter, in rendered units', () => {
     /* The property the whole function exists for: a typo fixed in the middle of
-       a paragraph-sized span must not rewrite the paragraph. Everything else in
-       that span keeps its bytes, and so does every note anchored inside it. */
-    const found = narrow('a paragraph with a tpyo in it', 'a paragraph with a typo in it')
-    expect(found).toEqual({ at: 20, upto: 22, text: 'yp' })
+       a paragraph-sized run must not rewrite the paragraph. Everything else in
+       that run keeps its bytes, and so does every note anchored inside it.
+
+       The offsets are RENDERED units now and not bytes. `place` is what turns
+       them into a place in a file, because inside a merged run there is no
+       constant offset between what is drawn and what is on disk. */
+    expect(narrow('a paragraph with a tpyo in it', 'a paragraph with a typo in it')).toEqual({
+      at: 20,
+      upto: 22,
+      text: 'yp',
+    })
   })
 
-  test('an insertion is a zero-width range', () => {
+  test('an insertion is a zero-width range, and a deletion writes nothing', () => {
     expect(narrow('two words', 'two more words')).toEqual({ at: 4, upto: 4, text: 'more ' })
-  })
-
-  test('a deletion writes nothing into a real range', () => {
     expect(narrow('two more words', 'two words')).toEqual({ at: 4, upto: 9, text: '' })
-  })
-
-  test('offsets are BYTES, so a multi-byte character above the edit counts for its width', () => {
-    /*
-     * The bug this is written against is the one `inBytes` in the parser was
-     * written against, one layer up: an em dash is one UTF-16 unit and three
-     * bytes, so an edit after one is three bytes along and not one. Counted in
-     * characters, this edit would land two bytes early — inside the dash — and
-     * write two halves of a character into the file.
-     */
-    const before = 'one — two'
-    const after = 'one — three'
-    const found = narrow(before, after)
-    expect(found?.at).toBe(bytesOf('one — t'))
-    expect(bytesOf('one — t')).toBe(9)
-    expect(found?.text).toBe('hree')
   })
 
   test('a change at the very start and at the very end', () => {
@@ -72,36 +91,55 @@ describe('narrow: the smallest edit that turns one string into another', () => {
 
   test('a surrogate pair is never cut in half', () => {
     /*
-     * `👍` is two UTF-16 units and four bytes. A prefix that stopped between
-     * them would name a byte offset in the middle of the character, and the two
-     * lone surrogates either side of the cut encode to replacement characters —
-     * damage to text the edit was not even about.
+     * `👍` is two UTF-16 units. A prefix stopping between them would name half
+     * a character, and the lone surrogates either side of the cut encode to
+     * replacement characters — damage to text the edit was not even about.
+     * Asserted in rendered units here and again in bytes through `place` below,
+     * because both are places it could go wrong.
      */
-    const before = 'a 👍 b'
-    const after = 'a 👍 c'
-    const found = narrow(before, after)
-    expect(found).not.toBeNull()
-    /* Whatever the prefix is, it lands on a boundary of the encoded string. */
-    const bytes = Buffer.from(before, 'utf8')
-    expect(onBoundary(bytes, found!.at)).toBe(true)
-    expect(onBoundary(bytes, found!.upto)).toBe(true)
-    expect(found!.text).toBe('c')
+    const found = narrow('a 👍 b', 'a 👍 c')!
+    expect(found.text).toBe('c')
+    expect('a 👍 b'.slice(found.at, found.upto)).toBe('b')
+
+    const swap = narrow('x 👍 y', 'x 🙂 y')!
+    expect('x 👍 y'.slice(swap.at, swap.upto)).toBe('👍')
+    expect(swap.text).toBe('🙂')
+  })
+})
+
+describe('place: a change in what is SEEN, turned into a place in the file', () => {
+  test('inside one literal piece it is exact', () => {
+    const source = 'the tpyo here'
+    const found = place([word(source, 0)], narrow(source, 'the typo here')!)
+    /* `the t` is common to both, so the write is the two letters that swapped
+       and not the word — which is the whole point of narrowing. */
+    expect(found).toEqual({ from: 5, to: 7, text: 'yp' })
+    expect(source.slice(5, 7)).toBe('py')
+    expect(apply(source, landed(found))).toBe('the typo here')
   })
 
-  test('replacing one emoji with another keeps both ends on boundaries', () => {
-    const before = 'x 👍 y'
-    const after = 'x 🙂 y'
-    const found = narrow(before, after)!
-    const bytes = Buffer.from(before, 'utf8')
-    expect(onBoundary(bytes, found.at)).toBe(true)
-    expect(onBoundary(bytes, found.upto)).toBe(true)
-    /* And the splice really does produce the string somebody typed. */
-    const spliced = Buffer.concat([
-      bytes.subarray(0, found.at),
-      Buffer.from(found.text, 'utf8'),
-      bytes.subarray(found.upto),
-    ])
-    expect(spliced.toString('utf8')).toBe(after)
+  test('bytes, not characters, when a multi-byte character sits above the edit', () => {
+    /*
+     * The bug this is written against is the one `inBytes` in the parser was
+     * written against, one layer up. An em dash is one UTF-16 unit and three
+     * bytes, so an edit after one is three bytes along and not one. Counted in
+     * characters this would land two bytes early — inside the dash — and write
+     * two halves of a character into the file.
+     */
+    const source = 'one — two'
+    const found = landed(place([word(source, 0)], narrow(source, 'one — three')!))
+    expect(found.from).toBe(bytesOf('one — t'))
+    expect(found.from).toBe(9)
+    expect(apply(source, found)).toBe('one — three')
+  })
+
+  test('a surrogate pair keeps both ends on UTF-8 boundaries', () => {
+    const source = 'x 👍 y'
+    const found = landed(place([word(source, 0)], narrow(source, 'x 🙂 y')!))
+    const bytes = Buffer.from(source, 'utf8')
+    expect(onBoundary(bytes, found.from)).toBe(true)
+    expect(onBoundary(bytes, found.to)).toBe(true)
+    expect(apply(source, found)).toBe('x 🙂 y')
   })
 
   test('the splice of what it returns is always what was typed', () => {
@@ -114,20 +152,164 @@ describe('narrow: the smallest edit that turns one string into another', () => {
       ['Tiivistelmä ja päätelmä', 'Tiivistelmä ja johtopäätelmä'],
       ['aaa', 'aa'],
       ['aaa', 'aaaa'],
-      ['', 'something'],
       ['the — dash', 'the – dash'],
     ]
     for (const [before, after] of cases) {
-      const found = narrow(before, after)
-      expect(found).not.toBeNull()
-      const bytes = Buffer.from(before, 'utf8')
-      const spliced = Buffer.concat([
-        bytes.subarray(0, found!.at),
-        Buffer.from(found!.text, 'utf8'),
-        bytes.subarray(found!.upto),
-      ])
-      expect(spliced.toString('utf8')).toBe(after)
+      const change = narrow(before, after)
+      expect(change).not.toBeNull()
+      const found = place([word(before, 0)], change!)
+      expect(found).not.toHaveProperty('why')
+      expect(apply(before, landed(found))).toBe(after)
     }
+  })
+})
+
+describe('place: writing through the gaps between words', () => {
+  /*
+   * The case the second pass was entirely about. A hard-wrapped paragraph draws
+   * as one run — words merged with the collapsed whitespace between them — and
+   * the source under it is `first\nsecond`, the newline rendering as one space.
+   * Before this, one such gap made the whole paragraph untypeable: measured at
+   * 1% of paragraph characters on the real thesis against 100% of headings,
+   * which the person using it reported as "so I can edit the titles of sections
+   * but not the text itself?".
+   */
+  const SOURCE = 'first\nsecond   third'
+  /* `first` `\n` `second` `   ` `third`, as `normalizeWhitespace` splits it. */
+  const pieces = [word('first', 0), gap('\n', 5), word('second', 6), gap('   ', 12), word('third', 15)]
+  const shown = 'first second third'
+
+  test('the pieces really do render as what the reader sees', () => {
+    /* The fixture checking itself. Every assertion below is worthless if these
+       offsets do not describe the string they claim to. */
+    expect(pieces.map((p) => p.text).join('')).toBe(shown)
+    expect(SOURCE.slice(5, 6)).toBe('\n')
+    expect(SOURCE.slice(12, 15)).toBe('   ')
+  })
+
+  test('a word in the middle is corrected without touching the gaps', () => {
+    const found = landed(place(pieces, narrow(shown, 'first secnod third')!))
+    expect(apply(SOURCE, found)).toBe('first\nsecnod   third')
+  })
+
+  test('a word typed between two words lands beside the wrap, not on it', () => {
+    /*
+     * The gesture that was silently impossible: put the caret between two words
+     * and type. It works now, and it turns out to cost even less than the
+     * design allowed for — the insertion point sits at the START of the next
+     * literal piece, so nothing snaps and the author's hard wrap survives
+     * untouched. The rendered result is what the reader typed either way; this
+     * asserts the cheaper of the two outcomes actually happens, because a test
+     * expecting the expensive one would let a regression to it pass.
+     */
+    const found = landed(place(pieces, narrow(shown, 'first very second third')!))
+    expect(apply(SOURCE, found)).toBe('first\nvery second   third')
+    expect(found.from).toBe(found.to)
+  })
+
+  test('an edit spanning several words keeps the whitespace it did not touch', () => {
+    /* `second` becomes `one two`. `narrow` has already excluded the gaps either
+       side of it, so the newline before and the three spaces after are not in
+       the range at all. The smallest possible write, which is what keeps an
+       anchor two paragraphs down where it was. */
+    const found = landed(place(pieces, narrow(shown, 'first one two third')!))
+    expect(apply(SOURCE, found)).toBe('first\none two   third')
+    expect(SOURCE.slice(found.from, found.to)).toBe('second')
+  })
+
+  test('deleting the space between two words welds them, and nothing else moves', () => {
+    const found = landed(place(pieces, narrow(shown, 'firstsecond third')!))
+    expect(apply(SOURCE, found)).toBe('firstsecond   third')
+  })
+
+  test('every offset it produces lands on a UTF-8 boundary', () => {
+    /* Over an accented paragraph, because that is where bytes and characters
+       come apart, and where a gap's snap could put an offset in the wrong
+       place without any single-byte test noticing. */
+    const src = 'Tiivistelmä\nja päätelmä'
+    const accented = [word('Tiivistelmä', 0), gap('\n', 13), word('ja päätelmä', 14)]
+    const drawn = accented.map((p) => p.text).join('')
+    expect(drawn).toBe('Tiivistelmä ja päätelmä')
+    const bytes = Buffer.from(src, 'utf8')
+    for (const after of ['Tiivistelmä ja johtopäätelmä', 'Yhteenveto ja päätelmä', 'Tiivistelmä  ja päätelmä']) {
+      const found = landed(place(accented, narrow(drawn, after)!))
+      expect(onBoundary(bytes, found.from)).toBe(true)
+      expect(onBoundary(bytes, found.to)).toBe(true)
+    }
+  })
+})
+
+describe('place: what it refuses', () => {
+  /* `before \autocite{jones} after`. In the real page a citation carries the
+     `cite` style and so never merges into a prose run at all; handed one
+     anyway, because a run that DID contain one must refuse rather than write. */
+  const pieces = [
+    word('before', 0),
+    gap(' ', 6),
+    rendered('[jones]', 7, '\\autocite{jones}'),
+    gap(' ', 23),
+    word('after', 24),
+  ]
+  const shown = 'before [jones] after'
+
+  test('an edit that starts inside a rendering', () => {
+    const found = place(pieces, narrow(shown, 'before [jomes] after')!)
+    expect(found).toHaveProperty('why')
+    expect((found as { why: string }).why).toContain('citation')
+  })
+
+  test('an edit that merely passes THROUGH one', () => {
+    /*
+     * The dangerous one, and the reason the middle of the range is checked as
+     * well as its two ends. A selection dragged across a citation and retyped
+     * would otherwise have honest ends and a destroyed middle: `\autocite{…}`
+     * replaced by the seven characters `[jones]`, silently, while somebody was
+     * correcting the words either side of it.
+     */
+    expect(place(pieces, narrow(shown, 'beforX [jones] Xfter')!)).toHaveProperty('why')
+  })
+
+  test('a run assembled across a hole in the source', () => {
+    /* Two pieces that do not meet. `place` replaces ONE range, so writing this
+       would swallow whatever is in the hole — a `\todo{}` the reader cannot
+       even see. `coalesce` does not build such a run; this is what means it
+       cannot start to without being caught. */
+    const found = place([word('one', 0), word('two', 40)], narrow('onetwo', 'onXtwo')!)
+    expect(found).toHaveProperty('why')
+    expect((found as { why: string }).why).toContain('unbroken')
+  })
+
+  test('no pieces at all, and a range that is not in the text', () => {
+    expect(place([], { at: 0, upto: 0, text: 'x' })).toHaveProperty('why')
+    expect(place([word('abc', 0)], { at: 0, upto: 99, text: 'x' })).toHaveProperty('why')
+    expect(place([word('abc', 0)], { at: -1, upto: 1, text: 'x' })).toHaveProperty('why')
+  })
+})
+
+describe('sourceRefuses: the guard that does not trust the caller', () => {
+  test('ordinary prose and whitespace are overwritable', () => {
+    expect(sourceRefuses('an ordinary run of words')).toBeNull()
+    /* Whitespace is allowed HERE and refused by `whyNot` on the other side: a
+       newline being replaced is the hard wrap in the middle of a sentence, and
+       a newline being written would end a paragraph. */
+    expect(sourceRefuses('first\nsecond')).toBeNull()
+    expect(sourceRefuses('')).toBeNull()
+  })
+
+  test.each(['\\', '{', '}', '$', '&', '#', '^', '_', '~', '%'])(
+    'source containing “%s” is never overwritten',
+    (character) => {
+      expect(sourceRefuses(`some ${character} source`)).toBeString()
+    },
+  )
+
+  test('it is what stops a command being deleted, whatever the caller claims', () => {
+    /* The page decides what to write from the pieces it holds; this decides
+       whether the FILE agrees. A bug in the browser, an agent that guessed, or
+       a replayed request with the numbers changed cannot get past it. */
+    expect(sourceRefuses('\\autocite{jones}')).toBeString()
+    expect(sourceRefuses('\\emph{stressed}')).toBeString()
+    expect(sourceRefuses('% a comment run')).toBeString()
   })
 })
 

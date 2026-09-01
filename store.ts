@@ -14,7 +14,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'roadmap-module-protocol'
 
-import { onBoundary, whyNot } from './latex/edit.ts'
+import { onBoundary, sourceRefuses, whyNot } from './latex/edit.ts'
 import { findMacros, parseLatex, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
 import { ID } from './manifest.ts'
 
@@ -1071,6 +1071,20 @@ export type Written =
  * filesystem: either the whole new file is there or the whole old one is. The
  * mode is copied across, so a file somebody had made read-only for themselves
  * does not come back wearing this process's umask.
+ *
+ * ## And it looks at what it is about to overwrite
+ *
+ * `sourceRefuses` is the one check here that does not take the caller's word
+ * for anything. Every edit this feature legitimately makes replaces the inside
+ * of a literal run — which holds no LaTeX special character, because the parser
+ * breaks a literal run at every one of them — or a run of whitespace. So a
+ * range whose bytes contain a `\`, a `{`, a `%` or an `&` is not an edit this
+ * page could honestly have composed, whatever it says about itself.
+ *
+ * That is what stops a bug in the browser, an agent that guessed, or a replayed
+ * request with the numbers changed from deleting a command, a citation, an
+ * escape or a comment. The page decides what to write from the pieces it holds;
+ * this decides whether the file agrees.
  */
 export function writeRange(epic: string, edit: Edit, project: string | null): Written {
   const no = (why: string, stale = false): Written => ({ ok: false, why, stale })
@@ -1126,6 +1140,10 @@ export function writeRange(epic: string, edit: Edit, project: string | null): Wr
   if (typeof text !== 'string') return no('There is nothing to write there.')
   const refused = whyNot(text)
   if (refused) return no(refused)
+  /* What is THERE, not only what is being put there. See the essay above: this
+     is the check that does not take the caller's word for anything. */
+  const covered = sourceRefuses(bytes.subarray(from, to).toString('utf8'))
+  if (covered) return no(covered)
 
   const replacement = Buffer.from(text, 'utf8')
   /* A no-op is refused rather than performed. Writing identical bytes moves the

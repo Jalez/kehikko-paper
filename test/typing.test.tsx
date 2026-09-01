@@ -31,11 +31,26 @@ import { PaginatedView } from '../src/reader/paginated.tsx'
  *    control, nothing `contenteditable`.
  */
 
+/*
+ * HARD-WRAPPED, and that is the whole point of the fixture.
+ *
+ * The first version of this file put each paragraph on one line of source,
+ * which is the one shape where a paragraph has no collapsed whitespace in it —
+ * so every span came out `literal`, every assertion passed, and the feature
+ * shipped against a real thesis in which the only editable text was its
+ * headings. A fixture that cannot exhibit the bug is a fixture that certifies
+ * it. Every paragraph here wraps, exactly as a `.tex` file somebody writes in
+ * an editor does.
+ */
 const SOURCE = [
   '\\begin{document}',
   '\\section{A claim}',
   '',
-  'The claim has a tpyo and \\autocite{jones} a citation after it.',
+  'The claim has a tpyo and it runs on for long enough that the author',
+  'wrapped the line, the way a real paper is written, and then it ends.',
+  '',
+  'A second paragraph with \\autocite{jones} a citation in the middle of',
+  'it, and a 50\\% escape, and a non~breaking space, and prose after them.',
   '',
   '\\end{document}',
   '',
@@ -107,7 +122,7 @@ describe('with no pen, the reading view is exactly what it was', () => {
   })
 })
 
-describe('with the pen out, only a literal span may be typed into', () => {
+describe('with the pen out, ordinary prose may be typed into and a rendering may not', () => {
   const draw = () => {
     const kept = recorder()
     const rendered = render(
@@ -116,21 +131,75 @@ describe('with the pen out, only a literal span may be typed into', () => {
     return { ...kept, ...rendered }
   }
 
-  test('every span says whether it is typeable, and it agrees with `literal`', () => {
+  test('a hard-wrapped paragraph is typeable, and it is NOT literal', () => {
     /*
-     * The invariant, asserted over every span on the page rather than over the
-     * one that was interesting. `data-literal` is what the parser said; the
-     * whole licence for editing in place is that the two are the same claim, so
-     * a span where they disagree is a span whose offsets do not mean what the
-     * edit door will assume they mean.
+     * The regression guard for the whole second pass, and it asserts the two
+     * flags DISAGREEING — which the version before this asserted could never
+     * happen.
+     *
+     * `literal` is a claim about mapping: this run's rendered characters are
+     * character-for-character its source range. A wrapped paragraph fails it,
+     * correctly, because the newline in the middle draws as one space, and
+     * `lib/selection.ts` must go on being told so. Editability was read off the
+     * same flag and every paragraph in a real thesis was therefore locked while
+     * its headings, having no wrap in them, stayed editable — 1% against 100%,
+     * measured with `dev/typeable.probe.ts`.
+     *
+     * So: not literal, and typeable. If a later change makes these agree again,
+     * the paper has gone back to being a document whose only editable text is
+     * its headings, and this is the line that says so.
      */
+    const { container } = draw()
+    const prose = spanSaying(container, 'wrapped the line')
+    expect(prose.dataset.literal).toBe('0')
+    expect(prose.dataset.editable).toBe('1')
+    expect(prose.getAttribute('contenteditable')).toBe('true')
+    /* And it really is the whole paragraph, not a word of it: the run reaches
+       across the wrap to the words on the other side. */
+    expect(prose.textContent).toContain('tpyo')
+    expect(prose.textContent).toContain('and then it ends')
+  })
+
+  test('a heading is typeable too, which it always was', () => {
+    const { container } = draw()
+    const heading = spanSaying(container, 'A claim')
+    expect(heading.dataset.editable).toBe('1')
+  })
+
+  test('every editable span is contentEditable and every other one is not', () => {
+    /* The invariant asserted over every span on the page rather than over the
+       one that was interesting: `data-editable` is what decides whether a
+       browser will put a caret in it, so the attribute and the property must
+       never come apart. */
     const { container } = draw()
     const all = spans(container)
     expect(all.length).toBeGreaterThan(2)
     for (const el of all) {
-      expect(el.dataset.editable).toBe(el.dataset.literal)
-      expect(el.getAttribute('contenteditable')).toBe(el.dataset.literal === '1' ? 'true' : null)
+      const editable = el.dataset.editable === '1'
+      expect(el.getAttribute('contenteditable')).toBe(editable ? 'true' : null)
+      /* A literal span is always typeable. The converse is exactly what is no
+         longer true, and the test above is about that. */
+      if (el.dataset.literal === '1') expect(editable).toBe(true)
     }
+  })
+
+  test('an escape breaks the run rather than locking the paragraph around it', () => {
+    /*
+     * `\%` and `~` render as `%` and a space, and neither can be written back
+     * as itself — `%` would comment out the rest of the line, and a space would
+     * silently turn the author's non-breaking space into an ordinary one. They
+     * stay untypeable, which they always were.
+     *
+     * What changed is that they no longer take the paragraph with them. On the
+     * real thesis there are 125 such segments in the whole document and under
+     * the old rule they locked 33,394 characters of prose between them.
+     */
+    const { container } = draw()
+    const escape = spanSaying(container, '%')
+    expect(escape.dataset.editable).toBe('0')
+    /* The prose on the far side of it is still editable, which is the claim. */
+    const after = spanSaying(container, 'prose after them')
+    expect(after.dataset.editable).toBe('1')
   })
 
   test('a citation is a derived span and refuses the cursor', () => {

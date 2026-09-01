@@ -139,9 +139,20 @@ export function whyNot(text: string): string | null {
  * Splitting one produces a lone surrogate on each side of the cut, and a lone
  * surrogate encoded to UTF-8 is a replacement character written into somebody's
  * file where an emoji used to be — one of the few ways this door could damage
- * text it was not even asked to touch. The offsets it returns are BYTES,
- * relative to the start of `before`, because that is what the span carries and
- * what the file is measured in.
+ * text it was not even asked to touch.
+ *
+ * ## The offsets are RENDERED units, and they used to be bytes
+ *
+ * They were bytes into the span's source, which was right while a span was one
+ * literal segment: rendered text and source were the same characters, so one
+ * addition to `srcStart` finished the job. A span on screen is a MERGED run now
+ * — words and the collapsed whitespace between them — and inside such a run
+ * there is no constant offset between what is rendered and what is on disk.
+ *
+ * So this answers in the only units it can honestly measure, UTF-16 units of
+ * the rendered text it was given, and `place` maps them onto the file through
+ * the pieces the run was built from. Splitting the two apart is what let a
+ * paragraph become editable without any of the arithmetic becoming a guess.
  *
  * `null` when nothing changed, which is the ordinary answer: a reader who
  * clicks into a span, looks at it and clicks away has made no edit, and a door
@@ -149,9 +160,9 @@ export function whyNot(text: string): string | null {
  * and invalidate every other reader's hash for nothing.
  */
 export interface Narrowed {
-  /** Byte offset within the span where the replacement begins. */
+  /** Rendered offset within the span where the replacement begins, in UTF-16 units. */
   at: number
-  /** Byte offset within the span where it ends. Equal to `at` for an insertion. */
+  /** Rendered offset where it ends. Equal to `at` for an insertion. */
   upto: number
   /** What goes there. Empty for a deletion. */
   text: string
@@ -181,13 +192,212 @@ export function narrow(before: string, after: string): Narrowed | null {
      must not be a LOW surrogate whose high half is outside it. */
   if (suffix > 0 && isLow(before.charCodeAt(before.length - suffix))) suffix -= 1
 
-  const at = bytesOf(before.slice(0, prefix))
-  const upto = bytesOf(before.slice(0, before.length - suffix))
-  return { at, upto, text: after.slice(prefix, after.length - suffix) }
+  return { at: prefix, upto: before.length - suffix, text: after.slice(prefix, after.length - suffix) }
 }
 
 const isHigh = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
 const isLow = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
+
+/**
+ * One of the segments a rendered run was merged from.
+ *
+ * Structurally a `Segment` from the parser, spelled here as the three fields
+ * this file actually reads so that nothing in the write path has to import the
+ * parser's types — and so that a test can hand it a piece by hand.
+ */
+export interface Piece {
+  text: string
+  srcStart: number
+  srcEnd: number
+  literal: boolean
+  gap?: boolean
+}
+
+/** A rendered range placed onto the file, or the sentence saying why it was not. */
+export type Placed = { from: number; to: number; text: string } | { why: string }
+
+/**
+ * Turn a change in what the reader SEES into a change in the file.
+ *
+ * ## The flag that was doing two jobs
+ *
+ * `Segment.literal` means "the rendered characters of this segment are
+ * character-identical to its source range". It is a claim about MAPPING, it is
+ * what `lib/selection.ts` reads in order never to fabricate an offset, and the
+ * essay defending it is right. Editability was hung off the same flag, and that
+ * was the mistake: "you may not type here" is a different claim from "an offset
+ * inside this does not correspond to an offset in the file".
+ *
+ * The two come apart exactly in ordinary prose. `coalesce` merges a paragraph's
+ * words and the collapsed whitespace between them into one run, because they
+ * share their styles and drawing them separately would put three chips of
+ * padding through the middle of `gh#111`. One non-contiguous join in that run —
+ * every hard wrap is one — turned the whole paragraph non-literal, correctly,
+ * and locked it. Measured on the real thesis: 100% of heading characters
+ * typeable against 1% of paragraph characters, which the person using it
+ * reported as "so I can edit the titles of sections but not the text itself?"
+ *
+ * They were right, and the run was never unsafe. It is not one-for-one with its
+ * source, and it is still completely writable, because every piece in it is
+ * either literal or a `gap` — and a gap's rule inverts.
+ *
+ * ## What this function does about it
+ *
+ * It walks the pieces, finds the ones the rendered range lands in, and:
+ *
+ *  - **Inside a literal piece**, converts the rendered offset to a byte offset
+ *    exactly, because inside a literal piece those are the same characters.
+ *  - **Inside a gap**, snaps OUTWARD to the whole gap and carries the rendered
+ *    text it skipped over into the replacement. That is the whole trick and it
+ *    is safe for one reason: the gap's rendered text is a single space, the
+ *    space is put back verbatim, and what lands in the file therefore renders as
+ *    exactly what the reader is looking at. What is lost is the author's hard
+ *    wrap at that one point — a newline becomes a space — which is a change to
+ *    the source that is not a change to the document, and is named in the
+ *    README rather than hidden.
+ *  - **Inside anything else**, refuses the whole edit. A citation snapped
+ *    outward the way a gap is would be replaced by its own rendering, so
+ *    `\autocite{jones}` would become the seven characters `[jones]` — the file
+ *    destroyed on somebody's behalf while they corrected a word two inches
+ *    away. This is the branch that must never become clever.
+ *
+ * ## And it refuses a run that is not contiguous in the source
+ *
+ * Every piece must begin where the last one ended. A run assembled across a
+ * hole — two blocks, two paragraphs, anything `coalesce` should never have
+ * merged — has no single source range to replace, and writing one would swallow
+ * whatever was in the hole. `coalesce` does not build such a run today; this is
+ * the check that means it cannot start to without being caught.
+ */
+export function place(pieces: readonly Piece[], change: Narrowed): Placed {
+  if (!pieces.length) return { why: 'There is nothing there to edit.' }
+
+  for (let i = 1; i < pieces.length; i++) {
+    if (pieces[i]!.srcStart !== pieces[i - 1]!.srcEnd) {
+      return { why: 'That run of text does not come from one unbroken piece of the file, so it is not written from here.' }
+    }
+  }
+
+  /* Where each piece starts in the RENDERED text of the run, so a rendered
+     offset can be found in it. Built once rather than searched twice. */
+  const starts: number[] = []
+  let rendered = 0
+  for (const piece of pieces) {
+    starts.push(rendered)
+    rendered += piece.text.length
+  }
+  if (change.at < 0 || change.upto > rendered || change.upto < change.at) {
+    return { why: 'That is not a place in this text.' }
+  }
+
+  const found = (offset: number, leaning: 'start' | 'end'): number => {
+    /* A boundary between two pieces belongs to the piece the edit is growing
+       INTO: the start of a range takes the piece beginning there, the end of a
+       range takes the piece ending there. Without the distinction an insertion
+       exactly between two words would be attributed to the gap on one side and
+       widened over it for nothing. */
+    for (let i = pieces.length - 1; i >= 0; i--) {
+      const from = starts[i]!
+      const to = from + pieces[i]!.text.length
+      if (leaning === 'start' ? offset >= from && offset < to : offset > from && offset <= to) return i
+    }
+    return leaning === 'start' ? pieces.length - 1 : 0
+  }
+
+  const first = found(change.at, 'start')
+  const last = found(change.upto, 'end')
+
+  let from: number
+  let before = ''
+  const head = pieces[first]!
+  if (head.literal) {
+    from = head.srcStart + bytesOf(head.text.slice(0, change.at - starts[first]!))
+  } else if (head.gap) {
+    from = head.srcStart
+    /* The part of the gap the reader did not touch, put back as itself. */
+    before = head.text.slice(0, change.at - starts[first]!)
+  } else {
+    return { why: NOT_SOURCE }
+  }
+
+  let to: number
+  let after = ''
+  const tail = pieces[last]!
+  if (tail.literal) {
+    to = tail.srcStart + bytesOf(tail.text.slice(0, change.upto - starts[last]!))
+  } else if (tail.gap) {
+    to = tail.srcEnd
+    after = tail.text.slice(change.upto - starts[last]!)
+  } else {
+    return { why: NOT_SOURCE }
+  }
+
+  /* Everything the range passes THROUGH has to be writable too, not only the
+     two ends. A selection dragged across a citation and retyped would otherwise
+     have honest ends and a destroyed middle. */
+  for (let i = first + 1; i < last; i++) {
+    const piece = pieces[i]!
+    if (!piece.literal && !piece.gap) return { why: NOT_SOURCE }
+  }
+
+  /*
+   * A range that came out backwards is a bug in the walk above, not an edit.
+   *
+   * It should not be reachable: `narrow` never returns `upto < at`, and an
+   * insertion exactly on a piece boundary resolves to two adjacent pieces whose
+   * shared edge makes `from` and `to` the same number. But this is the last
+   * line before a byte range leaves for a file somebody is writing, and a
+   * negative-length splice would duplicate whatever lay between the two — so it
+   * refuses rather than trusting the argument that it cannot happen.
+   */
+  if (to < from) return { why: 'That edit did not resolve to a place in the file, so nothing was written.' }
+
+  return { from, to, text: before + change.text + after }
+}
+
+/**
+ * What this program says when somebody edits across a rendering.
+ *
+ * One string, because it is said in three places — the two ends of a range and
+ * the middle — and three spellings of one refusal is how a person learns that a
+ * program has three different problems with them.
+ */
+const NOT_SOURCE =
+  'That edit crosses something this reader renders rather than shows — a citation, a reference or an escape. '
+  + 'Its source cannot be recovered from what is on screen, so it is not written from here. Edit the .tex to change it.'
+
+/**
+ * Whether the source about to be replaced is safe to replace.
+ *
+ * ## The guard that does not depend on the browser being right
+ *
+ * Everything above decides what to write from the pieces the PAGE holds. The
+ * server holds the file, and it can ask a question the page cannot: what is
+ * actually in the bytes being overwritten? Every edit this feature legitimately
+ * makes replaces either the inside of a literal run — which by construction
+ * holds no LaTeX special character, because the parser breaks a literal run at
+ * every one of them — or a run of whitespace. So no legitimate edit ever
+ * overwrites a `\`, a `{`, a `%` or an `&`.
+ *
+ * Which makes this a complete, cheap, server-side answer to the worst thing
+ * this door could do. A page with a bug, an agent that guessed, a request
+ * replayed with the numbers changed: none of them can delete a command, a
+ * citation, an escape or a comment, whatever they claim about the range,
+ * because the door looks at what is there before it writes.
+ *
+ * Whitespace is deliberately allowed on this side and refused on the other.
+ * `whyNot` will not let a newline be WRITTEN, because a blank line ends a
+ * paragraph; a newline being replaced is the ordinary case — it is the hard
+ * wrap in the middle of somebody's sentence.
+ */
+export function sourceRefuses(source: string): string | null {
+  for (const character of source) {
+    if (SPECIAL.has(character)) {
+      return `That range covers “${character}”, which is LaTeX markup rather than text, so it is not overwritten from here.`
+    }
+  }
+  return null
+}
 
 /**
  * Whether a byte offset falls on the start of a UTF-8 character.

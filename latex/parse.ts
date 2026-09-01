@@ -26,6 +26,32 @@ export interface Segment {
   srcEnd: number;
   /** True when `text` is character-identical to source[srcStart..srcEnd]. */
   literal: boolean;
+  /**
+   * A run of source whitespace rendered as one space, and nothing else.
+   *
+   * ## Why this is worth a field rather than being inferred
+   *
+   * It is the ONE kind of derived segment whose rendering rule is total and
+   * reversible: every run of whitespace renders as a single space, and a single
+   * space written back over the whole run reproduces exactly what the reader
+   * sees. That makes it safe to write THROUGH, which no other derived segment
+   * is — `\autocite{jones}` renders as `[jones]`, and there is no rule that
+   * gets `\autocite{jones}` back from those seven characters.
+   *
+   * A consumer could try to infer it: a derived segment whose text is one
+   * space. That is wrong, and wrong in the direction that damages a file. `~`
+   * also renders as one space, and it is a NON-BREAKING space — a thing the
+   * author chose on purpose. A plain space written over it would silently
+   * change the typesetting of the document, which is exactly the class of edit
+   * this module refuses to make on somebody's behalf. So the producer says so,
+   * once, in the one place that knows.
+   *
+   * Never set on a run containing a blank line. A blank line ends a paragraph
+   * in LaTeX, so a space written over one would weld two paragraphs together —
+   * a structural change made while somebody was correcting a word. Such a run
+   * stays an ordinary derived segment, and stays unwritable.
+   */
+  gap?: boolean;
   styles: SegmentStyle[];
   /** For cite/ref segments: the key(s) being referenced. */
   keys?: string[];
@@ -752,6 +778,25 @@ export function parseInline(src: string, start: number, end: number, inherited: 
  * literal segment with exact offsets, and only the whitespace between them
  * becomes a derived single space. Precision is preserved everywhere it
  * actually matters, and it is given up only on the gaps between words.
+ *
+ * ## The gaps are MARKED, and that turned out to matter a great deal
+ *
+ * Each of those single spaces carries `gap: true`. The paragraph above says
+ * precision "is given up" on them, and that was read downstream as "these are
+ * as unwritable as a citation is" — which locked every paragraph in a
+ * hard-wrapped thesis while its headings, having no collapsed whitespace in
+ * them, stayed editable. Measured at 1% of paragraph characters against 100% of
+ * heading characters; `dev/typeable.probe.ts` is the probe and the person using
+ * it put it plainly: "so I can edit the titles of sections but not the text
+ * itself?"
+ *
+ * Precision is not what is given up here. What is given up is the one-for-one
+ * CHARACTER mapping, and that is not the same claim as "this cannot be written
+ * back". The rule collapsing these is total and it inverts: any run of
+ * whitespace renders as one space, and one space written over the whole run
+ * reproduces exactly what the reader sees. The flag says which segments that
+ * argument applies to, so that `latex/edit.ts` can write through them and go on
+ * refusing everything else. See the essay on `gap` in `Segment`.
  */
 function normalizeWhitespace(segments: Segment[]): Segment[] {
   const out: Segment[] = [];
@@ -785,6 +830,13 @@ function normalizeWhitespace(segments: Segment[]): Segment[] {
         srcStart: seg.srcStart + m.index,
         srcEnd: seg.srcStart + m.index + m[0].length,
         literal: false,
+        /* A blank line is not a gap. It ends a paragraph, so a space written
+           over it would weld two paragraphs into one while somebody was
+           correcting a word. Defensive rather than reachable — a paragraph
+           block already ends at the blank line that would produce this — and it
+           is here because the day some other block kind hands whitespace to
+           this function, the failure would be structural and silent. */
+        gap: !/\n[^\S\n]*\n/.test(m[0]),
       });
       last = m.index + m[0].length;
     }
