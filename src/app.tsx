@@ -437,7 +437,15 @@ export function App() {
 
   /** What the floating controls do, assembled once for every block on the page. */
   const answering = useMemo(
-    () => ({ decide: (id: string, decision: 'accept' | 'reject') => void answerOne(id, decision), acceptAll: () => void acceptAll(), busy }),
+    () => ({
+      /* `void`, because the control is a button and a button handler returning
+         a promise is a promise nothing awaits. What the answer carries — the
+         list still waiting — matters to `acceptAll`, which does await it, and
+         to nothing here. */
+      decide: (id: string, decision: 'accept' | 'reject') => void answerOne(id, decision),
+      acceptAll: () => void acceptAll(),
+      busy,
+    }),
     [answerOne, acceptAll, busy],
   )
 

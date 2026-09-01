@@ -661,27 +661,42 @@ export function usePaper(framed: boolean) {
   const deciding = useRef(false)
   const [busy, setBusy] = useState(false)
 
-  const answerOne = useCallback(async (id: string, decision: 'accept' | 'reject'): Promise<void> => {
-    const paper = showing.current
-    if (!paper || deciding.current) return
-    deciding.current = true
-    setBusy(true)
-    try {
-      const body = await post('/api/proposal', { epic: paper.epic }, { id, decision })
-      if (Array.isArray(body.proposals)) setProposals(body.proposals as Proposal[])
-      if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
-      if (body.ok === true) {
-        setSaid(String(body.said ?? ''))
-        return
+  const answerOne = useCallback(
+    async (id: string, decision: 'accept' | 'reject'): Promise<Proposal[] | null> => {
+      const paper = showing.current
+      if (!paper || deciding.current) return null
+      deciding.current = true
+      setBusy(true)
+      try {
+        const body = await post('/api/proposal', { epic: paper.epic }, { id, decision })
+        const left = Array.isArray(body.proposals) ? (body.proposals as Proposal[]) : null
+        if (left) setProposals(left)
+        if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
+        setSaid(body.ok === true ? String(body.said ?? '') : String(body.error ?? 'That suggestion was not answered.'))
+        /*
+         * The door's own answer, returned rather than only stored.
+         *
+         * `acceptAll` needs to know what is still waiting before it sends the
+         * next one, and reading that off state would be reading it too early:
+         * `setProposals` is a request to re-render, and there is no promise
+         * that React has done so by the time this `await` resumes. A loop that
+         * trusted the ref would send a suggestion the previous accept had
+         * already dropped — which the door answers, correctly, with "there is
+         * no suggestion by that name", and the reader gets a confusing sentence
+         * about something they did not do. The list from the answer is the only
+         * copy that is certainly current.
+         */
+        return left
+      } catch (e) {
+        setSaid(`That suggestion could not be answered: ${(e as Error).message}`)
+        return null
+      } finally {
+        deciding.current = false
+        setBusy(false)
       }
-      setSaid(String(body.error ?? 'That suggestion was not answered.'))
-    } catch (e) {
-      setSaid(`That suggestion could not be answered: ${(e as Error).message}`)
-    } finally {
-      deciding.current = false
-      setBusy(false)
-    }
-  }, [])
+    },
+    [],
+  )
 
   /**
    * Accept everything waiting, oldest first.
@@ -698,24 +713,33 @@ export function usePaper(framed: boolean) {
    * that applied them in a different order from the one on screen would produce
    * a paper the reader cannot reconcile with what they just read.
    *
-   * Reads the list off a ref rather than the state it closes over, so the loop
-   * sees what the last accept left behind rather than what was pending when the
-   * button was pressed. A suggestion dropped by an earlier accept — because it
-   * covered the same words — must not then be sent.
+   * What is still waiting comes from the door's own answer to the previous
+   * accept rather than from state, because `setProposals` is a request to
+   * re-render and not a thing that has happened by the time an `await`
+   * resumes. A suggestion dropped by an earlier accept — because it covered
+   * the same words — must not then be sent: the door would answer "there is no
+   * suggestion by that name", correctly, and the reader would be shown a
+   * sentence about something they did not do.
    */
   const waiting = useRef<Proposal[]>([])
   waiting.current = proposals
 
   const acceptAll = useCallback(async (): Promise<void> => {
-    /* A snapshot of the ids, taken once. `waiting.current` is re-read inside
-       the loop to see whether each is still there, but the SET being answered
-       is the one on screen when the button was pressed — otherwise a suggestion
-       filed by an agent midway through would be accepted without ever having
-       been shown to anybody. */
+    /* A snapshot of the ids, taken once, and the SET being answered is the one
+       on screen when the button was pressed — otherwise a suggestion filed by
+       an agent midway through would be accepted without ever having been shown
+       to anybody. */
     const asked = waiting.current.map((p) => p.id)
+    let left: Proposal[] = waiting.current
     for (const id of asked) {
-      if (!waiting.current.some((p) => p.id === id)) continue
-      await answerOne(id, 'accept')
+      if (!left.some((p) => p.id === id)) continue
+      const after = await answerOne(id, 'accept')
+      /* A refusal answers `null`, and the honest thing to do with it is stop.
+         Whatever refused the first one — the file moved under this page, most
+         likely — will refuse the rest, and pressing on would replace the
+         sentence saying so with three more copies of it. */
+      if (!after) return
+      left = after
     }
   }, [answerOne])
 
