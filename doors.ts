@@ -156,7 +156,7 @@ const bad = (why: string, status = 400): Reply => ({ status, body: { ok: false, 
  */
 const NOWHERE =
   'No project is open, so there is nowhere to look for a paper. A paper lives in the project it is about: ' +
-  '.kehikot/paper/<epic>/main.tex, in the project the canvas is standing in. Open a ' +
+  `${PAPERS_AT}/<epic>/${MAIN}, in the project the canvas is standing in. Open a ` +
   'project on the canvas, or pass one — `project` on the MCP door, `?project=` in this page’s own URL.'
 
 /**
@@ -189,17 +189,17 @@ function noPaper(epic: string | null, project: string): string {
    * been, and it was previously terse enough to read as one — which is what
    * `no paper for "tables-declare-themselves" in /Users/…/hippos-portal` is.
    */
-  if (keepsPapers(project)) {
-    return epic === null
-      ? 'This project keeps papers, but has none in it yet.'
-      : `This project has no paper for “${epic}”. There is no folder of that name under ` +
-        `${PAPERS_AT}/, or the folder is there and has no ${MAIN} in it.`
+  if (epic === null) {
+    return keepsPapers(project)
+      ? 'This project keeps papers, and has none in it yet.'
+      : 'This project keeps no papers yet.'
   }
-  return (
-    `This project keeps no papers. A paper lives in ${PAPERS_AT}/<epic>/${MAIN}, beside ` +
-    'whatever else this project keeps for its modules — so a project has papers once there is a folder there ' +
-    'with a document in it, and needs nothing configured to say so.'
-  )
+  /* One sentence, because the answer to "why not" is a PATH and the path is
+     `where` on this refusal. It used to be a paragraph explaining the
+     convention — where papers live, that nothing needs configuring — which is
+     the wrong answer to the question somebody is asking, and it read as prose
+     in the space a paper would have been. */
+  return `This epic has no paper yet. There is no ${MAIN} where one would go.`
 }
 
 /**
