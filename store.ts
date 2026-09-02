@@ -368,8 +368,14 @@ export function keepsPapers(project: string | null): boolean {
  * them disagreeing would not be a crash: it would be `read_source` opening a
  * file out of one paper while the page beside it renders another, both of them
  * answering confidently.
+ *
+ * Exported because `git.ts` needs the directory a paper actually IS, and
+ * `whereItWouldGo` is deliberately the wrong answer for that: it joins a path
+ * without resolving it, because it is about a place that may not exist yet.
+ * This one resolves, confines, and answers null for a paper that is not there —
+ * which is exactly what something about to run git in a directory has to know.
  */
-function rootFor(epic: string, project: string | null): string | null {
+export function paperRoot(epic: string, project: string | null): string | null {
   return roots(project).find((r) => r.epic === epic)?.dir ?? null
 }
 
@@ -758,7 +764,7 @@ function includeTargets(source: string): string[] {
  */
 export function readPaper(epic: string, project: string | null): Paper | null {
   if (!isEpic(epic)) return null
-  const root = rootFor(epic, project)
+  const root = paperRoot(epic, project)
   if (!root) return null
   const main = confine(root, MAIN)
   if (!main || !existsSync(main)) return null
@@ -941,7 +947,7 @@ export function readFigure(epic: string, file: string, project: string | null): 
   const dot = file.lastIndexOf('.')
   const type = dot === -1 ? undefined : IMAGE_TYPES[file.slice(dot).toLowerCase()]
   if (!type) return null
-  const root = rootFor(epic, project)
+  const root = paperRoot(epic, project)
   if (!root) return null
   const path = confine(root, file)
   if (!path) return null
@@ -967,7 +973,7 @@ export function readSource(epic: string, file: string, project: string | null): 
   const paper = readPaper(epic, project)
   if (!paper) return null
   if (!paper.files.includes(file)) return null
-  const root = rootFor(epic, project)
+  const root = paperRoot(epic, project)
   if (!root) return null
   const path = confine(root, file)
   if (!path) return null
@@ -1099,7 +1105,7 @@ export function writeRange(epic: string, edit: Edit, project: string | null): Wr
   if (!paper.files.includes(edit.file)) {
     return no(`This paper does not name a file called “${edit.file}”. It is made of: ${paper.files.join(', ')}`)
   }
-  const root = rootFor(epic, project)
+  const root = paperRoot(epic, project)
   if (!root) return no('There is no paper for that epic in this project.')
   const path = confine(root, edit.file)
   if (!path) return no('That file is not inside this paper.')

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import type { Paper, PlacedBlock } from '../../store.ts'
 import { Badge } from '@/components/ui/badge.tsx'
+import { Button } from '@/components/ui/button.tsx'
+import { Checkbox } from '@/components/ui/checkbox.tsx'
+import { Label } from '@/components/ui/label.tsx'
 import {
   Sidebar,
   SidebarContent,
@@ -15,6 +18,7 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar.tsx'
 import type { Proposal } from '../../latex/propose.ts'
+import type { Standing } from '../../git.ts'
 import { BlockRow, anchorId, type Pen } from './blocks.tsx'
 import { NO_PROPOSALS, Reading, type Answering } from './proposed.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
@@ -188,9 +192,46 @@ export interface PaginatedProps {
    */
   auto?: boolean
   onAuto?: (on: boolean) => void
+  /**
+   * What committing this paper would do right now, or `null` for a view that
+   * does not offer to.
+   *
+   * Threaded in rather than asked for here, because it is a fact about a git
+   * repository and this component knows about LaTeX and a scroll column. The
+   * same rule the rest of this file keeps: `reader/` knows nothing about the
+   * wire, and `use-paper.ts` is the one place the two meet.
+   */
+  saving?: Standing | null
+  /** Commit what has changed. `undefined` means the Save control is not drawn. */
+  onSave?: () => void
 }
 
 const CAVEAT = 'Page breaks are this reader\u2019s, not the PDF\u2019s.'
+
+/**
+ * The three rules the chrome row's controls carry, as `title` and nothing else.
+ *
+ * They are constants and not inline strings for one reason: they moved from the
+ * control to the wrapper around it when the ticks became Radix buttons, and a
+ * four-line string in the middle of JSX that is now attached to a `<span>` is
+ * the kind of thing a later edit quietly attaches to the wrong element. Named,
+ * they are read once and referred to.
+ *
+ * A `title` rather than a line of prose under the row, for the reason the
+ * page-break caveat became one: a permanent strip of explanation across a
+ * 340px container is height taken from the paper forever.
+ */
+const EDIT_RULE =
+  'Type corrections straight into the prose. Only text that is character-for-character what the .tex file '
+  + 'says can be typed into \u2014 a citation or a macro shows as what this reader makes of it, so there is no place '
+  + 'in the file for a cursor inside it. Enter commits, Escape puts it back, and LaTeX markup is refused rather '
+  + 'than escaped. Typing is written to the file straight away; press Save to commit it.'
+
+const AUTO_RULE =
+  'Apply a suggested change as soon as it arrives, instead of showing it for approval. Off by default. With it '
+  + 'off, a change is drawn into the prose in green and red where it happens and nothing is written until you '
+  + 'press Accept. With it on, the change is written straight away, the paper is re-read, and the change is '
+  + 'committed \u2014 the same as if you had pressed Accept yourself.'
 
 export function PaginatedView({
   paper,
@@ -204,6 +245,8 @@ export function PaginatedView({
   answering = null,
   auto = false,
   onAuto,
+  saving = null,
+  onSave,
 }: PaginatedProps) {
   const pages = useMemo(() => paginate(paper.blocks), [paper.blocks])
   const count = Math.max(1, pages.length)
@@ -550,29 +593,38 @@ export function PaginatedView({
 
             No icon and no label longer than a word. At 220 pixels this row
             already wraps.
+
+            ## It is shadcn's checkbox now, and the native one was a real gap
+
+            It used to be `<input type="checkbox" class="accent-[var(--mark)]">`,
+            which draws the OPERATING SYSTEM's checkbox with one colour changed.
+            That made these two ticks the only controls on the page that did not
+            belong to the canvas they sit on: the box, the tick inside it, the
+            focus ring, the dark-mode treatment and the disabled state were all
+            the browser's opinion, and `accent-color` is the entire extent of
+            what a stylesheet may say about them. Everything else in this row —
+            the sidebar trigger, the badge, Accept all — is shadcn, and the two
+            controls that decide whether this page may change somebody's thesis
+            were the ones that looked like they came from somewhere else.
+
+            `title` moves to the wrapper with the swap. The control is now a
+            Radix button with an indicator inside it, and a `title` on the tick
+            alone would say nothing when somebody rests on the WORD beside it,
+            which is the larger target and the one people point at.
           */}
           {onPen && (
-            <label className="flex min-w-0 shrink-0 items-center gap-1 text-[0.7rem] text-muted-foreground">
-              <input
-                type="checkbox"
-                className="size-3 accent-[var(--mark)]"
+            <span className="flex min-w-0 shrink-0 items-center gap-1" title={EDIT_RULE}>
+              <Checkbox
+                id="paper-edit"
+                size="container"
                 checked={pen !== null}
-                onChange={(event) => onPen(event.currentTarget.checked)}
+                onCheckedChange={(next) => onPen(next === true)}
                 data-editing={pen !== null ? '1' : '0'}
-                /* The whole rule, where somebody meets the thing it is about.
-                   It is a `title` rather than a line of prose under the row for
-                   the reason the page-break caveat became one: a permanent
-                   strip of explanation across a 340px container is height taken
-                   from the paper forever. */
-                title={
-                  'Type corrections straight into the prose. Only text that is character-for-character what the '
-                  + '.tex file says can be typed into — a citation or a macro shows as what this reader makes of '
-                  + 'it, so there is no place in the file for a cursor inside it. Enter commits, Escape puts it '
-                  + 'back, and LaTeX markup is refused rather than escaped.'
-                }
               />
-              Edit
-            </label>
+              <Label htmlFor="paper-edit" className="text-[0.7rem] font-normal text-muted-foreground">
+                Edit
+              </Label>
+            </span>
           )}
           {/*
             Whether a suggested change applies the moment it arrives.
@@ -601,24 +653,94 @@ export function PaginatedView({
             server-side auto-approve flag at all, deliberately: what this tick
             does is make the PAGE press Accept, with the ticket, the way a finger
             would. See the essay on `/api/proposal`.
+
+            ## And every one of them is a commit
+
+            Accepting writes a commit to the paper's repository, on whatever
+            branch is checked out, and that is as true of a change applied by
+            this tick as of one somebody pressed a button for — more worth
+            saying, if anything, because nobody was looking when it happened.
+            The tick's own sentence says so.
           */}
           {onAuto && (
-            <label className="flex min-w-0 shrink-0 items-center gap-1 text-[0.7rem] text-muted-foreground">
-              <input
-                type="checkbox"
-                className="size-3 accent-[var(--mark)]"
+            <span className="flex min-w-0 shrink-0 items-center gap-1" title={AUTO_RULE}>
+              <Checkbox
+                id="paper-auto"
+                size="container"
                 checked={auto}
-                onChange={(event) => onAuto(event.currentTarget.checked)}
+                onCheckedChange={(next) => onAuto(next === true)}
                 data-auto-approve={auto ? '1' : '0'}
-                title={
-                  'Apply a suggested change as soon as it arrives, instead of showing it for approval. Off by '
-                  + 'default. With it off, a change is drawn into the prose in green and red where it happens and '
-                  + 'nothing is written until you press Accept. With it on, the change is written straight away '
-                  + 'and the paper is re-read — the same as if you had pressed Accept yourself.'
-                }
               />
-              Auto
-            </label>
+              <Label htmlFor="paper-auto" className="text-[0.7rem] font-normal text-muted-foreground">
+                Auto
+              </Label>
+            </span>
+          )}
+          {/*
+            Save: commit what has changed under this paper, on the branch that
+            is checked out.
+
+            ## It does not write the file, because the file is already written
+
+            Typing goes into the `.tex` on blur or Enter, through the ticketed
+            write path, and it always has. That is not a detail to be tidied
+            away behind a button — nothing here is cached, `readPaper` opens the
+            file every time, and the author may have the same file open in a
+            real editor. Buffering edits in the page until Save would make this
+            app hold a second, newer copy of a paper it has spent its life
+            refusing to hold. So Save means what it means for a document already
+            on disk in a repository: commit it. The essay is on `/api/save`.
+
+            ## Drawn only where there is a history to save to
+
+            `nogit` — a paper in a plain folder, which was the only way to use
+            this module until commits existed — draws no button at all. A
+            control that is always there and never works is worse than no
+            control, and "this is not a repository" is not a failure to report
+            once per paper, forever.
+
+            ## And it is enabled in every state it IS drawn in
+
+            Including "nothing has changed" and including "git will not take
+            this". A disabled button can only explain itself in a `title`, which
+            is a hover, which a touch screen does not have and a reader at 220
+            pixels will not go looking for. Pressed, each of those answers in
+            one sentence on the line under the paper — which is where every
+            other answer in this module appears. Pressing with nothing to commit
+            does nothing to the repository and says so; pressing when git has
+            refused does nothing to the repository and says why.
+
+            ## The count is in the label, not only in the colour
+
+            `Save 2` when two paths would go in, `Save` when none would. The
+            filled variant says the same thing a second way, and this module's
+            rule — stated where `--pencil` and `--mark` are defined — is that
+            every colour on this page is paired with something that is not a
+            colour. At 220 pixels the fill is what a reader sees and the number
+            is what they can check.
+          */}
+          {onSave && saving && saving.at !== 'nogit' && (
+            <Button
+              type="button"
+              variant={saving.at === 'ready' ? 'default' : 'outline'}
+              size="container"
+              className="shrink-0 text-[0.7rem] font-normal"
+              disabled={answering?.busy ?? false}
+              data-save=""
+              data-saving={saving.at}
+              onClick={() => onSave()}
+              title={
+                saving.at === 'ready'
+                  ? `Commit ${saving.files.length === 1 ? 'this change' : `these ${saving.files.length} changes`} to `
+                    + `the paper's own repository, on the branch that is checked out: ${saving.files.join(', ')}. `
+                    + 'Only the paper’s files go in, whatever else is staged.'
+                  : saving.at === 'clean'
+                    ? 'Nothing has changed under this paper since the last commit.'
+                    : saving.why
+              }
+            >
+              {saving.at === 'ready' ? `Save ${saving.files.length}` : 'Save'}
+            </Button>
           )}
           {/*
             What is waiting, and the one control that answers all of it.
@@ -640,20 +762,22 @@ export function PaginatedView({
                 {inOrder.length} suggested
               </span>
               {inOrder.length > 1 && (
-                <button
+                <Button
                   type="button"
-                  className="rounded border px-1 text-[0.7rem] text-muted-foreground hover:bg-accent disabled:opacity-50"
+                  variant="outline"
+                  size="container"
+                  className="text-[0.7rem] font-normal text-muted-foreground"
                   disabled={answering.busy}
                   data-accept-all=""
                   onClick={() => answering.acceptAll()}
                   title={
-                    'Write every waiting change into the paper, oldest first. Each one is checked against the '
-                    + 'file as it stands after the one before it, so a suggestion covering words another has '
-                    + 'already rewritten is dropped rather than applied blindly.'
+                    'Write every waiting change into the paper, oldest first, each one its own commit. Each is '
+                    + 'checked against the file as it stands after the one before it, so a suggestion covering '
+                    + 'words another has already rewritten is dropped rather than applied blindly.'
                   }
                 >
                   Accept all
-                </button>
+                </Button>
               )}
             </span>
           )}

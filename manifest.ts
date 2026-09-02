@@ -215,7 +215,8 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     'the paper, so a reader can check you. To change a sentence of PROSE, use propose_edit on this module\'s ' +
     'MCP door: it draws the change into the paper in green and red where it happens and the person reading it ' +
     'decides — nothing you can call writes to a .tex, so do not edit prose behind their back while they are ' +
-    'looking at it. For markup, a citation, a heading, a new section or the structure of the document, edit ' +
+    'looking at it. Accepting one commits it to the paper\'s own repository. ' +
+    'For markup, a citation, a heading, a new section or the structure of the document, edit ' +
     'the .tex on disk with the tools you already have; propose_edit refuses those. Never restate here what ' +
     'the paper already says, because two copies of an argument drift.',
   entry: '/app',

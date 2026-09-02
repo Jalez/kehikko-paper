@@ -67,6 +67,8 @@ export function App() {
     answerOne,
     acceptAll,
     busy,
+    saving,
+    save,
   } = usePaper(FRAMED)
   const root = useRef<HTMLElement | null>(null)
   /**
@@ -616,6 +618,8 @@ export function App() {
             answering={answering}
             auto={auto}
             onAuto={changeAuto}
+            saving={saving}
+            onSave={() => void save()}
           />
         ) : (
           <Screen sight={sight} onStart={(epic) => void start(epic)} />

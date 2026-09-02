@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
 import { MAX_EDIT_BYTES, sourceRefuses, whyNot } from './latex/edit.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
@@ -10,6 +11,7 @@ import {
   isEpic,
   keepsPapers,
   listPapers,
+  paperRoot,
   projectOf,
   readFigure,
   readPaper,
@@ -75,11 +77,23 @@ import {
  *    that.
  *
  * The reads are unchanged and stay ungated, for the reason below. What is gated
- * is exactly the three doors that write: `POST /api/paper`, which starts a paper
+ * is exactly the four doors that write: `POST /api/paper`, which starts a paper
  * where there is none, `POST /api/edit`, which replaces bytes in one that is
- * already there, and `POST /api/proposal`, which answers a change somebody has
+ * already there, `POST /api/proposal`, which answers a change somebody has
  * suggested — accepting one goes through the same `writeRange` as an edit, so
- * the third door adds a decision rather than a way of writing.
+ * that door adds a decision rather than a way of writing — and `POST /api/save`,
+ * which writes no bytes at all and commits the ones already there.
+ *
+ * ## And there is a fourth thing this file can now do to a person's machine
+ *
+ * It can make a git commit, in a repository this program does not own. That is
+ * a bigger change than the feature sounds, and the whole of the care is in
+ * `git.ts`: it commits by PATH and never the index, so what somebody else had
+ * staged cannot be swept into a commit made because they accepted a typo fix;
+ * it refuses, with a sentence naming what to do, rather than guessing; and it
+ * never pushes, never branches, never amends, and never touches a second
+ * repository. The bytes are on disk before any of it runs, so a commit that
+ * fails can lose nothing.
  *
  * ## There is a tool on the MCP door that is not a read now, and it writes nothing
  *
@@ -290,6 +304,30 @@ const NOWHERE =
  * are no papers here" and "nobody said where to look": an app that offers one
  * sentence for both has told somebody the opposite of the truth half the time.
  */
+/**
+ * What to tell the reader about a commit that was attempted, in one sentence.
+ *
+ * Empty for the ordinary case where a commit was made and nothing needs saying
+ * — no, deliberately NOT empty: it says the short sha. A change that quietly
+ * enters somebody's git history without the page saying so is the shape of
+ * surprise this whole feature has to avoid, and `git log` afterwards should
+ * never be the first a person hears of a commit made in their repository.
+ *
+ * `clean` is silent on the accept path only because it cannot happen there —
+ * `writeRange` refuses an edit that changes nothing — and says so on the Save
+ * path, where pressing a button with nothing to save is an ordinary thing to
+ * do and deserves an answer rather than a button that appears not to work.
+ */
+function aboutCommit(made: Committed | Standing): string {
+  if (made.at === 'committed') return made.sha ? `Committed as ${made.sha}.` : 'Committed.'
+  if (made.at === 'clean') return 'Nothing has changed since the last commit.'
+  /* Silent, and that is the point of the state existing — see `Standing`. A
+     paper in a plain folder is not a paper with a problem. */
+  if (made.at === 'nogit') return ''
+  if (made.at === 'ready') return ''
+  return made.why
+}
+
 function noPaper(epic: string | null, project: string): string {
   /*
    * Two sentences, and the whole job of having two is that they are different.
@@ -1025,6 +1063,53 @@ export function answer(
       }
     }
     drop(project, epic, id)
+    /*
+     * One accepted suggestion is one commit, and it is made HERE — after the
+     * bytes are on disk and before anything else.
+     *
+     * ## The order is the whole of the safety
+     *
+     * `writeRange` has already renamed the new file over the old one. Whatever
+     * git does next, the correction stands: there is no branch below this line
+     * that can un-write it, and a refusal is a sentence over a paper that is
+     * already right. That is the only ordering in which a program allowed to
+     * commit into somebody's repository is safe to write, and it is why the
+     * commit is not attempted first and the write made conditional on it.
+     *
+     * ## Why an accept commits and a typed correction does not
+     *
+     * They are different acts. Accepting is a discrete decision about somebody
+     * else's suggestion — there is a before and an after and a reason, which is
+     * exactly a commit — and the reader made it once, deliberately, with a
+     * button. Typing is continuous: a reader fixing four typos in a paragraph
+     * has made one change to their paper, not four, and a commit per blur would
+     * fill their history with a letter each. So typing accumulates and `Save`
+     * commits it, which is what a person means by saving a document.
+     *
+     * `Auto` does not change this. With the tick on the page presses Accept as
+     * a finger would, so a suggestion applied unasked is committed unasked —
+     * which is more of a reason to record it, not less: the commit is the only
+     * place that change is written down as having happened.
+     */
+    const message = acceptMessage(proposal.file, proposal.why, proposal.by)
+    /*
+     * ONE FILE, and not the whole paper.
+     *
+     * A pathspec-mode commit takes the working-tree state of the paths it
+     * names, so a commit scoped to the paper's directory would sweep in every
+     * other uncommitted change under it — a chapter the author had been editing
+     * beside this page — under a subject saying a suggestion was accepted. That
+     * is not somebody else's work, because it is still the paper; it is the
+     * wrong SENTENCE about it, and this history is the one somebody will read
+     * to find out when a change was made and why.
+     *
+     * So an accept commits the one file the suggestion changed, which is the
+     * file the message names. What cannot be separated out is another
+     * uncommitted change in THAT file — a per-path commit has no finer grain
+     * than a path — and Save, which is scoped to the whole paper, is where the
+     * rest belongs.
+     */
+    const made = commitPaper(paperRoot(epic, project), message.subject, message.body, [proposal.file])
     const lost = rebaseAll(
       project,
       epic,
@@ -1035,8 +1120,107 @@ export function answer(
       ok: true,
       paper: readPaper(epic, project),
       proposals: pendingFor(project, epic),
-      said: droppedBecause(lost),
+      /* Two sentences that can both be true — a suggestion was dropped by the
+         rebase AND the commit was refused — and the reader needs both. Joined
+         rather than one overwriting the other. */
+      said: [droppedBecause(lost), aboutCommit(made)].filter((one) => one.length > 0).join(' '),
     })
+  }
+
+  /*
+   * Commit whatever has changed under this paper: what the Save button presses.
+   *
+   * ## Save does not write the file, because the file is already written
+   *
+   * Typing in the reader goes to `/api/edit` on blur or Enter, through the
+   * ticketed write path, and lands in the `.tex` immediately. That is not an
+   * implementation detail to be tidied away behind a Save button — it is the
+   * property the whole module rests on. Nothing here is cached, `readPaper`
+   * opens the file every time, and the author may be in a real editor with the
+   * same file open. Buffering edits in the page until somebody pressed Save
+   * would mean this app holding a second, newer copy of a paper it has spent
+   * its life refusing to hold, and would reintroduce exactly the divergence
+   * `store.ts` opens by arguing against.
+   *
+   * So Save means what it means for a document already on disk in a repository:
+   * COMMIT what has changed since the last commit. The write path is untouched.
+   *
+   * ## It commits the paper, not only what this page typed
+   *
+   * The pathspec is the paper's directory, so a chapter the author edited in
+   * their real editor five minutes ago goes in too. That is right rather than
+   * sloppy: those bytes are part of the paper's state at the moment somebody
+   * said "save this", and a commit that deliberately left them out would be a
+   * commit whose tree does not match anything that ever existed on disk. The
+   * message says only that the paper was saved, and claims nothing about where
+   * the changes came from — see `saveMessage`.
+   *
+   * Nothing to commit answers `ok: true` with a sentence saying so. Pressing
+   * Save on an unchanged paper is not a fault, and a 400 would draw an error
+   * over somebody's paper for doing nothing wrong.
+   */
+  if (path === '/api/save' && method === 'POST') {
+    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+    const dir = paperRoot(epic, project)
+    if (!dir) return bad('There is no paper for that epic in this project.', 404)
+
+    /* Asked before it is done, because the message names the files and the
+       files are what `standing` reads. One extra `git status` on a press of a
+       button is not a cost worth an argument. */
+    const where = standing(dir)
+    if (where.at === 'nogit') {
+      /* The button that sends this is not drawn when there is no repository, so
+         getting here means something other than the page asked — and the honest
+         answer to "save this" from a folder with no history is that there is
+         nowhere to save it TO, not silence. */
+      return ok({
+        ok: true,
+        committed: false,
+        said: `${dir} is not inside a git repository, so there is no history to save this paper to.`,
+      })
+    }
+    if (where.at !== 'ready') {
+      return ok({ ok: true, committed: false, said: aboutCommit(where) })
+    }
+    const message = saveMessage(epic, where.files)
+    const made = commitPaper(dir, message.subject, message.body)
+    return ok({ ok: true, committed: made.at === 'committed', said: aboutCommit(made) })
+  }
+
+  /*
+   * Whether there is anything to commit, and whether a commit would work at all.
+   *
+   * The Save button reads this. It is a READ — it takes no lock, it changes
+   * nothing, and it is ungated like every other read here for the reason
+   * `/api/proposals` gives: it says less about this machine than `/api/paper`
+   * already does.
+   *
+   * Three answers rather than a boolean, because "nothing has changed" and
+   * "this repository will not take a commit" are different things to draw. A
+   * button greyed out for the first means the paper is saved; greyed out for
+   * the second it means the paper is NOT saved and nothing here is going to
+   * save it, which a person has to be told in words.
+   */
+  if (path === '/api/uncommitted' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    /* No project is not an error on a read, the same as `/api/proposals`: there
+       is nowhere to have changed anything, so nothing is waiting. The page
+       polls this and a refusal every four seconds would be a container that
+       looks broken while a reader has simply not opened a project. */
+    if (project === null) return ok({ ok: true, standing: { at: 'nogit' } })
+    const dir = paperRoot(epic, project)
+    if (!dir) return ok({ ok: true, standing: { at: 'nogit' } })
+    /* The union as `git.ts` composed it, not flattened into a row of always-
+       present fields. The page draws a different control for each branch, and a
+       `files: []` sitting beside `at: 'refused'` is an empty list that means
+       nothing pretending to be one that means "none". */
+    return ok({ ok: true, standing: standing(dir) })
   }
 
   if (path === '/api/figure' && method === 'GET') {
