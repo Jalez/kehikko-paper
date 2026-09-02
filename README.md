@@ -355,6 +355,11 @@ Ticking it does not sweep up suggestions already waiting: those were shown to
 somebody who did not answer them, and applying them retroactively would write
 changes as the side effect of setting a preference.
 
+A change applied by this tick is committed exactly as one somebody pressed a
+button for — more worth saying, if anything, because nobody was looking when it
+happened, and the commit is then the only place that change is written down as
+having occurred. See the section on the paper's own repository below.
+
 It is remembered in **`localStorage`, keyed by project and epic**. Not
 `state.set`: that is per MODULE and this is a decision about one PAPER — a reader
 who agreed that an agent may rewrite this epic's paper has not agreed the same
@@ -451,19 +456,211 @@ that shape has two ends, one of which does not exist yet. `src/use-selection.ts`
 holds the selection in one place, with the open question written down and the
 two-line addition named.
 
+### A change that lands has a commit, in the paper's own repository
+
+A paper is a `.tex` file in somebody's repository with its own history, and
+`store.ts` opens by saying the worst thing this app could do is become a second
+place where one lives. That is about STORAGE and it is still right. This is the
+other half of it: if the paper's history is the real one, then a change this app
+makes belongs IN it, rather than as an untracked diff somebody finds a week
+later and cannot attribute.
+
+**One accepted suggestion is one commit. Save is one commit.** Nothing else here
+commits, and typing does not: a reader fixing four typos in a paragraph has made
+one change to their paper, not four, and a commit per blur would fill a thesis's
+history with a letter each. Accepting is the opposite — a discrete decision
+about somebody else's suggestion, with a before, an after and a reason, which is
+exactly the shape of a commit.
+
+#### What Save means, since the file is already written
+
+Typing goes to `POST /api/edit` on blur or Enter and lands in the `.tex`
+immediately. That is not an implementation detail waiting to be tidied away
+behind a button; it is the property the whole module rests on. Nothing is
+cached, `readPaper` opens the file every time, and the author may have the same
+file open in a real editor. Buffering edits in the page until somebody pressed
+Save would make this app hold a second, newer copy of a paper it has spent its
+life refusing to hold.
+
+So **Save commits what has changed since the last commit**, and the write path is
+untouched. The control reads `Save 2` when two paths would go in and `Save` when
+none would — the count in the label as well as in the filled variant, because
+this module's rule is that every colour on the page is paired with something that
+is not a colour, and at 220 pixels a number is what a reader can check.
+
+It is pressable in every state it is drawn in, including the two where pressing
+changes nothing. A disabled button can only explain itself in a `title`, which is
+a hover, which a touch screen does not have — and "nothing has changed since the
+last commit" is precisely what somebody pressing Save wants to be told. Pressing
+with nothing to commit does nothing to the repository and says so; pressing when
+git has refused does nothing and says why.
+
+#### The repository is somebody else's, and it is not the paper's
+
+This is the fact `git.ts` is shaped around. A paper lives at
+`<project>/.kehikot/paper/<epic>/`, and the project is very often not the root of
+a repository — the thesis on this machine sits several levels inside one that
+also holds coursework and scripts. A commit made here therefore lands next to
+whatever its owner had half-finished at the moment they accepted a typo fix.
+
+**So it commits by PATH, and never the index.** Every invocation ends in
+`-- :(literal,top)<a path inside the paper>`, which is git's "commit the contents
+of these paths" mode: the commit is built from HEAD plus the working-tree state
+of the named paths, and what is staged anywhere else is not consulted and not
+recorded. Measured against a repository with an unrelated file staged — the
+commit held one file, and `git status` afterwards still showed the unrelated file
+staged and uncommitted, exactly as it was. `:(literal,…)` turns off pathspec
+globbing so a directory with a `*` in its name is a directory; `:(top)` makes the
+path relative to the repository root rather than to the working directory.
+
+`git add` runs first with the same pathspec, because a paper that has never been
+committed is untracked and pathspec-mode commit refuses an untracked path. It is
+never `git add -A`, never `git add .`, and never a path this module did not
+compute itself from the epic and the project.
+
+**An accept commits the one file it names**; Save commits the paper's directory.
+The narrower scope on accept is not caution for its own sake: a commit scoped to
+the whole paper would sweep in a chapter the author had been editing beside this
+page, under a subject saying a suggestion was accepted. That is still the paper
+and still not somebody else's work — it is the wrong sentence about it, in the
+history somebody will read to find out when a change was made. What cannot be
+separated out is another uncommitted change in the SAME file, because a per-path
+commit has no finer grain than a path, and Save is where the rest belongs.
+
+**And it never pushes, branches, amends, resets, stashes or tags.** "The current
+branch" means whatever branch is checked out. There is no code in `git.ts` that
+could change which one that is, and none that reads or writes a second
+repository — `GIT_DIR` and `GIT_WORK_TREE` are stripped from the environment
+before every invocation, because this process is usually started from inside a
+repository of its own and an inherited `GIT_DIR` is the one way a command here
+could point somewhere else.
+
+#### It refuses rather than guesses, and the edit is never lost
+
+The bytes are on disk before any of this runs. `writeRange` renames the new file
+over the old one and returns; only then is a commit attempted, so a refusal is a
+sentence over a paper that is already correct. That ordering is the whole of the
+safety, and it is why the commit is not attempted first with the write made
+conditional on it.
+
+| When | What it says |
+| ---- | ------------ |
+| HEAD is detached | This repository is not on a branch — HEAD is detached at `abc1234`. Check out a branch and this will be committed to it. |
+| A merge, rebase, cherry-pick, revert or bisect is in progress | A merge is in progress in this repository. Finish it or abort it, and this will be committed. |
+| `user.name` or `user.email` is unset | This repository has no `user.email` set, so git cannot record who made the change. Set it — `git -C … config user.email you@example.com` — and this will be committed. |
+| The paper is in a `.gitignore` | `…/.kehikot/paper/thesis` is ignored by git in this repository, so changes to this paper cannot be committed. A `.gitignore` rule covers it — the usual one is `.kehikot/`. |
+| There is no repository at all | Nothing. The Save button is not drawn and no sentence appears. |
+
+The last row is a state and not a refusal, and the difference is what a reader
+sees. A paper in a plain folder is a perfectly ordinary way to use this module —
+it was the only way until commits existed — and a page that answered every
+accepted suggestion with "this could not be committed" would be reporting the
+absence of a feature as a failure, once per typo, forever.
+
+The identity check is deliberately for a CONFIGURED identity. Git will invent
+`someone@their-laptop.local` from the login name and the hostname when
+`user.email` is unset, and a commit in somebody's thesis attributed to an address
+that does not exist is worse than no commit.
+
+Hooks are the repository's own and are not bypassed. There is no `--no-verify`: a
+repository with a `pre-commit` hook has one because its owner wanted one. The
+cost is that a hook which fails takes the commit with it, reported with the
+hook's own message over a paper that is already correct on disk. Signing is the
+same — if `commit.gpgsign` is set this signs, and a signature that cannot be made
+is a refusal rather than an unsigned commit slipped past a policy.
+
+#### What the commits say, and who they say made the change
+
+The AUTHOR is the person, by not being set at all: git uses the repository's own
+`user.name` and `user.email`, which is why those being unset is a refusal rather
+than something to work around. That is the honest reading of what happened. An
+agent WROTE the words and could not put them in the file — the whole point of
+`propose_edit` not writing — and the thing that changed the repository was a
+person deciding to.
+
+`--author` naming the agent was considered and refused: it attributes a decision
+the agent is deliberately unable to make, and it would put a fabricated address
+in somebody's history, since `by` is free text an agent chose for itself and is
+trusted for nothing. The proposer is a TRAILER instead, and `Proposed-by:` rather
+than `Co-authored-by:` — the latter is parsed by git and by forges, which expect
+`Name <email>` and attach the commit to whatever account that address belongs to.
+Handing that mechanism a name an agent made up is how somebody else's face ends
+up on a commit they never saw.
+
+```
+Accept a suggested change in main.tex
+
+A misspelling in the first claim.
+
+Proposed-by: an agent
+```
+
+The `why` sentence is the body, because that is where a reader of the history
+looks for the reason. `Proposed-by:` says `an agent` today and not more, because
+`propose_edit` takes no argument for who is proposing and this module genuinely
+does not know which agent on a canvas made a suggestion — the trailer says what
+is known. The cleanup is `--cleanup=whitespace` and not git's default `strip`,
+which deletes every line beginning with `#`: an agent talking about section
+numbering writes one, and it would silently become an empty commit body.
+
+Save's message says what a person did and claims nothing about where the changes
+came from, because some of them may have been typed in a real editor with the
+file open beside this page:
+
+```
+Save the thesis paper
+
+Changed since the last commit:
+
+  .kehikot/paper/thesis/main.tex
+  .kehikot/paper/thesis/chapters/2_bridge.tex
+```
+
+One changed file makes it `Save main.tex` with no body.
+
+#### The controls are shadcn, including the ticks
+
+Edit and Auto used to be `<input type="checkbox">` with `accent-color` set, which
+draws the operating system's widget with one colour changed — so the two controls
+that decide whether this page may change somebody's thesis were the only things
+in the chrome row that did not belong to the canvas they sit on. The box, the
+tick, the focus ring, the dark treatment and the disabled state were all the
+browser's opinion, and `accent-color` is the entire extent of what a stylesheet
+may say about them.
+
+They are `components/ui/checkbox.tsx` now — shadcn's, on `@radix-ui/react-checkbox`
+— paired with `components/ui/label.tsx`, which is there because a Radix checkbox
+is a `<button role="checkbox">` and a native `<label>` does not forward a press
+to one. One thing was changed from upstream, and it is the same thing
+`button.tsx` changed: a `container` size, because upstream's `size-4` is a
+quarter of the height of the chrome row in a container 220 pixels wide.
+`Accept all` and `Save` are `Button`.
+
+None of the three uses a container query, and that is worth saying because the
+proposal card cannot: the card portals out of `@container container`, so a
+`@sm/container:` rule inside it has nothing to ask. The chrome row is in the
+ordinary tree and a container query would work there — it simply is not needed,
+because the row already wraps.
+
+Measured in a headless Chrome at 220 and at 900, both light: the row is one line
+at 900 and two at 220, with no horizontal scroll at either; `Save 1` draws filled
+and `Save` draws outlined. What was NOT measured is the framed case, the dark
+theme, and how the three controls read to a person.
+
 ## What it does not do, on purpose
 
-**It writes three things and no others.** The program this was extracted from was a
+**It writes four things and no others.** The program this was extracted from was a
 workbench: a `POST /api/edits` that rewrote the author's thesis, a SQLite work
 queue, a margin-notice thread, and an MCP surface of eleven tools, seven of which
-mutated. Three doors here write — `POST /api/paper`, which starts a paper where
+mutated. Four doors here write — `POST /api/paper`, which starts a paper where
 there is none and refuses if anything is already there, `POST /api/edit`, which
-replaces one byte range in one file the paper itself names, and
-`POST /api/proposal`, which accepts or rejects a change somebody has suggested.
-The third is a decision rather than a new way of writing: accepting one goes
-through the same `writeRange` as a typed correction, with the same hash check and
-the same refusals. There is still no create, no delete, no rename, no move, no
-undo table and no queue.
+replaces one byte range in one file the paper itself names,
+`POST /api/proposal`, which accepts or rejects a change somebody has suggested,
+and `POST /api/save`, which writes no bytes at all and commits the ones already
+on disk. The third is a decision rather than a new way of writing: accepting one
+goes through the same `writeRange` as a typed correction, with the same hash
+check and the same refusals. There is still no create, no delete, no rename, no
+move, no undo table and no queue.
 
 **One tool on the MCP door is not a read, and it writes nothing.** `propose_edit`
 puts a change in front of the person reading the paper. It touches no `.tex`: the
@@ -584,7 +781,9 @@ below.
 | `/api/source?epic=…&file=…`       | the raw `.tex` of one file the paper names |
 | `/api/figure?epic=…&file=…`       | one image the paper names — bytes, not JSON |
 | `/api/proposals?epic=…`           | the changes suggested about one paper that nobody has answered — a read, and ungated like the others |
-| `/api/proposal` (POST)            | accept or reject one. Ticketed; accepting is `writeRange` |
+| `/api/proposal` (POST)            | accept or reject one. Ticketed; accepting is `writeRange`, and then one commit |
+| `/api/uncommitted?epic=…`         | whether this paper has anything to commit, and whether a commit here would work — a read, ungated |
+| `/api/save` (POST)                | commit what has changed under the paper. Ticketed; writes no bytes |
 | `/mcp`                            | `list_papers`, `read_paper`, `read_source`, `propose_edit`, `list_proposals` |
 
 All of it is middleware in front of the one Vite server. A module is one origin
@@ -598,6 +797,8 @@ manifest.ts     what a host reads, and the essays on storage and the protocol
 doors.ts        every door but the page, as one function with no socket
 store.ts        the papers directory, the two fences, \include folded in
 proposals.ts    the suggestions nobody has answered, and why they live in memory
+git.ts          the paper's own history: one commit per accepted change, and
+                every reason this refuses to make one
 latex/parse.ts  LaTeX -> source-mapped blocks (carried over; see its own header)
 latex/edit.ts   a typed change -> a byte range, and a byte range -> a place on screen
 latex/propose.ts a quoted sentence -> a proposal, and what an applied edit does to one
@@ -614,9 +815,11 @@ src/
                    paginated.tsx (the scrolling column and the sections),
                    blocks.tsx (the gutter), segments.tsx, proposed.tsx, ask.tsx
   lib/             selection.ts (a highlight -> a source range), utils.ts
-  components/ui    shadcn's button, badge, button group and sidebar
+  components/ui    shadcn's button, badge, button group, checkbox, label,
+                   popover and sidebar
 wire/           the mailbox and the bridge, copied from References and Journeys
-test/           parse, store, doors, wire, reader, proposals — 348 tests, no browser needed
+test/           parse, store, doors, wire, reader, proposals, git, saving — 386 tests,
+                no browser needed
 ```
 
 `src/reader/` knows about LaTeX and nothing about the wire. `wire/` knows about

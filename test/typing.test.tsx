@@ -108,17 +108,25 @@ describe('with no pen, the reading view is exactly what it was', () => {
     expect(spans(container).length).toBeGreaterThan(0)
     expect(container.querySelectorAll('[data-editable]').length).toBe(0)
     expect(container.querySelectorAll('[contenteditable]').length).toBe(0)
-    /* And no control, because the caller offered nowhere for an edit to go. */
-    expect(container.querySelector('input[type="checkbox"][data-editing]')).toBeNull()
+    /* And no control, because the caller offered nowhere for an edit to go.
+       Asked by data attribute and not by tag: the tick is shadcn's checkbox,
+       which is a Radix button carrying `role="checkbox"` rather than an
+       `<input>`. That is a change of ELEMENT and not of meaning, and a test
+       that kept asking for an input would have been asserting the widget's
+       implementation rather than that the control is absent. */
+    expect(container.querySelector('[data-editing]')).toBeNull()
   })
 
   test('the control appears only when the page offers somewhere to write', () => {
     const { container } = render(
       <PaginatedView paper={fixture()} walk={null} mark={null} rootRef={ref()} onPen={() => {}} />,
     )
-    const box = container.querySelector<HTMLInputElement>('input[type="checkbox"][data-editing]')
+    const box = container.querySelector<HTMLButtonElement>('[data-editing]')
     expect(box).not.toBeNull()
-    expect(box!.checked).toBe(false)
+    /* `aria-checked` rather than `.checked`, because a Radix checkbox says what
+       state it is in the way an assistive technology reads it. */
+    expect(box!.getAttribute('role')).toBe('checkbox')
+    expect(box!.getAttribute('aria-checked')).toBe('false')
   })
 })
 

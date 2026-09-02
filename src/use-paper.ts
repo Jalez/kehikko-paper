@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { connect, type Connection } from 'roadmap-module-protocol/client'
 
+import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { json, post, standIn, standingIn } from './api.ts'
@@ -112,6 +113,37 @@ const ID = 'roadmap.paper'
 const PROPOSAL_POLL_MS = 4000
 
 /**
+ * `/api/uncommitted`'s answer, checked rather than cast.
+ *
+ * Everything else this hook reads off the wire is drawn; this one decides
+ * whether a control that writes into somebody's git repository appears at all,
+ * and whether a sentence about their repository is shown as this app's own. So
+ * it is narrowed by hand, and anything unrecognised answers null — which leaves
+ * the previous value standing rather than turning an unexpected document into
+ * a Save button.
+ *
+ * The type is `git.ts`'s, imported for the type only. That file imports
+ * `node:child_process`, so a VALUE import of it would put a `node:` module in
+ * the browser bundle — the failure `store.ts` is imported carefully to avoid,
+ * with the same silent shape: a page that loads and then does nothing.
+ */
+function asStanding(value: unknown): Standing | null {
+  if (!value || typeof value !== 'object') return null
+  const at = (value as { at?: unknown }).at
+  if (at === 'clean' || at === 'nogit') return { at }
+  if (at === 'ready') {
+    const files = (value as { files?: unknown }).files
+    return { at, files: Array.isArray(files) ? files.filter((one): one is string => typeof one === 'string') : [] }
+  }
+  if (at === 'refused') {
+    const why = (value as { why?: unknown }).why
+    return { at, why: typeof why === 'string' ? why : 'git refused this commit and did not say why.' }
+  }
+  return null
+}
+
+
+/**
  * Which project an unframed page was told to stand in.
  *
  * The companion to `epicFromUrl` and it arrived for the same reason. A paper
@@ -171,6 +203,14 @@ export function usePaper(framed: boolean) {
    * turn it, so something has to say why.
    */
   const [said, setSaid] = useState('')
+
+  const [saving, setSaving] = useState<Standing>({ at: 'nogit' })
+  const [nudge, setNudge] = useState(0)
+  /* A stable way for the writers below to say "ask again now". They are
+     `useCallback`s with no dependencies and must stay that way — the whole
+     module hangs off their identity — so this is a setter and not the ask
+     itself. */
+  const askAgain = useCallback(() => setNudge((n) => n + 1), [])
   /**
    * Where somebody else is pointing, as the context carries it.
    *
@@ -573,6 +613,10 @@ export function usePaper(framed: boolean) {
         if (body.ok === true && body.paper) {
           setSight({ at: 'reading', paper: body.paper as Paper })
           if (body.said) setSaid(String(body.said))
+          /* The file just changed, so what Save would do just changed. Asked
+             again now rather than waiting up to four seconds for the poll,
+             because the reader is looking at the button. */
+          askAgain()
           return null
         }
         if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
@@ -581,7 +625,7 @@ export function usePaper(framed: boolean) {
         return `That correction could not be sent: ${(e as Error).message}`
       }
     },
-    [],
+    [askAgain],
   )
 
   /**
@@ -646,6 +690,65 @@ export function usePaper(framed: boolean) {
   }, [epicOnScreen])
 
   /**
+   * Whether the paper has anything waiting to be committed, and whether a
+   * commit here would work at all.
+   *
+   * ## What the Save button is reading
+   *
+   * This is a fact about somebody's git repository, so it can change without
+   * this page doing anything: the author saves a chapter in their real editor,
+   * or commits from a terminal, and what Save would do is different. It is
+   * therefore polled rather than derived — there is nothing in this page to
+   * derive it from — on the same four seconds as the proposal list, in a
+   * separate effect so that neither read can break the other, and `nudged`
+   * whenever this page has just written something and does not want to wait up
+   * to four seconds to say so.
+   *
+   * `nogit` is the state a paper in a plain folder sits in forever, and it is
+   * why this is a four-way answer and not a boolean. See `Standing` in
+   * `git.ts`: no repository is not a failure to report, it is a Save button
+   * that is not drawn.
+   */
+
+  useEffect(() => {
+    if (epicOnScreen === null) {
+      setSaving({ at: 'nogit' })
+      return
+    }
+    let stopped = false
+    const ask = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      void json('/api/uncommitted', { epic: epicOnScreen })
+        .then((body) => {
+          if (stopped) return
+          /* Checked rather than cast. This is the only value on the page that
+             decides whether a control which writes to somebody's git history is
+             drawn, and an answer from an older or a different server should
+             leave it where it was rather than become a button. */
+          const read = asStanding(body.standing)
+          if (read) setSaving(read)
+        })
+        .catch(() => {
+          /* Swallowed like the proposal poll's, and for the same reason: the
+             paper on screen is unaffected and "I could not ask git what has
+             changed" is not something the reader can act on. The next tick
+             tries again. What it must NOT do is leave a Save button claiming
+             there is something to save when nothing here knows. */
+        })
+    }
+    ask()
+    const every = setInterval(ask, PROPOSAL_POLL_MS)
+    const woke = () => ask()
+    document.addEventListener('visibilitychange', woke)
+    return () => {
+      stopped = true
+      clearInterval(every)
+      document.removeEventListener('visibilitychange', woke)
+    }
+  }, [epicOnScreen, nudge])
+
+
+  /**
    * Answer one suggestion.
    *
    * The door does the deciding — see the essay on `/api/proposal` — and this is
@@ -693,9 +796,13 @@ export function usePaper(framed: boolean) {
       } finally {
         deciding.current = false
         setBusy(false)
+        /* Accepting commits, so the paper has just gone from having something
+           to save to having nothing — or the commit was refused and it still
+           does. Either way the button is wrong until this is asked again. */
+        askAgain()
       }
     },
-    [],
+    [askAgain],
   )
 
   /**
@@ -742,6 +849,42 @@ export function usePaper(framed: boolean) {
       left = after
     }
   }, [answerOne])
+
+  /**
+   * Commit what has changed under the paper: what pressing Save does.
+   *
+   * ## Save does not write the file
+   *
+   * It cannot, because the file is already written — typing goes to
+   * `/api/edit` on blur or Enter and lands in the `.tex` immediately, and that
+   * is a property this module depends on rather than an oversight to be tidied
+   * behind a button. The essay is on `/api/save` in `doors.ts`. So Save means
+   * what it means for a document that is already on disk in a repository:
+   * commit what has changed since the last commit.
+   *
+   * ## It says what happened, always
+   *
+   * Committed, nothing to commit, or the reason git refused — one sentence,
+   * through the same `said` line every other answer here uses. A button that
+   * writes into somebody's git history and then looks exactly as it did before
+   * is the one shape this feature is not allowed to have.
+   */
+  const save = useCallback(async (): Promise<void> => {
+    const paper = showing.current
+    if (!paper || deciding.current) return
+    deciding.current = true
+    setBusy(true)
+    try {
+      const body = await post('/api/save', { epic: paper.epic })
+      setSaid(String(body.said ?? body.error ?? ''))
+    } catch (e) {
+      setSaid(`That could not be saved: ${(e as Error).message}`)
+    } finally {
+      deciding.current = false
+      setBusy(false)
+      askAgain()
+    }
+  }, [askAgain])
 
   /**
    * Say how tall this page would like its frame to be.
@@ -797,8 +940,10 @@ export function usePaper(framed: boolean) {
       answerOne,
       acceptAll,
       busy,
+      saving,
+      save,
     }),
-    [sight, said, resize, point, pointed, start, correct, proposals, answerOne, acceptAll, busy],
+    [sight, said, resize, point, pointed, start, correct, proposals, answerOne, acceptAll, busy, saving, save],
   )
 }
 

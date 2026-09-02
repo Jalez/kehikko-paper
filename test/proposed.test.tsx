@@ -477,21 +477,27 @@ describe('x of y, beside the buttons', () => {
 describe('the auto-approve tick', () => {
   test('it sits beside Edit, is off, and says what it does', () => {
     const { container } = draw([])
-    const box = container.querySelector<HTMLInputElement>('input[data-auto-approve]')!
-    expect(box.checked).toBe(false)
+    /* Asked by data attribute, not by tag. The tick is shadcn's checkbox now,
+       which is a Radix button with `role="checkbox"` rather than an `<input>`. */
+    const box = container.querySelector<HTMLButtonElement>('[data-auto-approve]')!
+    expect(box.getAttribute('role')).toBe('checkbox')
+    expect(box.getAttribute('aria-checked')).toBe('false')
     expect(box.getAttribute('data-auto-approve')).toBe('0')
-    expect(box.title).toContain('Off by default')
+    /* The sentence moved from the control to the wrapper around it when the
+       control stopped being an `<input>` — see the note in `paginated.tsx`:
+       a `title` on the tick alone says nothing when somebody rests on the word. */
+    expect(box.closest('span')!.title).toContain('Off by default')
     /* Beside the Edit checkbox, in the same row, which is where a reader
        looking for one will look for the other. */
     const row = box.closest('div')!
-    expect(row.querySelector('input[data-editing]')).not.toBeNull()
+    expect(row.querySelector('[data-editing]')).not.toBeNull()
   })
 
   test('it is not drawn when the page did not offer one', () => {
     const { container } = render(
       <PaginatedView paper={fixture()} walk={null} mark={null} rootRef={ref()} onPen={() => {}} />,
     )
-    expect(container.querySelector('input[data-auto-approve]')).toBeNull()
+    expect(container.querySelector('[data-auto-approve]')).toBeNull()
   })
 
   test('it is independent of Edit: it is drawn with the pen away', () => {
@@ -499,7 +505,7 @@ describe('the auto-approve tick', () => {
        somebody else's suggestion, and an agent can propose while a paper is
        being read rather than written. */
     const { container } = draw([], { pen: false })
-    expect(container.querySelector<HTMLInputElement>('input[data-editing]')!.checked).toBe(false)
-    expect(container.querySelector('input[data-auto-approve]')).not.toBeNull()
+    expect(container.querySelector('[data-editing]')!.getAttribute('aria-checked')).toBe('false')
+    expect(container.querySelector('[data-auto-approve]')).not.toBeNull()
   })
 })
