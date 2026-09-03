@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/sidebar.tsx'
 import type { Proposal } from '../../latex/propose.ts'
 import type { Standing } from '../../git.ts'
+import { Reading } from './anchor.ts'
 import { BlockRow, anchorId, covers, type Pen } from './blocks.tsx'
 import { Anchoring, NO_PROPOSALS, ProposalControls, anchorStore, type Answering } from './proposed.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
@@ -845,6 +846,15 @@ export function PaginatedView({
         </div>
 
         <Anchoring.Provider value={anchors}>
+        {/*
+          The column, published so a citation card can bound itself by it
+          rather than by the window. The suggestion cards below need no such
+          thing any more — they are laid out in this column's coordinates —
+          but a citation card still floats, and a card shifted to fit the
+          WINDOW would sit over the container next to this one on the canvas.
+          See `Reading` in `anchor.ts`.
+        */}
+        <Reading.Provider value={columnEl}>
         <div
           ref={hold}
           /* Focusable so PageUp, PageDown, Home, End and the arrows reach it
@@ -915,6 +925,7 @@ export function PaginatedView({
             />
           )}
         </div>
+        </Reading.Provider>
         </Anchoring.Provider>
 
       </SidebarInset>

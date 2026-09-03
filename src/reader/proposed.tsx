@@ -303,6 +303,26 @@ export function Change({
  * four were Radix behaviours being switched off. A div has none of them to
  * switch off, which is the shorter way of saying the popover was the wrong
  * primitive.
+ *
+ * ## Wrong primitive HERE, and not everywhere
+ *
+ * That verdict is about this control specifically, and the distinction is
+ * worth writing down because the popover component was briefly deleted on the
+ * strength of it and had to come back.
+ *
+ * Every argument above rests on two properties a suggestion card has: it is
+ * always open, and there is no trigger to reopen it with. Those are what make
+ * dismissal something to switch off, what put several cards on the page at
+ * once so they can cover each other, and what make a card that lags the words
+ * during a scroll something a reader stares at for as long as they scroll.
+ *
+ * A citation card in `segments.tsx` has neither property. It is opened by
+ * pressing the citation it is about, only one is open at a time, and closing
+ * it is the point rather than a hazard — so dismissal is behaviour it wants,
+ * collision between cards cannot arise, and it is on screen for the seconds
+ * somebody spends reading an entry rather than for the length of a scroll.
+ * Radix is the right tool for that and the wrong one for this, and the two
+ * live side by side on purpose.
  */
 
 /** A rectangle in the column's content coordinates. */
