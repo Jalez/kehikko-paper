@@ -405,6 +405,76 @@
     cursor: not-allowed;
   }
 
+  /* ---- A cross-reference or a citation, resolved ------------------------ */
+
+  /*
+   * A reference is a link to its block and a citation opens a card, and both
+   * say so with the pointer alone: the pencil colour they already wear is what
+   * marks them as not-prose, and an underline on every "Chapter 3" in a thesis
+   * that says it forty times would be a page of hairlines. The tooltip carries
+   * the words.
+   */
+  .ref-link,
+  .cite-open {
+    cursor: pointer;
+  }
+
+  /*
+   * A key nothing resolved: `§ch:nowhere`, `[ghost?]`.
+   *
+   * The text already says it, and this is the second channel — the amber
+   * pencil, which is the page's colour for "this wants the author", as a wavy
+   * line in the sheet's own units so it is the same weight at every width. It
+   * will come out of LaTeX as `??` or `[?]`, and the author should meet it here
+   * first.
+   */
+  [data-unresolved] {
+    text-decoration: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: var(--mark);
+    text-decoration-thickness: 0.05em;
+    text-underline-offset: 0.18em;
+  }
+
+  /*
+   * The card behind a citation. Portalled, like `.proposal-card`, and so shaped
+   * by its own content rather than by a container query — the same argument,
+   * one card over. Chrome-sized in real pixels, because it is read at 220
+   * pixels where the citation it opened from is four pixels tall.
+   */
+  .cite-card {
+    box-shadow: 0 2px 10px oklch(0 0 0 / 18%);
+    padding: 0.4rem 0.55rem;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    max-width: min(var(--radix-popover-content-available-width, 22rem), 22rem);
+    /* A long title has to wrap, and never past the card's edge. */
+    overflow-wrap: anywhere;
+  }
+
+  .cite-source + .cite-source {
+    margin-top: 0.35rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .cite-source-name {
+    display: block;
+    font-weight: 600;
+  }
+
+  a.cite-source-name {
+    color: var(--pencil);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+
+  .cite-source-detail {
+    display: block;
+    color: var(--muted-foreground);
+  }
+
   /* ---- A change somebody has suggested ---------------------------------- */
 
   /*

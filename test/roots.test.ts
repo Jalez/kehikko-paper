@@ -121,10 +121,12 @@ writeFileSync(join(thesis, 'figures', 'drawing.pdf'), '%PDF-1.7 not an image thi
 writeFileSync(join(thesis, 'figures', 'private.png'), PNG)
 /* Inside the thesis PROJECT and outside its paper, for the fences to refuse. */
 writeFileSync(join(thesisProject, 'in-project-secret.tex'), 'nor this')
-/* And a `references.bib`, which the roadmap's own papers do not have. Nothing
-   here reads it — a bibliography is another module's business — and it is
-   present so that a paper root carrying one is exercised rather than assumed
-   harmless. */
+/* And a `references.bib`, which the roadmap's own papers do not have. It was
+   put here so that a paper root carrying one was exercised rather than assumed
+   harmless, and nothing read it then. `readPaper` reads it now, when the
+   preamble names it — this one's does not, so the citation in `one.tex` stays
+   bracketed here, and `test/store.test.ts` is where a named bibliography is
+   resolved. */
 writeFileSync(join(thesis, 'references.bib'), '@article{graesser2004autotutor,\n  year = {2004}\n}\n')
 
 describe('which directory is a project at all', () => {

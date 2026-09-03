@@ -51,6 +51,50 @@ writeFileSync(
   join(papers, 'good-epic', 'chapters', 'second.tex'),
   ['\\section{The second thing}', 'And here it is \\gh{42} again.'].join('\n'),
 )
+/*
+ * A paper that refers across its own chapters and cites a bibliography,
+ * shaped like the thesis: a starred abstract, two included chapters, the
+ * `.bib` named in the preamble, and a reference FORWARD from the first
+ * chapter to the second — the case that cannot be answered by parsing one
+ * file, and the reason resolution lives in `readPaper`.
+ */
+mkdirSync(join(papers, 'cited-epic', 'chapters'), { recursive: true })
+writeFileSync(
+  join(papers, 'cited-epic', 'main.tex'),
+  [
+    '\\documentclass{report}',
+    '\\addbibresource{references.bib}',
+    '\\addbibresource{../outside.bib}',
+    '\\title{A cited paper}',
+    '\\begin{document}',
+    '\\chapter*{Abstract}',
+    'Unnumbered.',
+    '\\include{chapters/one}',
+    '\\include{chapters/two}',
+    '\\end{document}',
+  ].join('\n'),
+)
+writeFileSync(
+  join(papers, 'cited-epic', 'chapters', 'one.tex'),
+  [
+    '\\chapter{Introduction}\\label{ch:intro}',
+    'Returns in Chapter~\\ref{ch:concl}, as \\textcite{braun2019} and others \\autocite{woolf2009,vanlehn2011} say; see also \\autocite{nobody2030} and \\ref{sec:nowhere}.',
+  ].join('\n'),
+)
+writeFileSync(
+  join(papers, 'cited-epic', 'chapters', 'two.tex'),
+  ['\\chapter{Conclusion}\\label{ch:concl}', 'The end.'].join('\n'),
+)
+writeFileSync(
+  join(papers, 'cited-epic', 'references.bib'),
+  [
+    '@article{braun2019, author = {Braun, Virginia and Clarke, Victoria}, year = {2019}, title = {Reflecting}}',
+    '@article{vanlehn2011, author = {VanLehn, Kurt}, year = {2011}, title = {Relative}, doi = {10.1/x}}',
+    '@book{woolf2009, author = {Woolf, Beverly Park}, year = {2009}, title = {Building}}',
+  ].join('\n'),
+)
+/* Named by the preamble and outside the paper's root, for the fence to refuse. */
+writeFileSync(join(papers, 'outside.bib'), '@article{nobody2030, author = {Nobody, Ann}, year = {2030}}')
 /* A directory that looks like an epic and holds no paper. */
 mkdirSync(join(papers, 'empty-epic'), { recursive: true })
 /* Something outside the papers directory, for the confinement tests to fail to
@@ -65,7 +109,7 @@ describe('where the papers come from', () => {
        three answers this splits into; here it is only that the two ends of it
        do not collapse. */
     expect(listPapers(null)).toEqual([])
-    expect(listPapers(root).map((p) => p.epic)).toEqual(['good-epic'])
+    expect(listPapers(root).map((p) => p.epic)).toEqual(['cited-epic', 'good-epic'])
   })
 
   test('a project that is not a folder on this machine reads nothing', () => {
@@ -76,13 +120,13 @@ describe('where the papers come from', () => {
 describe('listing', () => {
   test('only epics that actually have a main.tex are listed', () => {
     const all = listPapers(root)
-    expect(all.map((p) => p.epic)).toEqual(['good-epic'])
+    expect(all.map((p) => p.epic)).toEqual(['cited-epic', 'good-epic'])
   })
 
   test('the title is the paper’s own and is never invented', () => {
-    const [first] = listPapers(root)
-    expect(first?.title).toBe('A paper with a title')
-    expect(first?.files).toBe(2)
+    const good = listPapers(root).find((p) => p.epic === 'good-epic')
+    expect(good?.title).toBe('A paper with a title')
+    expect(good?.files).toBe(2)
   })
 })
 
@@ -121,6 +165,58 @@ describe('reading one', () => {
 
   test('an epic with no paper is null rather than an empty paper', () => {
     expect(readPaper('empty-epic', root)).toBeNull()
+  })
+})
+
+describe('references and citations, resolved over the whole paper', () => {
+  const prose = () => {
+    const paper = readPaper('cited-epic', root)!
+    const block = paper.blocks.find((b) => b.file === 'chapters/one.tex' && b.kind === 'paragraph')
+    return block && 'segments' in block ? block.segments : []
+  }
+
+  test('a \\ref forward to a chapter in a later file is its number, and a link to it', () => {
+    /* `ch:concl` is defined in `two.tex`, which had not been parsed when the
+       reference in `one.tex` was. The starred abstract before both takes no
+       number, so the conclusion is Chapter 2 and not 3. */
+    const ref = prose().find((s) => s.keys?.[0] === 'ch:concl')!
+    expect(ref.text).toBe('2')
+    expect(ref.target).toEqual({ file: 'chapters/two.tex', id: 'heading-1' })
+    expect(ref.literal).toBe(false)
+  })
+
+  test('citations read as the bibliography the preamble names says they should', () => {
+    const text = prose().map((s) => s.text).join('')
+    expect(text).toContain('as Braun and Clarke (2019) and others (VanLehn, 2011; Woolf, 2009) say')
+    /* The cards keep the keys in the order written, whatever order the
+       parenthesis sorts them into: `woolf2009` first, then `vanlehn2011`. */
+    const cite = prose().find((s) => s.keys?.[0] === 'woolf2009')!
+    expect(cite.sources?.map((s) => s.link)).toEqual([null, 'https://doi.org/10.1/x'])
+  })
+
+  test('a .bib named outside the paper’s root is refused, so its key stays unresolved', () => {
+    /* `../outside.bib` defines `nobody2030`. The fence is the same one every
+       figure and chapter is behind, and the citation says which file it is
+       missing from rather than showing an author read from outside the paper. */
+    const ghost = prose().find((s) => s.keys?.[0] === 'nobody2030')!
+    expect(ghost.text).toBe('([nobody2030?])')
+    expect(ghost.unresolved).toBe(true)
+    expect(ghost.note).toContain('references.bib')
+  })
+
+  test('a label nothing defines keeps its placeholder and says so', () => {
+    const missing = prose().find((s) => s.keys?.[0] === 'sec:nowhere')!
+    expect(missing.text).toBe('§sec:nowhere')
+    expect(missing.unresolved).toBe(true)
+    expect(missing.target).toBeUndefined()
+  })
+
+  test('a paper that names no bibliography says that, not that a key is missing', () => {
+    const paper = readPaper('good-epic', root)!
+    const segments = paper.blocks.flatMap((b) => ('segments' in b ? b.segments : []))
+    expect(segments.some((s) => s.styles.includes('cite'))).toBe(false)
+    /* `good-epic` has no citation to check the sentence on, so it is checked
+       one layer down, where the sentence is made. */
   })
 })
 
