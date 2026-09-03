@@ -55,21 +55,121 @@ export interface Segment {
   styles: SegmentStyle[];
   /** For cite/ref segments: the key(s) being referenced. */
   keys?: string[];
+  /**
+   * For cite/ref segments: the command that produced it — `autocite`,
+   * `textcite`, `ref`, `Cref` — without its backslash.
+   *
+   * Kept because the command is the whole difference between two renderings
+   * of one key: `\textcite{a}` puts the author in the sentence and the year in
+   * brackets, `\parencite{a}` puts both in brackets, and `\Cref` capitalises
+   * where `\cref` does not. The parser cannot render any of those — see the
+   * essay on the four fields below — but it is the only thing that saw which
+   * command was written, so it says.
+   */
+  cmd?: string;
+  /**
+   * The four fields the parser never sets.
+   *
+   * ## Why a `\ref` leaves this file as `§key` and a `\cite` as `[key]`
+   *
+   * A cross-reference is only meaningful once the WHOLE document is known.
+   * The label it names usually lives in another file, and the number LaTeX
+   * prints for it depends on how many chapters, figures and tables came before
+   * it in `\include` order — a fact no single file's parse can know. A citation
+   * is the same shape one file over: the key means nothing without the `.bib`.
+   * So this parser emits a placeholder that is honest about what it does not
+   * know, and `store.ts`, which does see every file in reading order and can
+   * open the bibliography, rewrites the text and fills these in. See
+   * `latex/labels.ts` and `latex/bib.ts`.
+   *
+   * They are declared HERE rather than on some wrapper type because the
+   * resolved segment travels the same wire as the unresolved one — the page,
+   * the door and the notes module all read one `Segment` shape — and a second
+   * type for "a segment after resolution" would be a second thing for every
+   * consumer to know about, for four optional fields.
+   *
+   * A resolved segment is still derived, and MORE so: `Chapter 6` has even
+   * less to do with `\ref{ch:conclusion}` than `§ch:conclusion` had. Nothing
+   * about `literal`, `gap` or the offsets changes when these are filled in.
+   */
+  /** One line for the tooltip: what this resolved to, or what is wrong. */
+  note?: string;
+  /** True when a key named here has nothing behind it — no label, no entry. */
+  unresolved?: boolean;
+  /** For a resolved reference: the block it points at, for a click to go to. */
+  target?: { file: string; id: string };
+  /** For a citation: what is behind each key, for the card a click opens. */
+  sources?: CiteSource[];
+}
+
+/**
+ * One entry behind a citation, as the card that opens on a click shows it.
+ *
+ * Reading "(VanLehn, 2011)" answers what is cited; it does not answer whether
+ * that is the source the author meant, which is the question that comes up
+ * right after an agent has added one. The card answers it with the whole entry
+ * and, where the bibliography records a DOI or a URL, somewhere to go and read
+ * it. A key with no entry gets a card too, saying so — see `latex/bib.ts`.
+ */
+export interface CiteSource {
+  key: string;
+  /** "VanLehn (2011)", or the key itself when there is no entry. */
+  label: string;
+  /** The whole entry on one line, or what is missing. */
+  detail: string;
+  /** Somewhere to read it, if the entry says where. Never invented. */
+  link: string | null;
 }
 
 export type Block =
-  | { kind: "heading"; id: string; srcStart: number; srcEnd: number; level: number; segments: Segment[]; label?: string }
+  | {
+      kind: "heading"; id: string; srcStart: number; srcEnd: number; level: number; segments: Segment[]; label?: string;
+      /**
+       * False for the starred form, which LaTeX leaves out of the numbering.
+       *
+       * The star used to be stripped and forgotten, which was fine while the
+       * only thing read off a heading was its level. It is not fine once
+       * `latex/labels.ts` counts headings to number a `\ref`: this thesis
+       * opens with `\chapter*{Abstract}` and `\chapter*{Tiivistelmä}`, and a
+       * counter that saw those would call the introduction Chapter 3.
+       */
+      numbered: boolean;
+    }
   | { kind: "paragraph"; id: string; srcStart: number; srcEnd: number; segments: Segment[] }
   | { kind: "figure"; id: string; srcStart: number; srcEnd: number; graphics: string[]; caption: Segment[]; label?: string }
   | { kind: "list"; id: string; srcStart: number; srcEnd: number; ordered: boolean; items: Segment[][] }
-  | { kind: "equation"; id: string; srcStart: number; srcEnd: number; latex: string; label?: string }
+  | {
+      kind: "equation"; id: string; srcStart: number; srcEnd: number; latex: string; label?: string;
+      /** `equation`, `align*` … kept because the star is what decides whether it is numbered. */
+      env: string;
+    }
   | {
       kind: "table"; id: string; srcStart: number; srcEnd: number; raw: string;
       caption: Segment[]; label?: string;
       /** Parsed grid, or null when the body was too irregular to trust. */
       grid: TableGrid | null;
     }
-  | { kind: "verbatim"; id: string; srcStart: number; srcEnd: number; raw: string; env: string }
+  | {
+      kind: "verbatim"; id: string; srcStart: number; srcEnd: number; raw: string; env: string;
+      /**
+       * The `label=` and `caption=` a listing carries in its option group.
+       *
+       * `\begin{lstlisting}[caption={…},label={lst:x}]` is how the `listings`
+       * package labels a listing — there is no `\label` inside a verbatim body,
+       * because inside one a backslash is a backslash. So the option group is
+       * the only place a listing's label can be, and `raw` no longer includes
+       * it: `basicstyle=\ttfamily\small` is an instruction to LaTeX and not a
+       * line of the author's code, and drawing it in the code box was
+       * presenting it as one.
+       *
+       * `title` and not `caption`, because `caption` on a block means a run
+       * of segments to `inBytes` and to every consumer that walks captions,
+       * and a string under that name was a type error in three places — which
+       * is the check working as its own comment promises.
+       */
+      label?: string;
+      title?: string;
+    }
   | { kind: "comment"; id: string; srcStart: number; srcEnd: number; text: string }
   | { kind: "preamble"; id: string; srcStart: number; srcEnd: number; raw: string }
   /** \include{chapters/3_methods} — the edge that defines document order. */
@@ -501,8 +601,8 @@ export function parseInline(src: string, start: number, end: number, inherited: 
     literalStart = -1;
   };
 
-  const pushDerived = (text: string, s: number, e: number, styles: SegmentStyle[], keys?: string[]) => {
-    out.push({ text, srcStart: s, srcEnd: e, literal: false, styles: [...inherited, ...styles], keys });
+  const pushDerived = (text: string, s: number, e: number, styles: SegmentStyle[], keys?: string[], cmd?: string) => {
+    out.push({ text, srcStart: s, srcEnd: e, literal: false, styles: [...inherited, ...styles], keys, cmd });
   };
 
   while (i < end) {
@@ -666,20 +766,25 @@ export function parseInline(src: string, start: number, end: number, inherited: 
         p = nb;
       }
 
-      // Citations render as a bracketed key list.
+      // Citations render as a bracketed key list — a PLACEHOLDER, which
+      // `store.ts` rewrites once it has opened the bibliography. See the essay
+      // on `Segment.note` for why that cannot happen here.
       if (CITE_CMDS.has(name)) {
         const close = src[p] === "{" ? matchBrace(src, p) : p;
         const keys = src.slice(p + 1, Math.max(p + 1, close - 1)).split(",").map((k) => k.trim()).filter(Boolean);
-        pushDerived(`[${keys.join(", ")}]`, i, close, ["cite"], keys);
+        pushDerived(`[${keys.join(", ")}]`, i, close, ["cite"], keys, name);
         i = close;
         continue;
       }
 
-      // Cross-references render as a marker; the target is kept for tooling.
+      // Cross-references render as a marker, for the same reason and with the
+      // same resolver. Split on commas because `\cref{a,b}` is one command
+      // naming two labels, and a resolver handed `a,b` as one key would say
+      // there is no such label when there are two.
       if (REF_CMDS.has(name)) {
         const close = src[p] === "{" ? matchBrace(src, p) : p;
-        const key = src.slice(p + 1, Math.max(p + 1, close - 1)).trim();
-        pushDerived(`§${key}`, i, close, ["ref"], [key]);
+        const keys = src.slice(p + 1, Math.max(p + 1, close - 1)).split(",").map((k) => k.trim()).filter(Boolean);
+        pushDerived(`§${keys.join(", ")}`, i, close, ["ref"], keys, name);
         i = close;
         continue;
       }
@@ -1208,6 +1313,7 @@ function parseBlocks(src: string, path: string): ParsedDocument {
           level: HEADING_LEVELS[bare]!,
           segments: parseInline(src, cmd.end + 1, close - 1),
           label,
+          numbered: !cmd.name.endsWith("*"),
         });
         i = afterLabel;
         continue;
@@ -1298,15 +1404,19 @@ function parseBlocks(src: string, path: string): ParsedDocument {
             srcEnd: afterLabel,
             latex: src.slice(nameClose, contentEnd).trim(),
             label: inner ?? label,
+            env,
           });
         } else if (VERBATIM_ENVS.has(env)) {
+          const options = listingOptions(src, nameClose, contentEnd);
           blocks.push({
             kind: "verbatim",
             id: nextId("verbatim"),
             srcStart: i,
             srcEnd: afterLabel,
-            raw: src.slice(nameClose, contentEnd),
+            raw: src.slice(options.end, contentEnd),
             env,
+            label: options.label,
+            title: options.caption,
           });
         } else if (env === "document" || env === "abstract" || env === "center") {
           // Transparent wrappers: step inside and keep parsing normally.
@@ -1338,10 +1448,23 @@ function parseBlocks(src: string, path: string): ParsedDocument {
         while (k < src.length && /[ \t\r]/.test(ch(src, k))) k++;
         if (k >= src.length || src[k] === "\n") { j = k; break; }
         // A line starting a new construct also ends it.
+        //
+        // `\include` and `\input` are constructs too, and they were not on
+        // this list: a chapter that ended in prose with `\include{chapters/2}`
+        // on the very next line — no blank line between — swallowed the
+        // include into the paragraph, where the unknown-command fallback
+        // rendered it as the bare word `chapters/2` and the chapter it named
+        // was never opened. The thesis's own `main.tex` carries a comment
+        // about exactly this ("an \input abstract shows up in the reading
+        // view as a bare filename"). LaTeX's `\include` starts a new page, so
+        // it is never mid-paragraph in any document that compiles.
         if (src[k] === "\\") {
           const c2 = readCommandName(src, k);
           const bare = c2?.name.replace(/\*$/, "");
-          if (c2 && (bare === "begin" || bare === "end" || (bare && HEADING_LEVELS[bare] !== undefined))) {
+          if (
+            c2 &&
+            (bare === "begin" || bare === "end" || (bare && HEADING_LEVELS[bare] !== undefined) || INCLUDE_CMDS.has(c2.name))
+          ) {
             j = j + 1;
             break;
           }
@@ -1481,6 +1604,55 @@ function findEnvEnd(src: string, from: number, env: string): { contentEnd: numbe
     i = nextClose + closeTag.length;
   }
   return { contentEnd: src.length, blockEnd: src.length };
+}
+
+/**
+ * The `[key=value,…]` option group a listing opens with, if it has one.
+ *
+ * Read for `label` and `caption` only, and the caption reduced to its text
+ * through `parseInline` so that a `\texttt` in it does not reach a tooltip as
+ * markup. The values are brace-matched rather than split on commas, because a
+ * caption is prose and prose has commas in it — every listing caption in this
+ * thesis does.
+ *
+ * `end` is where the code starts: just past the group, or exactly `from` when
+ * there is none. Only a group that holds a `key=value` counts, so a verbatim
+ * body whose first line happens to be an array literal in brackets is left as
+ * the code it is.
+ */
+function listingOptions(src: string, from: number, limit: number): { label?: string; caption?: string; end: number } {
+  if (src[from] !== "[") return { end: from };
+  const close = matchBracket(src, from);
+  if (close === from || close > limit) return { end: from };
+  const out: { label?: string; caption?: string; end: number } = { end: from };
+  let i = from + 1;
+  while (i < close - 1) {
+    const eq = src.indexOf("=", i);
+    if (eq === -1 || eq >= close - 1) break;
+    const name = src.slice(i, eq).trim();
+    if (!/^[a-zA-Z]+$/.test(name)) break;
+    out.end = close;
+    let v = eq + 1;
+    while (src[v] === " ") v++;
+    let valueEnd: number;
+    let inner: [number, number];
+    if (src[v] === "{") {
+      valueEnd = Math.min(matchBrace(src, v), close - 1);
+      inner = [v + 1, valueEnd - 1];
+    } else {
+      /* Unbraced values carry no commas of their own, so the next comma ends
+         it — and a value with none runs to the end of the group. */
+      let j = v;
+      while (j < close - 1 && src[j] !== ",") j++;
+      valueEnd = j;
+      inner = [v, j];
+    }
+    if (name === "label") out.label = src.slice(inner[0], inner[1]).trim();
+    else if (name === "caption") out.caption = parseInline(src, inner[0], inner[1]).map((s) => s.text).join("").trim();
+    i = valueEnd;
+    while (src[i] === "," || /\s/.test(ch(src, i))) i++;
+  }
+  return out;
 }
 
 /** Find a \label{...} anywhere inside a range (figures put it after \caption). */

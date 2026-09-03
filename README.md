@@ -167,6 +167,25 @@ citation. `≈` means the selection crossed a macro expansion and was widened
 outward to a boundary this program can justify rather than to a fabricated
 offset. It posts nothing.
 
+**Cross-references and citations read as the PDF prints them.** `\ref{ch:conclusion}`
+draws as `6`, `\autoref` and `\Cref` as `Chapter 6`, `\nameref` as the
+chapter's title; `\autocite{vanlehn2011relative}` draws as `(VanLehn, 2011)` and
+`\textcite{braunclarke2019reflexive}` as `Braun and Clarke (2019)`, in the
+author–year form biblatex's APA style prints. The numbers are recomputed from
+the source on every read — chapters, sections, figures, tables, equations and
+listings counted in `\include` order, appendix chapters lettered, starred
+headings skipped — and never read out of an `.aux` file, so they are right for
+a paper that has never been compiled and for one edited a moment ago. The
+bibliography is the `.bib` the preamble names with `\addbibresource` or
+`\bibliography`, confined to the paper's root like everything else. Hovering
+either says what it resolved to. A reference is a link to the block it names;
+a citation opens a card with the whole entry and, where the bibliography
+records a DOI or URL, a link to read it. A key nothing resolves stays visible
+as `§key` or `[key?]` and says so in its tooltip, because that reference will
+come out of LaTeX as `??` or `[?]` and this is where the author should meet it
+first. `latex/labels.ts` and `latex/bib.ts` say how; the numbering was checked
+against the compiled thesis.
+
 ### Correcting a sentence, in the prose rather than in the source
 
 Tick **Edit** beside the page number and the paper becomes typeable in place: a
@@ -177,8 +196,8 @@ changes. There is no raw-source box, and this is not one in disguise.
 That is ordinary prose, including a paragraph the author hard-wrapped: a run of
 whitespace in the source draws as one space, and the rule inverts, so one space
 written back over the whole run draws as one space. It is not a citation:
-`\autocite{jones}` draws as `[jones]`, seven characters standing in for
-seventeen, and nothing recovers the command from them. Nor an escape — `\%`
+`\autocite{jones}` draws as `(Jones, 2020)` — or as `[jones?]` when the
+bibliography has no such key — and nothing recovers the command from either. Nor an escape — `\%`
 drawn as `%` would comment out the rest of the line if it were written back as
 itself, and `~` is a non-breaking space somebody chose.
 

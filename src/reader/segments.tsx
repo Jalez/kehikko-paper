@@ -1,9 +1,11 @@
-import { createContext, useContext, type ReactNode } from 'react'
+import { createContext, useContext, useState, type ReactNode } from 'react'
 
 import { narrow, place, renderedRange, whyNot } from '../../latex/edit.ts'
-import type { Segment, SegmentStyle } from '../../latex/parse.ts'
+import type { CiteSource, Segment, SegmentStyle } from '../../latex/parse.ts'
 import type { Proposal } from '../../latex/propose.ts'
-import { Change, Proposed } from './proposed.tsx'
+import { anchorId } from './anchor.ts'
+import { Change, Proposed, Reading } from './proposed.tsx'
+import { Popover, PopoverAnchor, PopoverArrow, PopoverContent } from '@/components/ui/popover.tsx'
 import { cn } from '@/lib/utils.ts'
 
 /**
@@ -184,9 +186,21 @@ export function coalesce(segments: readonly Segment[]): Run[] {
      * rest of the paragraph over it was the same mistake one layer along; the
      * paragraph is two typeable runs with the note's place between them.
      */
+    /*
+     * A citation or a reference is never merged, in either direction.
+     *
+     * Each one carries its own card and its own target — `sources` for the
+     * entries behind a citation, `target` for the block a reference points at
+     * — and two `\autocite`s written back to back with nothing between them
+     * would, under the style rule alone, become one run wearing the first
+     * one's card. `keys` is the mark the parser puts on exactly these, so it
+     * is the test.
+     */
+    const standsAlone = segment.keys !== undefined || last?.keys !== undefined
     const merges =
       same &&
       last &&
+      !standsAlone &&
       (segment.styles.length > 0 ||
         (last.typeable && writable(segment) && last.srcEnd === segment.srcStart))
     if (merges && last) {
@@ -484,6 +498,21 @@ function styled(
     const Tag = spec.tag
     node = <Tag className={spec.className}>{node}</Tag>
   }
+  /*
+   * A resolved citation opens a card; a resolved reference goes to its block.
+   *
+   * Wrapped INSIDE the span that carries the source range rather than
+   * replacing it, so `data-src-start` and the rest stay exactly where
+   * `lib/selection.ts` reads them, and the passage a reader drags across a
+   * citation is still quotable. Neither affordance is offered while a change is
+   * drawn in the run — that run is a question, and the control above the block
+   * is its answer.
+   */
+  if (proposed === null && segment.sources?.length) {
+    node = <CiteCard sources={segment.sources}>{node}</CiteCard>
+  } else if (proposed === null && segment.target) {
+    node = <RefLink target={segment.target}>{node}</RefLink>
+  }
   const marked = isMarked(segment, mark)
   /*
    * `typeable`, and NOT `literal`. The two are different claims and the
@@ -640,6 +669,7 @@ function styled(
             }
           : undefined
       }
+      data-unresolved={segment.unresolved ? '1' : undefined}
       /*
        * Said only about a run with something in it to say it about.
        *
@@ -649,11 +679,18 @@ function styled(
        * is what it was written for. The whitespace-only runs it also used to
        * cover are silent, because the gap between two words is not something
        * anybody was trying to edit.
+       *
+       * A resolved citation or reference says what it resolved to instead —
+       * "Chapter 6 — Conclusion", the entry behind "(VanLehn, 2011)", or which
+       * key has nothing behind it. That is the more useful sentence on a span
+       * that already cannot be typed into, and it is the only one a reader
+       * without the pen out sees at all.
        */
       title={
-        typing && !editable && speaks
+        segment.note ??
+        (typing && !editable && speaks
           ? 'This is a rendering of the source rather than the source, so it cannot be typed into.'
-          : undefined
+          : undefined)
       }
       className={cn(
         marked && 'passage-mark',
@@ -665,7 +702,144 @@ function styled(
   )
 }
 
-/** Plain text of a run of segments, for a title attribute, a search or a test. */
+/**
+ * A resolved cross-reference, as a link to the block it names.
+ *
+ * `scrollIntoView` on the block's anchor — the same primitive a walk from
+ * `roadmap.goto` uses in `paginated.tsx`, and every page is in the DOM, so the
+ * anchor is always there to scroll to. Not an `<a href="#…">`: a fragment
+ * navigation would put the anchor in the location bar of a page that is framed
+ * in somebody else's canvas, and the reader's place in the paper is kept by
+ * scroll position, which a hash jump would be a second, competing account of.
+ *
+ * `smooth` rather than a jump, for the reason `turnTo` gives: a reader who
+ * follows "Chapter 6" from the introduction should see the paper go past,
+ * because that is how they find their way back.
+ *
+ * A `<span>` with a role rather than a `<button>`, because this is in the
+ * middle of a sentence set in the reading face, and a button element brings a
+ * browser's own font, padding and border with it that would then have to be
+ * unset at every size the sheet is drawn at.
+ */
+function RefLink({ target, children }: { target: { file: string; id: string }; children: ReactNode }) {
+  const go = () => {
+    document.getElementById(anchorId(target.file, target.id))?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+  return (
+    <span
+      role="link"
+      tabIndex={0}
+      className="ref-link"
+      data-ref-target={anchorId(target.file, target.id)}
+      onClick={(event) => {
+        event.stopPropagation()
+        go()
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        go()
+      }}
+    >
+      {children}
+    </span>
+  )
+}
+
+/**
+ * A citation you can open.
+ *
+ * Reading "(VanLehn, 2011)" answers what is cited; it does not answer whether
+ * that is the source the author meant, which is the question that comes up
+ * right after an agent has added one. A click gives the whole entry and, where
+ * the bibliography records a DOI or URL, a way to go and read it. A key with no
+ * entry gets the card too, saying so — that is the citation that will come out
+ * of LaTeX as `[?]`, and a card that said nothing about it would be a card
+ * hiding the one fault worth a click.
+ *
+ * ## The same popover as a suggested change, for the same reason
+ *
+ * The sheet is drawn at `transform: scale(0.247)` in a 220-pixel container, and a
+ * card inside it would be a card at a quarter size. `PopoverContent` is
+ * portalled to the end of `document.body` and positioned from the anchor's
+ * on-screen rectangle, so the citation is measured where it really is and the
+ * card is drawn at its own size — see the essay on `ProposalControl`. That is
+ * also why the card's shape is a class in `index.css` and not a container
+ * query: outside the portal there is no `@container container` to ask.
+ *
+ * Unlike that control, this one CLOSES — Escape, a click elsewhere, or a
+ * second click on the citation — because there is a trigger to open it again
+ * with, and a card that stayed over the prose would be a card in the way of
+ * reading.
+ *
+ * ## At 220 pixels
+ *
+ * A citation there is four pixels of type. It is still clickable: the hit
+ * target is the whole rendered span, which for "(Graesser et al., 2004; Nye et
+ * al., 2014)" is most of a line, and the card that opens is chrome-sized and
+ * bounded by the column, so it is readable at that width. What a reader cannot
+ * do at 220 pixels is read the citation itself, and nothing here pretends
+ * otherwise — the card is how they read it.
+ */
+function CiteCard({ sources, children }: { sources: readonly CiteSource[]; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const column = useContext(Reading)
+  return (
+    <Popover open={open} onOpenChange={setOpen} modal={false}>
+      <PopoverAnchor asChild>
+        <span
+          role="button"
+          tabIndex={0}
+          aria-expanded={open}
+          className="cite-open"
+          onClick={(event) => {
+            event.stopPropagation()
+            setOpen((was) => !was)
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            setOpen((was) => !was)
+          }}
+        >
+          {children}
+        </span>
+      </PopoverAnchor>
+      {open && (
+        <PopoverContent
+          side="bottom"
+          align="start"
+          collisionBoundary={column}
+          collisionPadding={4}
+          hideWhenDetached
+          role="dialog"
+          aria-label="The sources behind this citation"
+          className="cite-card"
+          data-cite-card
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          {sources.map((s) => (
+            <div key={s.key} className="cite-source">
+              {/* The name of the source is the thing you want to click, so it
+                  is the link — not a smaller line underneath it. */}
+              {s.link ? (
+                <a className="cite-source-name" href={s.link} target="_blank" rel="noopener noreferrer">
+                  {s.label}
+                </a>
+              ) : (
+                <span className="cite-source-name">{s.label}</span>
+              )}
+              <span className="cite-source-detail">{s.detail}</span>
+              {!s.link && <span className="cite-source-detail">No DOI or link recorded in the bibliography.</span>}
+            </div>
+          ))}
+          <PopoverArrow width={10} height={5} />
+        </PopoverContent>
+      )}
+    </Popover>
+  )
+}
+
 /**
  * The author's annotations, taken out of the run before anything reads it.
  *

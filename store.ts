@@ -14,7 +14,9 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'roadmap-module-protocol'
 
+import { NO_BIBLIOGRAPHY, bibFilesNamed, parseBib, resolveCite, type Bibliography } from './latex/bib.ts'
 import { onBoundary, sourceRefuses, whyNot } from './latex/edit.ts'
+import { buildLabelIndex, mapSegments, resolveRef } from './latex/labels.ts'
 import { findMacros, parseLatex, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
 import { ID } from './manifest.ts'
 
@@ -840,6 +842,31 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     }
   }
 
+  /*
+   * Every `\ref` and every `\cite` in the paper, rewritten from its placeholder
+   * into what the PDF prints.
+   *
+   * Here and nowhere else, and this is the one place it CAN be: the parser
+   * emits `§ch:conclusion` and `[vanlehn2011relative]` because a single file
+   * cannot know what chapter number a label in another file has, or what a key
+   * means without the bibliography — see the essay on `Segment.note`. By this
+   * line every chapter has been folded into reading order above, which is
+   * exactly the knowledge a label index needs, and `root` is where the `.bib`
+   * the preamble names can be opened. The same argument that expands
+   * `\include` on this side rather than in the browser applies with more
+   * force: a number assembled in two places is two numbers.
+   *
+   * The door gets the same rewriting for free. `read_paper` renders these
+   * segments' text, so an agent reading the paper now reads "Chapter 6" and
+   * "(VanLehn, 2011)" where it used to read markers — which is what the prose
+   * says, and what a proposal about that prose has to quote.
+   */
+  const labels = buildLabelIndex(blocks)
+  const bibliography = readBibliography(root, source)
+  for (let i = 0; i < blocks.length; i++) {
+    blocks[i] = mapSegments(blocks[i]!, (segment) => resolveCite(resolveRef(segment, labels), bibliography))
+  }
+
   const outline = blocks
     .filter((b): b is PlacedBlock & { kind: 'heading' } => b.kind === 'heading')
     .map((b) => ({
@@ -884,6 +911,45 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     hashes,
     figures,
   }
+}
+
+/**
+ * The bibliography a paper names, opened and parsed.
+ *
+ * Only the files the preamble names — `\addbibresource{references.bib}` in
+ * this thesis — and each one confined to the paper's root, so a preamble that
+ * said `\addbibresource{../../.ssh/config}` would get no bibliography rather
+ * than a parse of somebody's keys. That is the `figures` rule again: what the
+ * paper names is what this reads, and a `.bib` merely lying beside `main.tex`
+ * is not the paper's bibliography.
+ *
+ * A file that is named and not there is simply absent from `files`, and the
+ * citations then say "no entry in" whatever WAS read — or, when nothing was,
+ * that the paper names no bibliography. The two sentences are different faults
+ * and are kept apart on purpose; see `Bibliography`.
+ *
+ * Read on every `readPaper`, like everything else here: no cache, so a key
+ * added to the `.bib` a moment ago resolves on the next read. It is eighteen
+ * kilobytes on the real thesis and the parse is linear.
+ */
+function readBibliography(root: string, source: string): Bibliography {
+  const files: string[] = []
+  const entries = new Map(NO_BIBLIOGRAPHY.entries)
+  for (const named of bibFilesNamed(source)) {
+    const path = confine(root, named)
+    if (!path || !existsSync(path)) continue
+    try {
+      if (statSync(path).size > MAX_TEX_BYTES) continue
+      /* First file wins for a key two files both define, which is what BibTeX
+         does — it warns and keeps the first. Preferring the later one would
+         silently hide the collision. */
+      for (const [key, entry] of parseBib(readFileSync(path, 'utf8'))) if (!entries.has(key)) entries.set(key, entry)
+      files.push(named)
+    } catch {
+      continue
+    }
+  }
+  return files.length ? { entries, files } : NO_BIBLIOGRAPHY
 }
 
 /**
