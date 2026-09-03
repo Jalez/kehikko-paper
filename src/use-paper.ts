@@ -585,7 +585,11 @@ export function usePaper(framed: boolean) {
    * on the EPIC changing and never on the paper object being replaced — see the
    * note beside that effect, which was written for the re-sent context and
    * holds unchanged here. Nobody is thrown to the top of a thesis for fixing a
-   * typo.
+   * typo. The one other thing that moves a reader is a walk, and the effect
+   * in `app.tsx` that performs one is keyed on the paper too — it stamps each
+   * walk with the pointing it was for, so a replaced paper re-marks the
+   * passage and does not walk to it again. It used to, and every Accept was a
+   * trip back to the last note somebody had clicked.
    *
    * ## It answers with a sentence or with nothing
    *

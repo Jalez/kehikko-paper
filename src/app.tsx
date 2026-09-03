@@ -192,7 +192,26 @@ export function App() {
    * move it". A passage naming a document this container does not have open goes
    * through the same line rather than doing nothing quietly — from the container
    * that sent it, a press that silently did nothing looks like it worked.
+   *
+   * ## It walks once per POINTING, and not once per paper
+   *
+   * The effect is keyed on `paper` because it has to be: the passage can arrive
+   * before the paper does, and the mark is byte offsets resolved against
+   * blocks, so both have to be redone when the paper is replaced. But the
+   * paper is replaced by every WRITE — accepting a suggestion, typing a
+   * correction — and this used to walk on each of those. A reader who had
+   * followed a note to page 2, scrolled to page 14 and pressed Accept was
+   * scrolled back to the note, every time; the owner reported it as "it jumps
+   * back to the top of the paper". Every Accept cost more than reading the
+   * change did.
+   *
+   * So the walk is stamped with what it was for — this epic, this passage —
+   * and a re-run that finds the same stamp re-marks and does not move. The
+   * stamp is dropped whenever the pointing goes away, so pointing at the same
+   * passage again later is a new pointing and walks again, which is what a
+   * person pressing the same note twice means by it.
    */
+  const walkedFor = useRef<string | null>(null)
   useEffect(() => {
     /*
      * Ours or somebody's, decided before anything is done about it.
@@ -207,11 +226,13 @@ export function App() {
 
     const answer = pointedAt(paper, pointed)
     if (answer.at === 'nowhere') {
+      walkedFor.current = null
       setMark(null)
       setAdopted(false)
       return
     }
     if (answer.at === 'elsewhere') {
+      walkedFor.current = null
       setMark(null)
       setAdopted(false)
       setSaid(answer.said)
@@ -222,6 +243,7 @@ export function App() {
        who was scrolling. Not adopted either: nothing was adopted, and going
        quiet would suppress the next real thing this app has to say. */
     if (answer.at === 'holding') {
+      walkedFor.current = null
       setMark(null)
       setAdopted(false)
       return
@@ -247,6 +269,9 @@ export function App() {
      * `holding` and which clears the mark.
      */
     if (own) return
+    const stamp = `${paper!.epic}\0${keyOf(pointed!)}`
+    if (walkedFor.current === stamp) return
+    walkedFor.current = stamp
     setWalk({ file: answer.file, id: answer.id, nonce: Date.now() })
     setSaid(answer.said)
     /* Quiet from here until somebody touches the paper. Anything the container does

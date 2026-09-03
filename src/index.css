@@ -453,47 +453,84 @@
   }
 
   /*
-   * The floating control, which no longer undoes the page's scaling because it
-   * is no longer inside it.
+   * The control that answers a suggestion: chrome, drawn in the column.
    *
-   * There were two hand-written numbers here and both are gone. `--counter-
-   * scale` was the reciprocal of the sheet's `transform: scale`, published by
-   * `paginated.tsx` so this box could multiply itself back up to a net scale of
-   * 1; `--sheet-room` was the column's width in real pixels, because a
-   * `max-width` against a sheet drawn at 0.277 was four times too big for the
-   * container it was in. Neither custom property exists anywhere in this
-   * codebase now, and neither does any other reciprocal.
+   * ## It is inside the scroll column and outside the sheet, and both halves matter
    *
-   * What replaced them is `popover.tsx`. The card renders in a portal at the
-   * end of `document.body`, outside the transformed subtree, so it is never
-   * scaled and there is nothing to undo — and it inherits none of the sheet's
-   * variables, which is why they could not have stayed even if they were
-   * wanted. Its position comes from the anchor's `getBoundingClientRect`, which
-   * already reports the post-transform rectangle, so the scaled side of the
-   * boundary is measured rather than reasoned about.
+   * Outside the sheet, because the sheet is drawn at `transform: scale` and a
+   * card inside it would be scaled with it — the `--counter-scale` reciprocal
+   * this card used to multiply itself back up by is gone, and there is no
+   * reciprocal anywhere in this codebase now. The card is a child of the
+   * column, which is not transformed, so `0.7rem` here is 0.7rem on screen at
+   * every width.
    *
-   * The width bound went the same way. `--radix-popover-content-available-
-   * width` is set by Floating UI's `size` middleware from the collision
-   * boundary the component hands it, which is the reading column — so this is
-   * the same intent as `--sheet-room` with the number measured instead of
-   * published, and it is correct at a width nobody thought to test.
+   * Inside the column, because the column is what scrolls. The card was a
+   * `position: fixed` popover portalled to `document.body` and moved by script
+   * on every scroll event, which is what a card that is drawn a frame behind
+   * the words it points at looks like. As an absolutely positioned child of
+   * the scroll container it is part of the scrolled content, the compositor
+   * moves it with the words, and no script runs while somebody scrolls. The
+   * column is `position: relative` for this, and its `overflow` clips the card
+   * when the words leave, which is what `hideWhenDetached` used to do.
+   *
+   * `left` and `top` are set inline by `ProposalControls`, in the column's own
+   * coordinates, from one layout pass — see `placeCards` in `proposed.tsx`.
+   * Until that pass has run the card has no position and is not drawn, so it
+   * still has a size to measure.
    */
   .proposal-card {
-    /* The surface is `popover.tsx`'s. What is here is the shape of THIS card. */
+    position: absolute;
+    /* Over the sheets, which are ordinary flow siblings, and under nothing. */
+    z-index: 10;
     box-shadow: 0 2px 10px oklch(0 0 0 / 18%);
     padding: 0.3rem 0.4rem;
     /* Its own type size, in real pixels, because it is chrome and not the
-       document — and now, unlike before, that is simply what it is rather than
-       something arranged by a counter-transform. */
+       document. */
     font-size: 0.7rem;
     line-height: 1.35;
     /* Never so narrow that Accept and Reject cannot sit beside each other. */
     min-width: 132px;
-    /* Never wider than the column it points into, and never wider than a
-       sentence wants to be. The second bound is the one that matters at 900
+    /* Never wider than the column it is in, and never wider than a sentence
+       wants to be. `100%` is the column, because the column is the containing
+       block — the same bound Floating UI used to measure and publish, read off
+       the layout instead. The second bound is the one that matters at 900
        pixels, where the first would allow a card the width of the page. */
-    max-width: min(var(--radix-popover-content-available-width, 20rem), 20rem);
+    max-width: min(100%, 20rem);
     width: max-content;
+    /* A drag over the paper must not pick the card's words up into a passage,
+       and a click on Accept must not start one. */
+    user-select: none;
+  }
+
+  .proposal-card:not([data-placed]) {
+    visibility: hidden;
+  }
+
+  /*
+   * The arrow: a rotated square in the card's own colour, on the edge facing
+   * the words, at `--arrow-left` — the horizontal centre of the changed span,
+   * which the layout pass measured. Drawn only while the card is beside its
+   * words; a card pushed away by another card has no `data-arrow`, because an
+   * arrow that no longer reaches its words would point at whatever is between.
+   */
+  .proposal-card[data-arrow]::after {
+    content: '';
+    position: absolute;
+    left: calc(var(--arrow-left, 0px) - 5px);
+    width: 10px;
+    height: 10px;
+    background: var(--card);
+    transform: rotate(45deg);
+    box-shadow: 1px 1px 1px oklch(0 0 0 / 10%);
+  }
+
+  .proposal-card[data-arrow][data-side='top']::after {
+    bottom: -5px;
+  }
+
+  .proposal-card[data-arrow][data-side='bottom']::after {
+    top: -5px;
+    box-shadow: -1px -1px 1px oklch(0 0 0 / 10%);
   }
 
   .proposal-why {
@@ -514,10 +551,10 @@
    * The two answers and the count, on one line where there is room for one.
    *
    * `flex-wrap` and not a container query, and that is forced rather than
-   * chosen: the card is portalled out of `@container container`, so a
-   * `@sm/container:` rule in here would be a query with no container to ask and
-   * would never match at any width. Wrapping asks only the card's own content,
-   * which is the one measurement still available on this side of the portal.
+   * chosen: the card is chrome inside the reading column, not inside
+   * `@container container`, so a `@sm/container:` rule in here would be a
+   * query with no container to ask and would never match at any width.
+   * Wrapping asks only the card's own content, which needs no ancestor.
    *
    * At 220 pixels the count drops under the buttons; at 900 it sits beside
    * them, which is where the owner asked for it.

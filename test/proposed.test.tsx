@@ -5,6 +5,7 @@ import { parseLatex } from '../latex/parse.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper, PlacedBlock } from '../store.ts'
 import { PaginatedView } from '../src/reader/paginated.tsx'
+import { CARD_GAP, placeCards } from '../src/reader/proposed.tsx'
 
 /**
  * A suggested change, drawn into the paper, as far as a document without layout
@@ -12,13 +13,15 @@ import { PaginatedView } from '../src/reader/paginated.tsx'
  *
  * ## What this can prove, and what only a browser can
  *
- * happy-dom lays nothing out, and since the control became a popover it lays
- * out even less that matters: Floating UI reads `getBoundingClientRect`, which
- * here is all zeroes, so every rectangle it computes is a rectangle about
- * nothing. Whether the card actually sits above the changed words, whether it
- * flips at the top of the column, whether it hides when they scroll away, and
- * whether the count fits beside the buttons at 220 pixels are all unverifiable
- * here and are stated as unverified in the report and in the README.
+ * happy-dom lays nothing out: `getBoundingClientRect` is all zeroes and
+ * `offsetWidth` is zero, so the layout pass in `ProposalControls` runs over
+ * rectangles about nothing. Whether the card actually sits above the changed
+ * words, whether it goes below them at the top of a sheet, whether two cards
+ * on consecutive lines keep clear of each other, whether it holds still while
+ * the column scrolls, and whether the count fits beside the buttons at 220
+ * pixels are all properties of a rendered page. `dev/proposals.drive.mjs`
+ * measures them in a real Chromium. What CAN be stated here is the rule the
+ * layout pass applies, because `placeCards` is pure — see the last group.
  *
  * What it proves is the part that decides whether somebody approves a change
  * they did not read:
@@ -30,9 +33,9 @@ import { PaginatedView } from '../src/reader/paginated.tsx'
  *    longer repeats them.
  *  - **Which element the control was anchored to.** Not where it landed — that
  *    needs layout — but which, and that is the whole of the owner's second
- *    complaint. Radix renders its own anchor element only when it was NOT given
- *    one, so "there is no anchor div in the block" is a positive statement that
- *    the changed span was handed over instead.
+ *    complaint. The card says so itself: `data-anchored="words"` when the
+ *    changed span reported into the anchor store, `"block"` when the control
+ *    fell back to the paragraph.
  *  - **That a run under a suggestion cannot be typed into.** A
  *    `contenteditable` span containing a `<del>` and an `<ins>` has a
  *    `textContent` holding the old text and the new run together, and a
@@ -43,16 +46,12 @@ import { PaginatedView } from '../src/reader/paginated.tsx'
  *  - **That the two counts are one list.**
  *  - **That the control is offered only when the page wired one.**
  *
- * ## Everything the control renders is in a PORTAL
+ * ## The controls are in the column, after the sheets
  *
- * `render`'s `container` is no longer where the card is: `PopoverContent` puts
- * it at the end of `document.body`, which is the point of it — see
- * `proposed.tsx`. So the queries here are split deliberately. `container` is
- * the paper, `cards()` is the controls, and a query that used to find both by
- * accident now has to say which it meant. `cleanup` after each test matters
- * more than it did for the same reason: an unmounted render used to take its
- * container with it and now would leave a card behind for the next test to
- * count.
+ * They are not inside any block, so a query scoped to a paragraph does not
+ * find them, and a query for `[data-proposed]` in the prose has to exclude
+ * them explicitly where a test means the prose. `cards()` finds them wherever
+ * the view put them.
  *
  * ## The fixture is hard-wrapped and has a citation in it
  *
@@ -154,7 +153,7 @@ afterEach(cleanup)
 const out = (c: HTMLElement) => Array.from(c.querySelectorAll('[data-proposed="out"]')).map((e) => e.textContent)
 const arrived = (c: HTMLElement) => Array.from(c.querySelectorAll('[data-proposed="in"]')).map((e) => e.textContent)
 
-/** Every floating control on screen, wherever the portal put it. */
+/** Every control on screen, wherever the view put it. */
 const cards = () => Array.from(document.body.querySelectorAll<HTMLElement>('[data-proposal]'))
 /** What one control says about where in the paper it is: "2 of 3". */
 const counts = (c: HTMLElement) => c.querySelector('.proposal-count')!.getAttribute('data-proposal-count')
@@ -256,16 +255,14 @@ describe('a change this reader cannot place honestly', () => {
     const { container } = draw([about('\\autocite{jones}', 'somebody else')])
     expect(cards()).toHaveLength(1)
     /*
-     * The fallback IS the assertion. With a change drawn in the prose, the span
-     * is handed to Radix as a `virtualRef` and Radix renders no anchor element
-     * of its own; with nothing to point at, the anchor is a div covering the
-     * block, which is exactly where the control used to live for every
-     * suggestion. So an anchor div in the paper means "this one could not be
-     * placed", and its absence in the next test means "this one could".
+     * The fallback IS the assertion. With a change drawn in the prose, the
+     * span reports itself into the anchor store and the card says it points
+     * at the words; with nothing drawn, nothing reports, and the card says it
+     * points at the block — which is exactly where the control used to live
+     * for every suggestion, so nothing is lost that was there.
      */
-    const anchor = container.querySelector('[data-slot="popover-anchor"]')
-    expect(anchor).not.toBeNull()
-    expect(anchor!.closest('[data-has-proposals]')).not.toBeNull()
+    expect(card().getAttribute('data-anchored')).toBe('block')
+    expect(container.querySelector('[data-has-proposals]')).not.toBeNull()
     /* The card no longer repeats the change — see the essay — so what it can
        still say about a suggestion it could not draw is the reason for it. */
     expect(card().querySelector('.proposal-why')!.textContent).toContain('spelled wrong')
@@ -328,14 +325,13 @@ describe('the control that answers it', () => {
      * correctly" — and the closest a document with no layout can get to it.
      *
      * WHERE the card lands needs a browser. WHICH element it was told to
-     * measure does not: Radix's anchor renders as a real div only when it was
-     * given nothing better, so a block with no anchor div in it is a block
-     * whose control was handed the `<del>`/`<ins>` span instead. That span is
-     * the change, so this is the whole of the difference between the old
-     * behaviour and the new one, minus the arithmetic only a browser can do.
+     * measure does not: the card says `words` only when the `<del>`/`<ins>`
+     * span reported itself into the anchor store. That span is the change, so
+     * this is the whole of the difference between the old behaviour and the
+     * new one, minus the arithmetic only a browser can do.
      */
     const { container } = draw([about('tpyo', 'typo')])
-    expect(container.querySelector('[data-slot="popover-anchor"]')).toBeNull()
+    expect(card().getAttribute('data-anchored')).toBe('words')
     const change = container.querySelector('[data-proposed-change]')
     expect(change).not.toBeNull()
     expect(change!.textContent).toBe('tpyotypo')
@@ -346,29 +342,25 @@ describe('the control that answers it', () => {
        side of the author's hard wrap are two runs — and whichever mounted last
        would win. Only the run the change STARTS in reports itself, so the
        control points at the first character that moves. */
-    const { container } = draw([about('that the\nauthor wrapped', 'that the author has wrapped')])
-    expect(container.querySelector('[data-slot="popover-anchor"]')).toBeNull()
+    draw([about('that the\nauthor wrapped', 'that the author has wrapped')])
     expect(cards()).toHaveLength(1)
+    expect(card().getAttribute('data-anchored')).toBe('words')
   })
 
-  test('the flip is Floating UI’s now, and the control is portalled out of the page', () => {
+  test('the card is in the reading column and outside the sheet', () => {
     /*
-     * There was a `side` prop here, set from the packing: the first block on a
-     * sheet had nothing above it inside the page box, which clips, so its
-     * control went below. Both halves of that are gone — the card is no longer
-     * inside the page box, so nothing clips it, and `avoidCollisions` flips it
-     * against the reading column instead.
-     *
-     * What is assertable without layout is that the card left the sheet. That
-     * is also what killed `--counter-scale`: a box outside the transformed
-     * subtree needs no reciprocal, and there is none anywhere in the codebase
-     * now.
+     * Both halves are load-bearing. Outside the sheet, because the sheet is
+     * transformed and a card inside it would be scaled — that is what killed
+     * `--counter-scale`, and there is no reciprocal anywhere in the codebase.
+     * Inside the column, because the column is what scrolls: a card that is
+     * part of the scrolled content moves with the words on the compositor
+     * thread, and one that is not — the portal to `document.body` this
+     * replaced — has to be chased by script and is drawn a frame behind them.
      */
-    const { container } = draw([about('A claim', 'A different claim')])
-    expect(container.querySelector('[data-proposal]')).toBeNull()
+    draw([about('A claim', 'A different claim')])
     expect(cards()).toHaveLength(1)
     expect(card().closest('.sheet')).toBeNull()
-    expect(card().getAttribute('data-side')).toBe('top')
+    expect(card().closest('.reading-column')).not.toBeNull()
   })
 
   test('with nothing wired to answer it, the change is drawn and no control is', () => {
@@ -507,5 +499,73 @@ describe('the auto-approve tick', () => {
     const { container } = draw([], { pen: false })
     expect(container.querySelector('[data-editing]')!.getAttribute('aria-checked')).toBe('false')
     expect(container.querySelector('[data-auto-approve]')).not.toBeNull()
+  })
+})
+
+describe('where the cards go', () => {
+  /*
+   * The rectangles come from a browser; the rule does not. Each case here is a
+   * geometry the driver measured in Chromium, reduced to numbers, so that the
+   * decision — above, below, or pushed — can be stated without one.
+   */
+  const size = { width: 200, height: 50 }
+  /** One line of changed words, `top` down the column, on a sheet that starts at `floor`. */
+  const words = (top: number, floor = 0, left = 40) => ({
+    anchor: { left, top, width: 30, height: 12 },
+    size,
+    floor,
+  })
+
+  test('above its words by default, left-aligned with them, pointing at their middle', () => {
+    const [one] = placeCards([words(300)], 800)
+    expect(one).toEqual({ left: 40, top: 300 - CARD_GAP - 50, side: 'top', arrow: 15 })
+  })
+
+  test('below its words when there is no room above them on the sheet', () => {
+    /* The first line of a page: the words are 20px under the page box's top,
+       and a 50px card does not fit. This was the old "first block on a sheet"
+       rule, decided from the packing; it is decided from the rectangle now. */
+    const [one] = placeCards([words(1020, 1000)], 800)
+    expect(one!.side).toBe('bottom')
+    expect(one!.top).toBe(1020 + 12 + CARD_GAP)
+  })
+
+  test('kept inside the column at 220 pixels', () => {
+    /* A 200px card whose words start 100px in would run 80px past a 220px
+       column, and the column clips. The card moves left; the arrow still
+       points at the words. */
+    const [one] = placeCards([words(300, 0, 100)], 220)
+    expect(one!.left).toBe(20)
+    expect(one!.arrow).toBe(100 + 15 - 20)
+  })
+
+  test('two changes on consecutive lines: one above, one below, and neither on the other', () => {
+    /* The owner's third complaint, as numbers: 12px lines, so two cards above
+       two consecutive lines would overlap by 38px, and the lower one's buttons
+       would be under the upper one. */
+    const [first, second] = placeCards([words(300), words(312)], 800)
+    expect(first!.side).toBe('top')
+    expect(second!.side).toBe('bottom')
+    expect(second!.top).toBe(312 + 12 + CARD_GAP)
+    expect(second!.arrow).not.toBeNull()
+  })
+
+  test('a third on the next line again is stacked under the second, and stops pointing', () => {
+    const [, second, third] = placeCards([words(300), words(312), words(324)], 800)
+    expect(third!.top).toBeGreaterThanOrEqual(second!.top + 50)
+    expect(third!.arrow).toBeNull()
+  })
+
+  test('the earlier card keeps its place; it is the later one that moves', () => {
+    const alone = placeCards([words(300)], 800)
+    const paired = placeCards([words(300), words(312)], 800)
+    expect(paired[0]).toEqual(alone[0])
+  })
+
+  test('two cards far enough apart do not affect each other', () => {
+    const [a, b] = placeCards([words(300), words(600)], 800)
+    expect(a!.side).toBe('top')
+    expect(b!.side).toBe('top')
+    expect(b!.arrow).not.toBeNull()
   })
 })
