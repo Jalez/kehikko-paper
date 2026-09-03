@@ -19,8 +19,8 @@ import {
 } from '@/components/ui/sidebar.tsx'
 import type { Proposal } from '../../latex/propose.ts'
 import type { Standing } from '../../git.ts'
-import { BlockRow, anchorId, type Pen } from './blocks.tsx'
-import { NO_PROPOSALS, Reading, type Answering } from './proposed.tsx'
+import { BlockRow, anchorId, covers, type Pen } from './blocks.tsx'
+import { Anchoring, NO_PROPOSALS, ProposalControls, anchorStore, type Answering } from './proposed.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
 
 /**
@@ -320,17 +320,43 @@ export function PaginatedView({
   }, [at, file])
 
   /*
-   * The column, kept in STATE as well as in the ref, and only for the popover.
+   * The column, kept in STATE as well as in the ref, and only for the controls.
    *
    * Everything else here reads the column inside an effect or a handler, where
-   * a ref is the right tool and a render is not wanted. The floating control is
-   * the exception: `collisionBoundary` is a prop Floating UI reads during
-   * render, so the element has to be a value that changes when it arrives — a
-   * ref is still `null` on the pass that mounts it, and a control positioned
-   * against a boundary that was null is a control positioned against the
-   * window. Once, on mount, and never again. See `Reading` in `proposed.tsx`.
+   * a ref is the right tool and a render is not wanted. The controls are the
+   * exception: they measure against the column in their own layout effect, so
+   * the element has to be a value that changes when it arrives — a ref is
+   * still `null` on the pass that mounts them, and an effect keyed on a ref
+   * would never run again. Once, on mount, and never again.
    */
   const [columnEl, setColumnEl] = useState<HTMLDivElement | null>(null)
+
+  /*
+   * Where every drawn change landed, and where each control goes.
+   *
+   * The store is made once per view and handed down as context, so every
+   * `Change` in every sheet reports into the same map — see `Anchoring` in
+   * `proposed.tsx` for why it is a store and not state. `laidOut` is an
+   * identity that changes whenever the sheets have been laid out again: a new
+   * paper, a new scale, a sheet that grew, a column that was dragged. The
+   * controls re-measure on it and on nothing else React knows about; the two
+   * things React does not know about — an image loading, a font arriving — the
+   * controls listen for themselves.
+   *
+   * `fallback` finds the block a suggestion is about when the prose could not
+   * draw it, by the same rule the block uses to claim it, so the control lands
+   * on the paragraph it would have been drawn in.
+   */
+  const [anchors] = useState(anchorStore)
+  const laidOut = useMemo(() => ({}), [paper, scale, heights, room])
+  const fallback = useCallback(
+    (p: Proposal): HTMLElement | null => {
+      const block = paper.blocks.find((b) => covers(b, p))
+      if (!block || !column.current) return null
+      return column.current.querySelector<HTMLElement>(`[data-block-id="${anchorId(block.file, block.id)}"]`)
+    },
+    [paper],
+  )
 
   const hold = useCallback(
     (el: HTMLDivElement | null) => {
@@ -818,15 +844,7 @@ export function PaginatedView({
           </Badge>
         </div>
 
-        {/*
-          The column is published to the floating controls, which render in a
-          portal at the end of `document.body` and would otherwise be positioned
-          against the WINDOW. This page is a module on somebody else's canvas
-          and is routinely a narrow strip of a wide window, so "keep it on
-          screen" and "keep it in this container" are very different
-          instructions. See `Reading` in `proposed.tsx`.
-        */}
-        <Reading.Provider value={columnEl}>
+        <Anchoring.Provider value={anchors}>
         <div
           ref={hold}
           /* Focusable so PageUp, PageDown, Home, End and the arrows reach it
@@ -871,7 +889,6 @@ export function PaginatedView({
                 mark={mark}
                 pen={pen}
                 proposals={inOrder}
-                answering={answering}
                 scale={scale}
                 room={room}
                 keep={(el) => {
@@ -880,8 +897,25 @@ export function PaginatedView({
               />
             </div>
           ))}
+          {/*
+            The controls, inside the column and after every sheet, so that they
+            scroll with the words they point at and paint over the sheets. They
+            are absolutely positioned in the column's own coordinates — the
+            column is `relative` for exactly this — and laid out once per
+            layout rather than once per scroll. See `ProposalControls`.
+          */}
+          {answering && inOrder.length > 0 && (
+            <ProposalControls
+              proposals={inOrder}
+              anchors={anchors}
+              fallback={fallback}
+              column={columnEl}
+              answering={answering}
+              laidOut={laidOut}
+            />
+          )}
         </div>
-        </Reading.Provider>
+        </Anchoring.Provider>
 
       </SidebarInset>
     </SidebarProvider>
@@ -905,7 +939,6 @@ function SheetPage({
   mark,
   pen,
   proposals,
-  answering,
   scale,
   room,
   keep,
@@ -917,7 +950,6 @@ function SheetPage({
   mark: { file: string; id: string; from: number; to: number } | null
   pen: Pen | null
   proposals: readonly Proposal[]
-  answering: Answering | null
   scale: number
   room: number
   keep: (el: HTMLElement | null) => void
@@ -968,7 +1000,6 @@ function SheetPage({
           block={block}
           epic={paper.epic}
           proposals={proposals}
-          answering={answering}
           /* Only where the block is in the marked file, so the range never
              means something in a chapter it was not measured against. */
           mark={mark && mark.file === block.file ? mark : null}

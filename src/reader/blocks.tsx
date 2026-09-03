@@ -6,14 +6,7 @@ import { apiUrl } from '../api.ts'
 import { cn } from '@/lib/utils.ts'
 import type { Proposal } from '../../latex/propose.ts'
 import { Marked, Segments, Typed, type Typing } from './segments.tsx'
-import {
-  Anchoring,
-  NO_PROPOSALS,
-  ProposalControl,
-  Proposed,
-  type Anchors,
-  type Answering,
-} from './proposed.tsx'
+import { NO_PROPOSALS, Proposed } from './proposed.tsx'
 
 /**
  * Everything the paper needs in order to be typeable EXCEPT which file it is.
@@ -135,25 +128,28 @@ export interface BlockProps {
    * and narrowing here keeps one filter instead of one per sheet.
    */
   proposals?: readonly Proposal[]
-  /**
-   * How to answer one, and whether an answer is already in flight.
-   *
-   * Absent means the page did not wire the write path, which is what a test or
-   * any other caller of the reading view gets: the suggestions are still drawn
-   * into the prose, and there is no control offering to apply them.
-   */
-  answering?: Answering | null
 }
 
 /**
- * No change has reported where it was drawn yet. One frozen map, shared.
+ * Whether a suggestion is about this block.
  *
- * The same care `NO_PROPOSALS` takes, for the same reason: this is the value
- * every block with nothing suggested about it holds forever, and a fresh
- * `new Map()` per render would be a new identity per render on every block in
- * the document.
+ * Touching is not overlapping, the same rule `here` applies to the mark: a
+ * suggestion that ends exactly where this block begins is about the block
+ * before it. An INSERTION — `from === to` — has no width to overlap with, so
+ * it is admitted by its position, which is the only thing it has.
+ *
+ * One function and two callers: the block, to draw the change into its prose,
+ * and the view, to find the block a control falls back to when the prose
+ * could not draw it. Written twice they would eventually disagree about an
+ * insertion at a boundary, and a control would point at one paragraph while
+ * the change was drawn in the next.
  */
-const NO_ANCHORS: ReadonlyMap<string, HTMLElement> = new Map()
+export function covers(block: PlacedBlock, p: Proposal): boolean {
+  if (p.file !== block.file) return false
+  return p.from === p.to
+    ? p.from >= block.srcStart && p.from <= block.srcEnd
+    : block.srcStart < p.to && p.from < block.srcEnd
+}
 
 export function BlockRow({
   block,
@@ -161,7 +157,6 @@ export function BlockRow({
   mark = null,
   pen = null,
   proposals = NO_PROPOSALS,
-  answering = null,
 }: BlockProps) {
   /*
    * Narrowed to this block before it is supplied. A block the mark does not
@@ -196,55 +191,14 @@ export function BlockRow({
   /*
    * The suggestions about this block, narrowed once and memoised.
    *
-   * Touching is not overlapping, the same rule `here` applies to the mark: a
-   * suggestion that ends exactly where this block begins is about the block
-   * before it. An INSERTION — `from === to` — has no width to overlap with, so
-   * it is admitted by its position, which is the only thing it has.
-   *
    * `NO_PROPOSALS` when there are none, rather than a fresh `[]`, so the
    * context value of the 2,437 blocks nothing is suggested about does not
    * change identity every time one of them gains a suggestion.
    */
   const suggested = useMemo<readonly Proposal[]>(() => {
-    const mine = proposals.filter(
-      (p) =>
-        p.file === block.file &&
-        (p.from === p.to
-          ? p.from >= block.srcStart && p.from <= block.srcEnd
-          : block.srcStart < p.to && p.from < block.srcEnd),
-    )
+    const mine = proposals.filter((p) => covers(block, p))
     return mine.length ? mine : NO_PROPOSALS
-  }, [proposals, block.file, block.srcStart, block.srcEnd])
-
-  /*
-   * Where each of this block's changes actually got drawn, so the control can
-   * point at it. See the essay on `Anchoring`.
-   *
-   * State rather than a ref, because the popover has to RE-RENDER when the span
-   * arrives: on the first pass the prose has not mounted yet and there is
-   * nothing to anchor to, so the control falls back to the block. One extra
-   * render per block that has a suggestion drawn in it, and none at all for a
-   * block that has none — `put` is only ever called by a `Change` that was
-   * given an id, and the updater returns the same map when nothing moved, which
-   * is React's own signal to skip the re-render.
-   *
-   * `anchors.put` is memoised on nothing, so the context value is stable for
-   * the life of the block and `Change`'s ref callback never changes identity.
-   */
-  const [anchors, setAnchors] = useState<ReadonlyMap<string, HTMLElement>>(NO_ANCHORS)
-  const anchoring = useMemo<Anchors>(
-    () => ({
-      put: (id, el) =>
-        setAnchors((was) => {
-          if ((was.get(id) ?? null) === el) return was
-          const next = new Map(was)
-          if (el) next.set(id, el)
-          else next.delete(id)
-          return next.size ? next : NO_ANCHORS
-        }),
-    }),
-    [],
-  )
+  }, [proposals, block])
 
   return (
     <div
@@ -261,37 +215,17 @@ export function BlockRow({
         <span className="gutter-mark">{GUTTER[block.kind]}</span>
       </div>
       {/*
-        One control per suggestion, stacked, and never more than a few.
-        `MAX_PENDING` bounds the paper at 24 and two on one paragraph is already
-        unusual; stacking them is honest about there being two questions, where
-        one control listing both would make the reader answer them as a pair.
+        No control is drawn here. The block used to own one per suggestion,
+        and the reason it no longer does is that a control which knows only its
+        own block cannot avoid the control of the block next to it — see
+        `placeCards` in `proposed.tsx`. `ProposalControls` in the view draws
+        all of them, in the column, laid out against each other, and finds the
+        span to point at through the anchor store `Change` reports into.
       */}
-      {answering &&
-        suggested.map((proposal) => (
-          <ProposalControl
-            key={proposal.id}
-            proposal={proposal}
-            anchor={anchors.get(proposal.id) ?? null}
-            /*
-             * The ordinal is this proposal's place in the WHOLE paper's list,
-             * not in this block's. `proposals` arrives already in document
-             * order — `PaginatedView` sorts it once — so `indexOf` is the
-             * number a reader would get by scrolling from the top and counting,
-             * and `length` is the same total the chrome row prints beside
-             * `Accept all`. One list, two readouts, no way for them to disagree.
-             */
-            ordinal={proposals.indexOf(proposal) + 1}
-            total={proposals.length}
-            decide={answering.decide}
-            busy={answering.busy}
-          />
-        ))}
       <Marked.Provider value={here}>
         <Typed.Provider value={typing}>
           <Proposed.Provider value={suggested}>
-            <Anchoring.Provider value={anchoring}>
-              <BlockBody block={block} epic={epic} />
-            </Anchoring.Provider>
+            <BlockBody block={block} epic={epic} />
           </Proposed.Provider>
         </Typed.Provider>
       </Marked.Provider>

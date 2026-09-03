@@ -247,9 +247,9 @@ An agent can now suggest a change to the prose, and the person reading the paper
 answers it. `propose_edit` on the MCP door takes the text to replace and the text
 to put there — not a byte range — and files the suggestion. **Nothing is written
 to the `.tex`.** The change is drawn into the paper where it happens, what leaves
-struck through in red and what arrives in green, with a small shadcn popover
-anchored to the changed words themselves: the reason for the change, Accept,
-Reject, and where in the paper this one is.
+struck through in red and what arrives in green, with a small card in the
+reading column pointing at the changed words themselves: the reason for the
+change, Accept, Reject, and where in the paper this one is.
 
 **A byte range is not something a person can check before approving it.** That is
 the whole reason the change is drawn in the prose and not listed in a panel. A
@@ -267,24 +267,46 @@ had quietly expired: it was doing two jobs, saying what the change is and saying
 where in the paragraph it is, and only the first was ever a duplicate. The card
 is now anchored to the changed span, so the second job is done by the anchoring.
 
-**It is a Radix popover, and that removed a hack rather than adding a
-dependency.** The card renders in a portal at the end of `document.body`, outside
-the sheet's `transform: scale`, and Floating UI positions it from the anchor's
-`getBoundingClientRect` — which already reports the post-transform rectangle. So
-`--counter-scale`, the hand-written reciprocal the control used to multiply
-itself back up by, and `--sheet-room`, the column width it used to bound itself
-against, are both deleted; there is no reciprocal left anywhere in this codebase.
-The manual "first block on a sheet flips below" rule went with them, because
-`avoidCollisions` against the reading column does it against the real geometry.
+**The card is part of the document, not of the window.** It was a Radix
+popover for one release: portalled to the end of `document.body`, `position:
+fixed`, positioned by Floating UI on every scroll event, flipped and shifted
+against the reading column, hidden when the words left it. That is the right
+machine for a tooltip and the wrong one for an annotation, and the owner saw
+both halves of the mismatch — the card "doesn't really stay still when user is
+scrolling", and "if there are changes next to one another the dialogs can get
+obstructed by eachother". A card outside the scroll container has to be chased
+by script after the compositor has already moved the words, so it wobbles
+against them; the flip against the column's edge was an 88px jump mid-scroll;
+and Floating UI positions each card against its own anchor with no knowledge of
+any other, so two changes on consecutive lines got two cards in the same place,
+one Accept button under the other card (2,730px² of overlap, measured).
 
-Measured in a headless Chrome at 220 and at 900: the card is never scaled
-(`selfTransform: none`, 11.2px type at both widths), the arrow lands within 0.2px
-of the horizontal centre of the words it points at even when collision detection
-has shifted the card sideways to stay in a 196px column, and `hideWhenDetached`
-turns the card `visibility: hidden` exactly when its anchor leaves the column —
-sixteen scroll observations, no disagreement. The findability the second copy
-used to provide is now the arrow plus the coloured wash, which survives the scale
-where the letterforms do not: the ink is 5.2px tall and 4–21px wide at 220.
+So the cards are absolutely positioned children of the reading column now, in
+the column's own coordinates, laid out once per layout by `placeCards` in
+`reader/proposed.tsx` and never per scroll: the column is what scrolls, so the
+browser moves them with the words on the compositor thread, and hiding when the
+words leave is what the column's `overflow` does anyway. What the portal was
+really for is kept — the card is outside the transformed sheet, so it draws at
+its own size while the anchor is measured through the transform by
+`getBoundingClientRect`, and there is still no reciprocal of the scale anywhere
+in this codebase. What the popover was doing that had to be switched off —
+focus trapping, dismissal on Escape and on an outside click — a div does not do.
+
+Because one pass lays out every card on the paper, it can lay them out against
+each other: above the words by default, left-aligned and kept inside the column;
+below them when there is no room above on the sheet (the old "first block on a
+sheet" rule, decided from the rectangle rather than the packing); and never on
+top of another card — a later card tries the other side of its words, then is
+stacked under whatever it still lands on, and a stacked card loses its arrow
+rather than point at the wrong thing. The earlier card in document order keeps
+its place; the reader meets that one first.
+
+Measured in a headless Chrome by `dev/proposals.drive.mjs`, before and after, at
+460 and at 220: the two cards on consecutive lines overlap by 0px² and both
+Accept buttons answer to `elementFromPoint` (before: 2,730px², one under the
+other); the card's distance from its words is one number across 47 scroll frames
+and it stays on one side (before: two numbers, two sides); and the card is never
+drawn anywhere else before the next paint (before: every frame).
 
 **Two counts, one list.** `x of y` sits beside Accept and Reject, and the chrome
 row still says `y suggested` next to `Accept all`. They are the length and the
@@ -408,20 +430,22 @@ and to nothing belonging to anybody else.
 
 #### What no test here can prove
 
-happy-dom lays nothing out, and since the control became a popover it lays out
-even less that matters: Floating UI reads `getBoundingClientRect`, which there is
-all zeroes, so every rectangle it computes is about nothing. The tests cover which
-characters are marked, which runs refuse the caret, which ELEMENT the control was
-anchored to, that the card no longer repeats the diff, that the two counts are one
-list, and what the buttons say. They cannot cover where the card lands, whether it
-flips, whether it hides on scroll, or whether the count fits beside the buttons.
+happy-dom lays nothing out: `getBoundingClientRect` is all zeroes and so is
+`offsetWidth`, so the layout pass in `ProposalControls` runs over rectangles about
+nothing. The tests cover which characters are marked, which runs refuse the caret,
+which ELEMENT the control was anchored to, that the card no longer repeats the
+diff, that the two counts are one list, what the buttons say — and, because
+`placeCards` is pure, the RULE by which cards yield to each other, stated as
+numbers. They cannot cover where a card actually lands, whether it holds still
+under a scroll, or whether the count fits beside the buttons.
 
-Those were checked in a headless Chrome instead — the numbers are in the section
-above — and the checking was a throwaway CDP probe rather than a suite, so it is
-evidence that this landed and not a guard that it stays landed. What is still
-unchecked by anything: how it looks and reads to a person, whether the card covers
-prose somebody wanted at either width, and the whole of the framed case, since the
-probe ran the page unframed at `?project=…&epic=…`.
+Those are checked in a headless Chrome by `dev/proposals.drive.mjs`, which files
+three suggestions through the MCP door, scrolls, presses Accept, and measures —
+unframed for the geometry and framed, in an iframe with a greeting carrying a
+passage, for the walk. It is a driver and not a test: it needs the module running
+against a scratch `ROADMAP_MODULES_DIR`, and it writes to the paper it is pointed
+at. What is still unchecked by anything: how it looks and reads to a person, and
+whether the card covers prose somebody wanted at either width.
 
 ### What was removed, and where it went
 

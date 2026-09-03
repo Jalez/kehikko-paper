@@ -1,10 +1,18 @@
-import { createContext, useCallback, useContext } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 
 import { diffWords } from '../../latex/diff.ts'
 import type { Proposal } from '../../latex/propose.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { ButtonGroup } from '@/components/ui/button-group.tsx'
-import { Popover, PopoverAnchor, PopoverArrow, PopoverContent } from '@/components/ui/popover.tsx'
 import { cn } from '@/lib/utils.ts'
 
 /**
@@ -44,9 +52,10 @@ import { cn } from '@/lib/utils.ts'
  * What is left for findability at 220 pixels is deliberate and not an
  * assumption:
  *
- *  - **The card points.** `PopoverArrow` is drawn at the anchor, so the control
- *    names its own place on the page. That is a geometric claim, not a
- *    typographic one, and it survives being four pixels tall.
+ *  - **The card points.** An arrow is drawn on the edge of the card facing the
+ *    words, at the horizontal centre of the changed span, so the control names
+ *    its own place on the page. That is a geometric claim, not a typographic
+ *    one, and it survives being four pixels tall.
  *  - **The wash survives the scale even though the glyphs do not.** What is
  *    illegible at 4.2 pixels is the LETTERFORMS. `.proposed-out` and
  *    `.proposed-in` are 20% colour washes behind whole words with a rule
@@ -88,45 +97,64 @@ export const Proposed = createContext<readonly Proposal[]>(NO_PROPOSALS)
 /**
  * Where each drawn change actually landed in the DOM, reported upward.
  *
- * The control belongs to the block — that is the only level that knows about a
- * suggestion which could not be drawn in the prose at all — but the thing it
- * has to point at is a span several components below it, produced by
- * `segments.tsx` while it walks the runs of one paragraph. Nothing on the way
- * down carries a proposal id, and nothing on the way up carries an element.
+ * The controls belong to the reading view — that is the only level that can
+ * see every suggestion on the paper at once, which is what laying them out
+ * against each other needs — but the thing each one has to point at is a span
+ * many components below it, produced by `segments.tsx` while it walks the runs
+ * of one paragraph. Nothing on the way down carries a proposal id, and nothing
+ * on the way up carries an element.
  *
- * So the block hands DOWN a place to put one. `Change` calls `put` from a ref
- * callback when it mounts and again with `null` when it goes; the block keeps
- * the map and hands each element to the popover as its anchor. A ref callback
- * fires on mount and unmount and not on every render, and the callback identity
- * is memoised on `(put, id)`, so this settles after one extra render rather
- * than looping.
+ * So the view hands DOWN a place to put one. `Change` calls `put` from a ref
+ * callback when it mounts and again with `null` when it goes; the store keeps
+ * the map and the controls read it. A ref callback fires on mount and unmount
+ * and not on every render, and the callback identity is memoised on
+ * `(anchors, id)`, so this settles after one pass rather than looping.
  *
- * The registry is `null` where nobody is collecting — the reading view with no
- * write path wired, and every test that renders a paragraph on its own.
+ * ## A store and not React state, and the reason is 2,437 blocks
+ *
+ * This used to be `useState` on each block, which re-rendered that one block
+ * when its span arrived. Lifted to the view, the same `useState` would
+ * re-render every sheet on the paper once per suggestion drawn, on mount and
+ * again on every re-read — the view is what draws the pages. A store with a
+ * subscription re-renders the one component that reads it, which is the
+ * controls layer, and nothing else notices a span arriving.
+ *
+ * The registry is `null` where nobody is collecting — every test that renders
+ * a paragraph on its own.
  */
 export interface Anchors {
   put: (id: string, el: HTMLElement | null) => void
+  get: (id: string) => HTMLElement | null
+  /** For `useSyncExternalStore`: tell me when the map changes. */
+  subscribe: (listen: () => void) => () => void
+  /** A number that moves whenever the map does. The snapshot, and nothing else. */
+  version: () => number
+}
+
+export function anchorStore(): Anchors {
+  const held = new Map<string, HTMLElement>()
+  const listeners = new Set<() => void>()
+  let version = 0
+  return {
+    put(id, el) {
+      if ((held.get(id) ?? null) === el) return
+      if (el) held.set(id, el)
+      else held.delete(id)
+      version += 1
+      for (const listen of listeners) listen()
+    },
+    get: (id) => held.get(id) ?? null,
+    subscribe(listen) {
+      listeners.add(listen)
+      return () => {
+        listeners.delete(listen)
+      }
+    },
+    version: () => version,
+  }
 }
 
 export const Anchoring = createContext<Anchors | null>(null)
-
-/**
- * The element Floating UI should treat as the edge of the world.
- *
- * The control renders in a portal at the end of `document.body`, which is what
- * frees it from the sheet's transform — and also frees it from the sheet's
- * clipping, which was doing real work. Without a boundary the card would be
- * kept inside the VIEWPORT, and this page is not the viewport: it is a module
- * on somebody else's canvas, routinely 220 pixels wide inside a window that is
- * not. A control shifted to fit the window would sit over the container next to
- * this one.
- *
- * So the scroll column is published here and handed to `collisionBoundary`.
- * Flipping above/below, shifting along the line, and the available width the
- * card bounds itself by are then all measured against the column the reader is
- * actually looking at.
- */
-export const Reading = createContext<HTMLElement | null>(null)
 
 /** What a person can say about a suggestion. */
 export type Decision = 'accept' | 'reject'
@@ -215,63 +243,293 @@ export function Change({
   )
 }
 
+/* ---- Where the cards go ------------------------------------------------- */
+
 /**
- * The control that answers one suggestion, pointing at the words it is about.
+ * The cards are laid out IN the document, by the view, and not floated over it.
  *
- * ## What replaced two hand-rolled rules, and why the arithmetic is gone
+ * ## What this replaced, and the two things it was doing wrong
  *
- * This used to be an absolutely-positioned box against the block row, and it
- * carried two pieces of geometry written by hand. Both are deleted, and the
- * deletion is the point of this component rather than a tidy-up.
+ * The control was a Radix popover: portalled to the end of `document.body`,
+ * `position: fixed`, positioned by Floating UI from the anchor's rectangle,
+ * re-positioned on every scroll event of the column, flipped and shifted
+ * against the column as a collision boundary, and hidden when the words left
+ * it. That is the right machine for a tooltip, which belongs to the WINDOW,
+ * and it was the wrong machine for an annotation, which belongs to the PAGE.
+ * The owner's two complaints are both consequences of that one mismatch.
  *
- * **It was positioned against the PARAGRAPH, at `bottom: 100%`.** That is what
- * the owner was looking at when they said it "is not positioned correctly": a
- * change to four words in the middle of the third line of a paragraph got a
- * control at the paragraph's top-left corner, which is the right block and the
- * wrong place, and at 220 pixels a paragraph is most of a visible page. Now the
- * anchor is the `<del>`/`<ins>` span itself — see `Anchoring` — so "above the
- * change" means above the change.
+ * **It did not hold still.** A card outside the scroll container has to be
+ * moved by script every time the container scrolls, and the script runs on the
+ * main thread after the compositor has already drawn the words in their new
+ * place — so under a wheel or a trackpad the card is drawn behind the text it
+ * points at, and wobbles against it. And because the flip was decided against
+ * the column's edge, a card above the words became a card below them the
+ * moment the words came within a card's height of the top, which is an
+ * 88-pixel jump (measured, 460px wide) in the middle of a scroll. A reader saw
+ * both and said the card "doesn't really stay still".
  *
- * **It was counter-scaled by hand.** The sheet is drawn at `transform:
- * scale(0.277)` at 220 pixels, so a control inside it drew at a quarter size,
- * and `paginated.tsx` published `--counter-scale` — the reciprocal — for this
- * box to multiply itself back up by, plus `--sheet-room` because a `max-width`
- * against the scaled sheet was four times too big. Both are gone, and there is
- * no reciprocal anywhere in this codebase now.
+ * **Two cards covered each other.** Floating UI positions one floating element
+ * against one anchor and knows nothing about any other, so two changes on
+ * consecutive lines got two cards in the same place — 2,730px² of overlap,
+ * measured — with the lower one's Accept button under the upper one, which is
+ * a suggestion that cannot be answered.
  *
- * The reason is the portal, and it is worth being precise about why it works
- * rather than treating it as magic. `PopoverContent` renders at the end of
- * `document.body`, outside the transformed subtree, so nothing scales it and it
- * inherits none of the sheet's custom properties. Floating UI positions it from
- * the anchor's `getBoundingClientRect`, which reports the element's rectangle
- * AFTER transforms — where the words really are on the reader's screen and how
- * big they really look. So the scaled side of the boundary is measured and the
- * unscaled side is drawn, and neither has to know about the other.
+ * ## What a card is now
  *
- * **The manual flip is gone too.** There was a `side` prop — "the first block
- * on a sheet has nothing above it inside the page box, which clips, so its
- * control goes below" — decided from the packing because a measured flip would
- * have needed a layout pass. Floating UI takes that layout pass anyway, so the
- * flip is now `avoidCollisions` against the scroll column, which is both more
- * correct (it flips for the top of the COLUMN, not the top of a sheet) and
- * fewer props.
+ * A `position: absolute` div inside the reading column, in the column's own
+ * coordinates, placed once per LAYOUT and never per scroll. The column is the
+ * scroll container, so the browser moves the card with the words on the
+ * compositor thread, in the same frame, with no script involved; there is no
+ * lag to have. Its position is decided from the anchor's rectangle relative to
+ * the column's content, and that rectangle does not change when the column
+ * scrolls, so nothing about the card's placement can depend on where the
+ * reader has scrolled to. Hiding when the words leave the column is free too:
+ * the card leaves with them, because it is in the same scrolling content.
  *
- * ## What it must not do
+ * What is kept from the portal is the thing that made it worth having: the
+ * card is OUTSIDE the transformed sheet, so it draws at its own size while the
+ * anchor is measured through the transform by `getBoundingClientRect`. There is
+ * still no reciprocal of the scale anywhere in this codebase.
  *
- * `modal={false}`, and then four dismissals prevented. This annotates a
- * document somebody is reading: it must not trap focus, must not make the page
- * inert, and must not steal the caret from a reader who has the pen out. It
- * must also not CLOSE — there is no trigger to open it again with, so a stray
- * click on the paper that dismissed the only way to answer a suggestion would
- * lose the suggestion until the paper was re-read. Escape, outside pointers,
- * outside focus and the open/close autofocus are all refused for that reason.
+ * And because the view lays out every card on the paper in one pass, it can
+ * lay them out against each other — see `placeCards`.
  *
- * That is most of Radix's popover behaviour turned off, and it is fair to ask
- * what is left. What is left is the part that could not be written by hand:
- * portalling, the anchor, collision detection against a scroll container, and
- * `hideWhenDetached`, which is how the card stops being drawn when the words it
- * points at have scrolled out of the column. A card still pointing confidently
- * at a paragraph that is no longer on screen is worse than no card.
+ * ## What it must not do, which is now nothing
+ *
+ * The popover had `modal={false}` and four dismissals prevented — Escape,
+ * outside pointer, outside focus, both autofocuses — because an annotation on
+ * a document somebody is reading must not trap focus, must not make the page
+ * inert, and must not close, since there is no trigger to reopen it with. All
+ * four were Radix behaviours being switched off. A div has none of them to
+ * switch off, which is the shorter way of saying the popover was the wrong
+ * primitive.
+ */
+
+/** A rectangle in the column's content coordinates. */
+export interface Box {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** Where one card goes, and which way it points. */
+export interface Placed {
+  left: number
+  top: number
+  /** Which side of its words the card is on. `top` means above them. */
+  side: 'top' | 'bottom'
+  /**
+   * The arrow's distance from the card's left edge, or `null` for a card that
+   * had to be pushed away from its words and would be pointing at the wrong
+   * thing.
+   */
+  arrow: number | null
+}
+
+/** Between the words and the card, arrow included, in screen pixels. */
+export const CARD_GAP = 6
+/** Between one card and the next when they are stacked. */
+const CARD_SPACE = 3
+/** The arrow keeps this far inside the card's rounded corners. */
+const ARROW_INSET = 10
+
+/**
+ * Where every card on the paper goes, decided together.
+ *
+ * ## The three rules, in the order they are applied
+ *
+ * 1. **Above the words, left-aligned with them, inside the column.** The card's
+ *    left edge is the anchor's, clamped so the card does not leave the column
+ *    — a 220-pixel column with a 132-pixel minimum card is the case that
+ *    clamps. That clamp is the whole of what Floating UI's `shift` was doing.
+ * 2. **Below the words when there is nothing above them on the sheet.** `floor`
+ *    is the top of the page box the words are on. A card above the first line
+ *    of a sheet would be drawn over the gap between pages or over the previous
+ *    sheet, and above the first line of the FIRST sheet it would be clipped by
+ *    the column's edge with no way to scroll it into view. This is the old
+ *    "first block on a sheet goes below" rule, decided from the real rectangle
+ *    rather than from the packing, and stable under scroll because both
+ *    rectangles are in content coordinates.
+ * 3. **Never on top of another card.** Cards are placed in document order, and
+ *    a card that would land on one already placed first tries the other side
+ *    of its words, and then is pushed down until it lands on nothing. Two
+ *    changes on consecutive lines therefore get one card above the first line
+ *    and one below the second; three get the third stacked under the second.
+ *    A pushed card loses its arrow, because an arrow from a card that is no
+ *    longer beside its words would point at whatever happens to be between.
+ *
+ * Document order, and the earlier card keeps its place, because that is the
+ * order the reader meets them in and the order `x of y` counts in. The card a
+ * reader has just scrolled to should be where they expect; the one after it
+ * is the one that moves.
+ *
+ * Pure, and exported for that reason: which card yields to which is the kind
+ * of rule a test should be able to state without a browser, even though where
+ * the rectangles come from needs one.
+ */
+export interface Placing {
+  anchor: Box
+  size: { width: number; height: number }
+  /** The top of the page box the words are on. A card does not go above it. */
+  floor: number
+}
+
+export function placeCards(cards: readonly Placing[], room: number): Placed[] {
+  const taken: Box[] = []
+  const out: Placed[] = []
+  const touches = (a: Box, b: Box) =>
+    a.left < b.left + b.width + CARD_SPACE &&
+    b.left < a.left + a.width + CARD_SPACE &&
+    a.top < b.top + b.height + CARD_SPACE &&
+    b.top < a.top + a.height + CARD_SPACE
+  for (const { anchor, size, floor } of cards) {
+    const left = Math.max(0, Math.min(anchor.left, room - size.width))
+    const above = anchor.top - CARD_GAP - size.height
+    const below = anchor.top + anchor.height + CARD_GAP
+    let side: Placed['side'] = above >= floor ? 'top' : 'bottom'
+    let box: Box = { left, top: side === 'top' ? above : below, ...size }
+    const under = () => taken.filter((t) => touches(t, box))
+    if (side === 'top' && under().length) {
+      side = 'bottom'
+      box = { ...box, top: below }
+    }
+    let pushed = false
+    for (let hit = under(); hit.length; hit = under()) {
+      box = { ...box, top: Math.max(...hit.map((t) => t.top + t.height)) + CARD_SPACE }
+      pushed = true
+    }
+    taken.push(box)
+    out.push({
+      left: box.left,
+      top: box.top,
+      side,
+      arrow: pushed
+        ? null
+        : Math.max(ARROW_INSET, Math.min(size.width - ARROW_INSET, anchor.left + anchor.width / 2 - left)),
+    })
+  }
+  return out
+}
+
+const NOWHERE: ReadonlyMap<string, Placed> = new Map()
+
+/**
+ * Every control on the paper, laid out in the column.
+ *
+ * ## Measured in a layout effect, and what makes it re-measure
+ *
+ * The cards render first, invisible, so that they have a size to measure; then
+ * one pass reads every anchor's rectangle and every card's size, decides the
+ * placement, and the state change draws them — synchronously, before paint,
+ * which is what a layout effect is for. It runs again when the list changes,
+ * when a span arrives or leaves (the store's version), and when the view says
+ * the sheets were re-laid-out (`laidOut`, which the view derives from the
+ * paper, the scale, the sheet heights and the column width).
+ *
+ * Two things move the words without telling React, and each has a listener:
+ * an image finishing its lazy load pushes every block under it down its sheet
+ * — `load` does not bubble, so it is caught in the capture phase on the
+ * column — and the web font arriving reflows every line. A card's own size
+ * changing is watched too, because the `why` sentence wraps differently at a
+ * different width and a card measured before the wrap is a card the wrong
+ * height.
+ *
+ * None of these can loop: a card's position affects neither the anchors nor
+ * the card's size, and the placement is a pure function of those two.
+ */
+export function ProposalControls({
+  proposals,
+  anchors,
+  fallback,
+  column,
+  answering,
+  laidOut,
+}: {
+  /** In document order — see `inOrder` in `paginated.tsx`. */
+  proposals: readonly Proposal[]
+  anchors: Anchors
+  /** The block a suggestion is about, for one the prose could not draw. */
+  fallback: (proposal: Proposal) => HTMLElement | null
+  column: HTMLElement | null
+  answering: Answering
+  /** Changes identity whenever the sheets have been laid out again. */
+  laidOut: unknown
+}) {
+  const version = useSyncExternalStore(anchors.subscribe, anchors.version, anchors.version)
+  const cards = useRef(new Map<string, HTMLElement>())
+  const [placed, setPlaced] = useState<ReadonlyMap<string, Placed>>(NOWHERE)
+
+  const place = useCallback(() => {
+    if (!column) return
+    const col = column.getBoundingClientRect()
+    const content = (r: DOMRect): Box => ({
+      left: r.left - col.left + column.scrollLeft,
+      top: r.top - col.top + column.scrollTop,
+      width: r.width,
+      height: r.height,
+    })
+    const ids: string[] = []
+    const input: Placing[] = []
+    for (const p of proposals) {
+      const card = cards.current.get(p.id)
+      const at = anchors.get(p.id) ?? fallback(p)
+      if (!card || !at) continue
+      /* The page box is a direct child of the column, so its `offsetTop` is
+         already in the column's coordinates. */
+      const page = at.closest<HTMLElement>('[data-page]')
+      ids.push(p.id)
+      input.push({
+        anchor: content(at.getBoundingClientRect()),
+        size: { width: card.offsetWidth, height: card.offsetHeight },
+        floor: page?.offsetTop ?? 0,
+      })
+    }
+    const out = placeCards(input, column.clientWidth)
+    setPlaced(new Map(ids.map((id, i) => [id, out[i]!])))
+  }, [column, proposals, anchors, fallback])
+
+  useLayoutEffect(place, [place, version, laidOut])
+
+  useEffect(() => {
+    if (!column) return
+    column.addEventListener('load', place, true)
+    if (typeof document !== 'undefined' && 'fonts' in document) void document.fonts.ready.then(place)
+    if (typeof ResizeObserver === 'undefined') {
+      return () => column.removeEventListener('load', place, true)
+    }
+    const ro = new ResizeObserver(place)
+    for (const card of cards.current.values()) ro.observe(card)
+    return () => {
+      ro.disconnect()
+      column.removeEventListener('load', place, true)
+    }
+  }, [column, place])
+
+  return (
+    <>
+      {proposals.map((proposal, i) => (
+        <ProposalCard
+          key={proposal.id}
+          proposal={proposal}
+          ordinal={i + 1}
+          total={proposals.length}
+          placed={placed.get(proposal.id) ?? null}
+          anchored={anchors.get(proposal.id) ? 'words' : 'block'}
+          decide={answering.decide}
+          busy={answering.busy}
+          keep={(el) => {
+            if (el) cards.current.set(proposal.id, el)
+            else cards.current.delete(proposal.id)
+          }}
+        />
+      ))}
+    </>
+  )
+}
+
+/**
+ * The control that answers one suggestion.
  *
  * ## Two counts, and how they relate
  *
@@ -287,111 +545,97 @@ export function Change({
  * so there is no second numbering on screen to contradict this one.
  *
  * The row wraps rather than answering a container query, and that is a real
- * cost of the portal rather than a preference: the card is no longer inside
- * `@container container`, so a `@sm/container:` rule in here would find no
- * container to measure and would never match. Wrapping is measured by the
- * content against the width Floating UI found, which needs no ancestor at all.
+ * cost of the card being chrome rather than document: it is inside the reading
+ * column and not inside `@container container`, so a `@sm/container:` rule in
+ * here would find no container to measure and would never match. Wrapping is
+ * measured by the content against the card's own width, which needs no
+ * ancestor at all.
  */
-export function ProposalControl({
+function ProposalCard({
   proposal,
-  anchor,
   ordinal,
   total,
+  placed,
+  anchored,
   decide,
   busy,
+  keep,
 }: {
   proposal: Proposal
-  /** The drawn change to point at, or `null` if the prose could not show it. */
-  anchor: HTMLElement | null
   /** Which of the paper's waiting changes this is, counting down the paper. */
   ordinal: number
   /** How many are waiting on the whole paper. The chrome row's number. */
   total: number
+  /** Where it goes, or `null` before the first layout pass. Drawn invisible until then. */
+  placed: Placed | null
+  /** What it points at: the changed words, or the block when the prose could not draw them. */
+  anchored: 'words' | 'block'
   decide: (id: string, decision: Decision) => void
   busy: boolean
+  keep: (el: HTMLElement | null) => void
 }) {
-  const column = useContext(Reading)
   const counted = `${ordinal} of ${total}`
   return (
-    <Popover open modal={false}>
-      {/*
-        With `virtualRef` given, Radix renders nothing here and measures the
-        span instead. Without one — a suggestion the prose could not place
-        honestly, which `segments.tsx` skips rather than draw a lie about — this
-        div is the anchor, and it covers the block, so the control falls back to
-        exactly the behaviour it had before: pinned to the paragraph, still
-        answerable.
-      */}
-      <PopoverAnchor
-        virtualRef={anchor ? { current: anchor } : undefined}
-        aria-hidden
-        className="pointer-events-none absolute inset-0"
-      />
-      <PopoverContent
-        side="top"
-        align="start"
-        data-proposal={proposal.id}
-        /* The column, not the window. See `Reading`. */
-        collisionBoundary={column}
-        collisionPadding={4}
-        /* Stop being drawn when the words are no longer on screen. */
-        hideWhenDetached
-        /* An annotation, not a dialog. `role="dialog"` would make a screen
-           reader announce a modal that is always open, once per suggestion. */
-        role="group"
-        aria-label={`Suggested change ${counted}: ${proposal.why}`}
-        className="proposal-card"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onFocusOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
-        <p className="proposal-why">{proposal.why}</p>
-        <div className="proposal-answer">
-          <ButtonGroup label={`Answer the suggested change: ${proposal.why}`}>
-            <Button
-              size="container"
-              variant="default"
-              disabled={busy}
-              onClick={() => decide(proposal.id, 'accept')}
-              /* The whole rule, where somebody meets the thing it is about, in the
-                 same spirit as the Edit checkbox's own title. */
-              title="Write this change into the .tex file now. The paper is re-read afterwards."
-            >
-              Accept
-            </Button>
-            <Button
-              size="container"
-              variant="outline"
-              disabled={busy}
-              onClick={() => decide(proposal.id, 'reject')}
-              title="Forget this suggestion. Nothing is written and the file is left exactly as it is."
-            >
-              Reject
-            </Button>
-          </ButtonGroup>
-          {/*
-            Beside the buttons, where the owner asked for it, and a `span`
-            rather than anything pressable: it says where in the paper this one
-            is, and there is nothing here to press. The word "changes" is not
-            repeated in the visible text — at 220 pixels it is what would push
-            the count onto its own line — and is in the title and the group's
-            accessible name instead, which is where "2 of 4" of WHAT gets
-            answered without costing a line.
-          */}
-          <span
-            className="proposal-count"
-            data-proposal-count={counted}
-            title={`The ${ordinal}${ordinalSuffix(ordinal)} of ${total} suggested change${total === 1 ? '' : 's'} waiting on this paper, counting down the paper from the top.`}
+    <div
+      ref={keep}
+      data-proposal={proposal.id}
+      data-side={placed?.side ?? 'top'}
+      data-anchored={anchored}
+      data-placed={placed ? '' : undefined}
+      data-arrow={placed && placed.arrow !== null ? '' : undefined}
+      /* An annotation, not a dialog. `role="dialog"` would make a screen reader
+         announce a modal that is always open, once per suggestion. */
+      role="group"
+      aria-label={`Suggested change ${counted}: ${proposal.why}`}
+      className="proposal-card bg-card text-card-foreground rounded-[var(--radius-sm)] border"
+      style={
+        placed
+          ? ({ left: placed.left, top: placed.top, '--arrow-left': `${placed.arrow ?? 0}px` } as React.CSSProperties)
+          : undefined
+      }
+    >
+      <p className="proposal-why">{proposal.why}</p>
+      <div className="proposal-answer">
+        <ButtonGroup label={`Answer the suggested change: ${proposal.why}`}>
+          <Button
+            size="container"
+            variant="default"
+            disabled={busy}
+            onClick={() => decide(proposal.id, 'accept')}
+            /* The whole rule, where somebody meets the thing it is about, in the
+               same spirit as the Edit checkbox's own title. */
+            title="Write this change into the .tex file now. The paper is re-read afterwards."
           >
-            {counted}
-          </span>
-        </div>
-        <PopoverArrow width={10} height={5} />
-      </PopoverContent>
-    </Popover>
+            Accept
+          </Button>
+          <Button
+            size="container"
+            variant="outline"
+            disabled={busy}
+            onClick={() => decide(proposal.id, 'reject')}
+            title="Forget this suggestion. Nothing is written and the file is left exactly as it is."
+          >
+            Reject
+          </Button>
+        </ButtonGroup>
+        {/*
+          Beside the buttons, where the owner asked for it, and a `span`
+          rather than anything pressable: it says where in the paper this one
+          is, and there is nothing here to press. The word "changes" is not
+          repeated in the visible text — at 220 pixels it is what would push
+          the count onto its own line — and is in the title and the group's
+          accessible name instead, which is where "2 of 4" of WHAT gets
+          answered without costing a line.
+        */}
+        <span
+          className="proposal-count"
+          data-proposal-count={counted}
+          title={`The ${ordinal}${ordinalSuffix(ordinal)} of ${total} suggested change${total === 1 ? '' : 's'} waiting on this paper, counting down the paper from the top.`}
+        >
+          {counted}
+        </span>
+      </div>
+    </div>
   )
 }
 
