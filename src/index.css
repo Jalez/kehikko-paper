@@ -523,6 +523,47 @@
   }
 
   /*
+   * A whole block that left, and a whole block that arrived, when the disk
+   * moved under the reading.
+   *
+   * The block-level counterparts of the two rules above, for `Departed` in
+   * `blocks.tsx`: the same two colours at the same wash, the rule through the
+   * text of what is gone and under the text of what is new, so a change made
+   * outside this page reads in exactly the language a change suggested
+   * through it does. A reworded paragraph gets neither of these — its
+   * difference is drawn inside it, word by word, with the two rules above.
+   *
+   * `text-decoration` set on the wrapper reaches every line of prose inside
+   * it, which is what makes a struck-through paragraph one gesture rather
+   * than a span per run. A figure or a code listing inside gets the wash and
+   * the rule on its caption, and the wash is what says it on a picture.
+   */
+  .changed-gone,
+  .changed-new {
+    display: block;
+    border-radius: 3px;
+    /* Out into the margin by the same amount the wash is padded, so the
+       coloured box sits behind the prose rather than shifting it. */
+    margin-inline: -0.25em;
+    padding-inline: 0.25em;
+  }
+
+  .changed-gone {
+    background-color: color-mix(in oklch, var(--gone) 12%, var(--paper));
+    color: color-mix(in oklch, var(--gone) 65%, var(--paper-foreground));
+    text-decoration-line: line-through;
+    text-decoration-thickness: 0.07em;
+  }
+
+  .changed-new {
+    background-color: color-mix(in oklch, var(--arrived) 12%, var(--paper));
+    color: color-mix(in oklch, var(--arrived) 65%, var(--paper-foreground));
+    text-decoration-line: underline;
+    text-decoration-thickness: 0.07em;
+    text-underline-offset: 0.18em;
+  }
+
+  /*
    * The control that answers a suggestion: chrome, drawn in the column.
    *
    * ## It is inside the scroll column and outside the sheet, and both halves matter

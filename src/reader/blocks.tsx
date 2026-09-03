@@ -6,8 +6,9 @@ import type { PlacedBlock } from '../../store.ts'
 import { apiUrl } from '../api.ts'
 import { cn } from '@/lib/utils.ts'
 import type { Proposal } from '../../latex/propose.ts'
+import type { BlockChange } from './changed.ts'
 import { Marked, Segments, Typed, type Typing } from './segments.tsx'
-import { NO_PROPOSALS, Proposed } from './proposed.tsx'
+import { Change, NO_PROPOSALS, Proposed } from './proposed.tsx'
 
 /**
  * Everything the paper needs in order to be typeable EXCEPT which file it is.
@@ -119,6 +120,17 @@ export interface BlockProps {
    * and narrowing here keeps one filter instead of one per sheet.
    */
   proposals?: readonly Proposal[]
+  /**
+   * What the disk did to this block since the page read it, or nothing.
+   *
+   * Supplied by the view out of a `Comparison` — see `reader/changed.ts` —
+   * and drawn in the same red and green a suggested change is drawn in,
+   * because to the reader they are the same kind of fact: these words are
+   * leaving, those are arriving. The difference is who did it, and that is
+   * said once, beside the control that takes the new version, rather than
+   * in a second colour scheme.
+   */
+  change?: BlockChange | null
 }
 
 /**
@@ -148,6 +160,7 @@ export function BlockRow({
   mark = null,
   pen = null,
   proposals = NO_PROPOSALS,
+  change = null,
 }: BlockProps) {
   /*
    * Narrowed to this block before it is supplied. A block the mark does not
@@ -197,6 +210,7 @@ export function BlockRow({
       data-block-id={anchorId(block.file, block.id)}
       data-marked={here ? '1' : undefined}
       data-has-proposals={suggested.length ? String(suggested.length) : undefined}
+      data-changed={change?.at}
     >
       <div
         aria-hidden
@@ -216,7 +230,9 @@ export function BlockRow({
       <Marked.Provider value={here}>
         <Typed.Provider value={typing}>
           <Proposed.Provider value={suggested}>
-            <BlockBody block={block} epic={epic} />
+            <Departed change={change}>
+              <BlockBody block={block} epic={epic} change={change} />
+            </Departed>
           </Proposed.Provider>
         </Typed.Provider>
       </Marked.Provider>
@@ -224,15 +240,59 @@ export function BlockRow({
   )
 }
 
-function BlockBody({ block, epic }: BlockProps) {
+/**
+ * A whole block that left, or a whole block that arrived, wrapped in the
+ * element that MEANS that.
+ *
+ * `<del>` and `<ins>` around the block for the reason `Change` uses them
+ * around words: they carry the meaning without the colour, so a screen reader
+ * says it and the strike-through says it again for a reader who cannot tell
+ * the two hues apart. Both are transparent in HTML's content model, so a
+ * paragraph or a figure inside one is still a paragraph or a figure. The
+ * classes are the block-level counterparts of `.proposed-out` and
+ * `.proposed-in` — the same wash, the same rule through or under the text —
+ * see `index.css`.
+ *
+ * A reworded block is not wrapped: its difference is drawn inside it, word by
+ * word, by `BlockBody`.
+ */
+function Departed({ change, children }: { change: BlockChange | null; children: React.ReactNode }) {
+  if (change?.at === 'gone') {
+    return (
+      <del className="changed-gone block" data-changed-block="gone">
+        {children}
+      </del>
+    )
+  }
+  if (change?.at === 'new') {
+    return (
+      <ins className="changed-new block" data-changed-block="new">
+        {children}
+      </ins>
+    )
+  }
+  return <>{children}</>
+}
+
+function BlockBody({ block, epic, change = null }: BlockProps) {
   const id = anchorId(block.file, block.id)
+  /*
+   * A reworded paragraph or heading draws the difference in place of its
+   * segments: the words as read, the words as they now are, through the same
+   * `diffWords` a suggestion is drawn through. What is lost by drawing text
+   * rather than segments — emphasis, a citation's card, a reference's link —
+   * is lost only while the comparison is up, and it is lost honestly: a
+   * comparison is a question about words, and the moment the reader takes
+   * the new version the block is drawn from its segments again.
+   */
+  const reworded = change?.at === 'changed' ? change : null
 
   switch (block.kind) {
     case 'heading': {
       const Tag = HEADING_TAG[Math.min(block.level, HEADING_TAG.length - 1)] ?? 'h3'
       return (
         <Tag id={id} className={cn('prose-reading font-semibold leading-tight', HEADING_SIZE[Math.min(block.level, 5)])}>
-          <Segments segments={block.segments} />
+          {reworded ? <Change was={reworded.was} now={reworded.now} /> : <Segments segments={block.segments} />}
         </Tag>
       )
     }
@@ -240,7 +300,7 @@ function BlockBody({ block, epic }: BlockProps) {
     case 'paragraph':
       return (
         <p id={id} className="prose-reading my-[0.8em]">
-          <Segments segments={block.segments} />
+          {reworded ? <Change was={reworded.was} now={reworded.now} /> : <Segments segments={block.segments} />}
         </p>
       )
 

@@ -466,6 +466,92 @@ against a scratch `ROADMAP_MODULES_DIR`, and it writes to the paper it is pointe
 at. What is still unchecked by anything: how it looks and reads to a person, and
 whether the card covers prose somebody wanted at either width.
 
+### A paper that changed on disk while the page was showing it
+
+Nothing on the server is cached, and the page still holds the paper it READ:
+every offset on screen and every hash it sends with a write are about that
+reading, and it is replaced only by the page's own writes and by a change of
+epic. So a `.tex` rewritten from outside — an editor's autosave, a `git
+merge`, a checkout — used to leave the page showing a version that no longer
+existed, indefinitely, with nothing on screen saying so.
+
+It still keeps its reading, on purpose: a reading held still is a reading that
+can be compared. What is added is that the page learns the disk moved, and
+draws the difference.
+
+**Detection is the standing poll.** `/api/uncommitted` now carries `hashes` —
+what each file of the paper is right now, keyed exactly as `Paper.hashes` is
+and computed by `hashesOf` in `store.ts`, which reads the bytes and parses
+only `main.tex` to learn which files there are. The page compares them with the
+reading's on every tick (`changedFiles` in `src/reader/changed.ts`); a
+difference fetches the paper once per state of the disk and holds it BESIDE
+the reading, never in place of it. Nothing about `sight` changes on detection,
+so the reader keeps their place and the page never flashes back to `asking`.
+The proposal poll and the standing poll stay two effects, as before.
+
+**The picture is drawn in the prose, in the language a suggestion uses.**
+`compare` lays the two readings over each other: a longest common subsequence
+over blocks, file by file — only the files whose hash moved — with a common
+prefix and suffix trimmed first, so a chapter rewritten wholesale is many
+rows and a paragraph saved once is a table the size of one paragraph. A
+removed and an added paragraph that share most of their words (Dice over word
+tokens, 0.35) are paired as one REWORDED paragraph and drawn through the same
+`diffWords` a proposal is drawn through, so a corrected typo is one word in
+red and one in green inside its sentence rather than a paragraph removed and
+put back. A block that left is wrapped in `<del>` and struck through; one that
+arrived is wrapped in `<ins>` and underlined; the wash is the same two colours
+`.proposed-out` and `.proposed-in` use, so a change made outside this page
+reads exactly like one suggested through it. The unchanged prose either side
+is the reading's own blocks, offsets and all.
+
+**One control, for the document.** `Read the new version`, in the chrome row,
+beside a count in words — `changed on disk: 2 reworded, 1 new, 1 gone` — with
+the files named in its title. Pressing it replaces the reading with the
+version on disk and the red and green go; the reader's place is kept, because
+the scroll lives on the column and the column is not rebuilt. It is one
+control and not one per file because taking chapter two's new version while
+keeping chapter three's old one would produce a reading no file on disk ever
+held, which is the second copy of a paper this module refuses to keep. Until
+it is pressed the comparison stays, however many more times the disk moves;
+the disk moving BACK to the reading clears it on its own.
+
+**While the comparison is up, the pen is away and the suggestions are
+withheld.** A correction typed now would be sent with the reading's hash and
+refused as stale after the reader had typed it, so the Edit tick is disabled
+and says why. The suggested changes are not drawn into the prose, because they
+are measured against the file on disk (next paragraph) and drawing a range
+measured against one file into the prose of another would mark the wrong
+words with the same red and green the comparison itself uses; the count stays
+in the row and says `drawn once you read the new version`. A write that lands
+during a comparison — the Auto tick accepting a suggestion is the one that
+can — moves the DISK's side of it rather than replacing the reading.
+
+**What happens to pending suggestions.** `rebaseAll` keeps them right across
+writes this process makes, by arithmetic. There is no arithmetic for a change
+whose shape nobody saw, so the list is measured against the disk on every
+read of it — `remeasure` in `proposals.ts`, called by `/api/proposals` and by
+`list_proposals` — and what it hands out is always about the file as it
+stands. A proposal whose file's hash no longer matches is filed AGAIN by the
+rule it was filed under the first time: the text the agent quoted (kept on
+the proposal as `asked`) has to appear in the file exactly once, and the
+differing middle is the range, restamped with the file's hash. One whose
+quoted window is gone — rewritten, or applied by the author themselves — or
+ambiguous is dropped and said out loud on the line under the paper, once:
+`One suggestion was dropped: main.tex changed on disk and the text it was
+about is no longer there, exactly once, to find.` This is deliberately not the
+"search for the narrowed text" guess `rebase`'s essay refuses; it searches for
+the whole quoted window and refuses ambiguity. Taking the new version asks the
+server for nothing, because the list on screen was measured against the disk
+already; the view simply draws it again.
+
+Measured in a headless Chromium against a scratch paper: two reworded
+paragraphs, one gone and one new, drawn within one poll of the file being
+rewritten; scroll position 120 before and 120 after detection and after
+taking the new version; no navigation and no `Reading…` between; the two
+suggestion cards withheld while comparing and drawn again afterwards.
+`test/changed.test.ts`, `test/compared.test.tsx` and `test/external.test.ts`
+state the rules.
+
 ### What was removed, and where it went
 
 **The margin rail is gone**, and so are the pins that anchored it. `notes.ts`
@@ -823,11 +909,11 @@ below.
 | `/api/paper?epic=…`               | one paper, parsed, chapters folded in |
 | `/api/source?epic=…&file=…`       | the raw `.tex` of one file the paper names |
 | `/api/figure?epic=…&file=…`       | one image the paper names — bytes, not JSON |
-| `/api/proposals?epic=…`           | the changes suggested about one paper that nobody has answered — a read, and ungated like the others |
+| `/api/proposals?epic=…`           | the changes suggested about one paper that nobody has answered, measured against the files as they are on disk when it answers — a read, and ungated like the others |
 | `/api/proposal` (POST)            | accept or reject one. Ticketed; accepting is `writeRange`, and then one commit |
-| `/api/uncommitted?epic=…`         | whether this paper has anything to commit, and whether a commit here would work — a read, ungated |
+| `/api/uncommitted?epic=…`         | whether this paper has anything to commit, whether a commit here would work, and what each file of the paper hashes to right now — a read, ungated |
 | `/api/save` (POST)                | commit what has changed under the paper. Ticketed; writes no bytes |
-| `/mcp`                            | `list_papers`, `read_paper`, `read_source`, `propose_edit`, `list_proposals` |
+| `/mcp`                            | `list_papers`, `read_paper`, `read_source`, `propose_edit`, `list_proposals` — no new tool for the change on disk; the page reads it off `/api/uncommitted` |
 
 All of it is middleware in front of the one Vite server. A module is one origin
 or it is nothing — and two ports is exactly where the wide-open `cors()` in the
@@ -856,13 +942,14 @@ src/
   index.css        the theme, the dark variant, the sheet, the scroll column
   reader/          pages.ts (the A4 page box and pure pagination),
                    paginated.tsx (the scrolling column and the sections),
-                   blocks.tsx (the gutter), segments.tsx, proposed.tsx, ask.tsx
+                   blocks.tsx (the gutter), segments.tsx, proposed.tsx, ask.tsx,
+                   changed.ts (the disk laid over the reading)
   lib/             selection.ts (a highlight -> a source range), utils.ts
   components/ui    shadcn's button, badge, button group, checkbox, label,
                    popover and sidebar
 wire/           the mailbox and the bridge, copied from References and Journeys
-test/           parse, store, doors, wire, reader, proposals, git, saving — 386 tests,
-                no browser needed
+test/           parse, store, doors, wire, reader, proposals, git, saving,
+                changed — 483 tests, no browser needed
 ```
 
 `src/reader/` knows about LaTeX and nothing about the wire. `wire/` knows about

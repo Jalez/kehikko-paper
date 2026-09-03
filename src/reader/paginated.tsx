@@ -21,6 +21,7 @@ import type { Proposal } from '../../latex/propose.ts'
 import type { Standing } from '../../git.ts'
 import { Reading } from './anchor.ts'
 import { BlockRow, anchorId, covers, type Pen } from './blocks.tsx'
+import type { BlockChange, Comparison } from './changed.ts'
 import { Anchoring, NO_PROPOSALS, ProposalControls, anchorStore, type Answering } from './proposed.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
 
@@ -205,6 +206,19 @@ export interface PaginatedProps {
   saving?: Standing | null
   /** Commit what has changed. `undefined` means the Save control is not drawn. */
   onSave?: () => void
+  /**
+   * The paper as it now is on disk, laid over the reading — or `null`, the
+   * ordinary state, in which the disk is what the page read.
+   *
+   * See `reader/changed.ts` for what it holds and why the page keeps its
+   * reading instead of taking the new one. When it is set, three things about
+   * this view change and each is said where it happens: the sheets are packed
+   * from the comparison's blocks rather than the paper's, the pen is put away,
+   * and the suggested changes are not drawn.
+   */
+  comparison?: Comparison | null
+  /** Replace the reading with the version on disk. `undefined` means the control is not drawn. */
+  onCatchUp?: () => void
 }
 
 const CAVEAT = 'Page breaks are this reader\u2019s, not the PDF\u2019s.'
@@ -228,6 +242,12 @@ const EDIT_RULE =
   + 'in the file for a cursor inside it. Enter commits, Escape puts it back, and LaTeX markup is refused rather '
   + 'than escaped. Typing is written to the file straight away; press Save to commit it.'
 
+const CATCH_UP_RULE =
+  'The .tex files changed on disk since this page read them — saved from an editor, merged, or checked out. '
+  + 'What is gone is struck through in red and what is new is underlined in green, where it happens. Press '
+  + 'this to read the new version: the comparison is cleared, the page shows the file as it now is, and the '
+  + 'suggested changes waiting on it are drawn again, measured against that file.'
+
 const AUTO_RULE =
   'Apply a suggested change as soon as it arrives, instead of showing it for approval. Off by default. With it '
   + 'off, a change is drawn into the prose in green and red where it happens and nothing is written until you '
@@ -248,8 +268,18 @@ export function PaginatedView({
   onAuto,
   saving = null,
   onSave,
+  comparison = null,
+  onCatchUp,
 }: PaginatedProps) {
-  const pages = useMemo(() => paginate(paper.blocks), [paper.blocks])
+  /*
+   * The sheets are packed from the comparison while one is up, so what is
+   * gone stays on the page where it was and what is new arrives where it
+   * belongs. The paper itself is untouched — it is still the reading, its
+   * offsets are still what every span carries — and the moment the comparison
+   * goes the packing is the paper's again.
+   */
+  const laid = comparison ? comparison.blocks : paper.blocks
+  const pages = useMemo(() => paginate(laid), [laid])
   const count = Math.max(1, pages.length)
 
   /**
@@ -349,7 +379,7 @@ export function PaginatedView({
    * on the paragraph it would have been drawn in.
    */
   const [anchors] = useState(anchorStore)
-  const laidOut = useMemo(() => ({}), [paper, scale, heights, room])
+  const laidOut = useMemo(() => ({}), [paper, comparison, scale, heights, room])
   const fallback = useCallback(
     (p: Proposal): HTMLElement | null => {
       const block = paper.blocks.find((b) => covers(b, p))
@@ -403,6 +433,26 @@ export function PaginatedView({
     )
   }, [proposals, paper.files])
 
+  /*
+   * While the disk and the reading differ, two things are withheld from the
+   * sheets, and the reason for both is the same: every offset in this view is
+   * about the READING, and the file those offsets would be written to is not
+   * the reading any more.
+   *
+   * The pen goes away, because a correction typed now would be sent with the
+   * reading's hash and refused as stale — correctly, and after the reader had
+   * typed it. The tick stays drawn and says why it will not take.
+   *
+   * The suggested changes are not drawn, because the server measures them
+   * against the file on disk (see `remeasure` in `proposals.ts`) and drawing
+   * a range measured against one file into the prose of another would mark
+   * the wrong words with the same red and green the comparison itself uses.
+   * They are not lost: the count stays in the row and says when they come
+   * back, and the door still holds them.
+   */
+  const penInHand = comparison ? null : pen
+  const drawn = comparison ? NO_PROPOSALS : inOrder
+
   /* How much width there is. Observed rather than read once, because the container
      is dragged and because a frame's window is not what changes when it is. */
   useLayoutEffect(() => {
@@ -444,7 +494,7 @@ export function PaginatedView({
     const ro = new ResizeObserver(read)
     for (const el of sheets.current.slice(0, count)) if (el) ro.observe(el)
     return () => ro.disconnect()
-  }, [paper, count])
+  }, [paper, comparison, count])
 
   /*
    * The readout follows the scroll.
@@ -640,11 +690,20 @@ export function PaginatedView({
             which is the larger target and the one people point at.
           */}
           {onPen && (
-            <span className="flex min-w-0 shrink-0 items-center gap-1" title={EDIT_RULE}>
+            <span
+              className="flex min-w-0 shrink-0 items-center gap-1"
+              title={
+                comparison
+                  ? 'The files changed on disk since this page read them, so nothing typed here could be written '
+                    + 'back to them. Read the new version first.'
+                  : EDIT_RULE
+              }
+            >
               <Checkbox
                 id="paper-edit"
                 size="container"
                 checked={pen !== null}
+                disabled={comparison !== null}
                 onCheckedChange={(next) => onPen(next === true)}
                 data-editing={pen !== null ? '1' : '0'}
               />
@@ -783,12 +842,65 @@ export function PaginatedView({
             It appears at two or more, because at one it is the Accept button
             already floating over the change, in a worse place.
           */}
+          {/*
+            The disk moved under the reading, and the one control that takes
+            the new version.
+
+            ## One control for the document, and not one per file
+
+            The brief allowed either. It is one because the paper is one thing
+            to the reader — chapters are an assembly detail the sheets already
+            hide — and because taking chapter two's new version while keeping
+            chapter three's old one would produce a reading no file on disk
+            ever held, which is exactly the second copy of a paper this module
+            refuses to keep. The files that moved are named in the title, so a
+            reader can still see WHICH, and the comparison on the sheets shows
+            WHERE.
+
+            ## It says what it does, and what it undoes
+
+            "Read the new version": the reading is replaced with the file as it
+            now is, the red and green go, and the suggested changes come back
+            drawn against that file. It does not write anything, and the title
+            says so. The count of what changed sits beside it in the amber the
+            page uses for what wants the reader, paired with words, because
+            colour alone is a channel some readers do not have.
+          */}
+          {comparison && onCatchUp && (
+            <span
+              className="flex min-w-0 shrink-0 items-center gap-1"
+              data-changed-on-disk={comparison.files.join(',')}
+              title={`Changed on disk: ${comparison.files.join(', ')}. ${CATCH_UP_RULE}`}
+            >
+              <span className="text-[0.7rem] text-[var(--mark)]">
+                {describe(comparison)}
+              </span>
+              <Button
+                type="button"
+                variant="default"
+                size="container"
+                className="shrink-0 text-[0.7rem] font-normal"
+                data-catch-up=""
+                onClick={() => onCatchUp()}
+              >
+                Read the new version
+              </Button>
+            </span>
+          )}
           {answering && inOrder.length > 0 && (
             <span className="flex min-w-0 shrink-0 items-center gap-1" data-pending-proposals={inOrder.length}>
-              <span className="text-[0.7rem] text-[var(--mark)]">
-                {inOrder.length} suggested
+              <span
+                className="text-[0.7rem] text-[var(--mark)]"
+                title={
+                  comparison
+                    ? 'Measured against the file as it now is on disk, and drawn once you read the new version.'
+                    : undefined
+                }
+                data-proposals-withheld={comparison ? '' : undefined}
+              >
+                {inOrder.length} suggested{comparison ? ', drawn once you read the new version' : ''}
               </span>
-              {inOrder.length > 1 && (
+              {!comparison && inOrder.length > 1 && (
                 <Button
                   type="button"
                   variant="outline"
@@ -897,8 +1009,9 @@ export function PaginatedView({
                 paper={paper}
                 blocks={blocks}
                 mark={mark}
-                pen={pen}
-                proposals={inOrder}
+                pen={penInHand}
+                proposals={drawn}
+                changes={comparison?.changes ?? null}
                 scale={scale}
                 room={room}
                 keep={(el) => {
@@ -914,9 +1027,9 @@ export function PaginatedView({
             column is `relative` for exactly this — and laid out once per
             layout rather than once per scroll. See `ProposalControls`.
           */}
-          {answering && inOrder.length > 0 && (
+          {answering && drawn.length > 0 && (
             <ProposalControls
-              proposals={inOrder}
+              proposals={drawn}
               anchors={anchors}
               fallback={fallback}
               column={columnEl}
@@ -950,6 +1063,7 @@ function SheetPage({
   mark,
   pen,
   proposals,
+  changes,
   scale,
   room,
   keep,
@@ -961,6 +1075,8 @@ function SheetPage({
   mark: { file: string; id: string; from: number; to: number } | null
   pen: Pen | null
   proposals: readonly Proposal[]
+  /** What the disk did to each block, by the block's identity, or null while the disk is the reading. */
+  changes: ReadonlyMap<PlacedBlock, BlockChange> | null
   scale: number
   room: number
   keep: (el: HTMLElement | null) => void
@@ -1015,6 +1131,7 @@ function SheetPage({
              means something in a chapter it was not measured against. */
           mark={mark && mark.file === block.file ? mark : null}
           pen={pen}
+          change={changes?.get(block) ?? null}
         />
       ))}
       {!blocks.length && (
@@ -1022,6 +1139,21 @@ function SheetPage({
       )}
     </section>
   )
+}
+
+/**
+ * What changed, counted, for the words beside the control.
+ *
+ * Counts and not a list, because the row is read at 220 pixels and a sentence
+ * naming every paragraph would be the row. The files are in the title.
+ */
+function describe(comparison: Comparison): string {
+  const { gone, new: added, changed } = comparison.counts
+  const parts: string[] = []
+  if (changed) parts.push(`${changed} reworded`)
+  if (added) parts.push(`${added} new`)
+  if (gone) parts.push(`${gone} gone`)
+  return parts.length ? `changed on disk: ${parts.join(', ')}` : 'changed on disk'
 }
 
 /**

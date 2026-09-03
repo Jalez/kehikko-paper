@@ -7,6 +7,7 @@ import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { json, post, standIn, standingIn } from './api.ts'
+import { changedFiles, fingerprint } from './reader/changed.ts'
 
 /**
  * What this page can see, and the one place the wire and the papers meet.
@@ -142,6 +143,26 @@ function asStanding(value: unknown): Standing | null {
   return null
 }
 
+/**
+ * `/api/uncommitted`'s other half, checked the same way.
+ *
+ * A map of file to hash, `null` for "there is no paper on disk", and
+ * `undefined` for an answer that did not carry the field at all — an older
+ * server — which is not a change and must not be read as one. A page that
+ * took a missing field for an empty map would report every file it holds as
+ * gone, every four seconds, against a server that had simply not learned to
+ * say.
+ */
+function asHashes(value: unknown): Record<string, string> | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const out: Record<string, string> = {}
+  for (const [file, hash] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof hash === 'string') out[file] = hash
+  }
+  return out
+}
 
 /**
  * Which project an unframed page was told to stand in.
@@ -264,6 +285,42 @@ export function usePaper(framed: boolean) {
   const standingOn = useRef<string | null | undefined>(undefined)
 
   /**
+   * The paper as it now is on disk, when that is not what the page read.
+   *
+   * ## The page keeps its reading, and this is the other one
+   *
+   * `sight` holds the paper this page READ, and every offset on screen and
+   * every hash it sends with a write are about that reading. It is replaced
+   * when this page's own write lands and when the epic changes, and at no
+   * other time — see `standingOn` for why not on every context. So a file
+   * rewritten from outside, by an editor or a merge, left the page showing a
+   * version that no longer existed, indefinitely, with nothing on screen
+   * saying so.
+   *
+   * The reading is still kept. What is added is this: the standing poll now
+   * carries the disk's hashes, the page compares them with the reading's, and
+   * when they differ it fetches the paper as it now is and holds it HERE,
+   * beside the reading rather than in place of it. `app.tsx` lays the two
+   * over each other and the view draws the difference in red and green; the
+   * reading is replaced only when the reader presses the control that says
+   * so (`catchUp`). The reader does not lose their place and the page never
+   * flashes back to `asking`: nothing about `sight` changes on detection.
+   *
+   * `null` is the ordinary state — the disk is what the page read — and it is
+   * restored the moment the reading is replaced by anything, since a fresh
+   * reading is by definition the disk.
+   */
+  const [changed, setChanged] = useState<Paper | null>(null)
+  /**
+   * Which state of the disk `changed` was fetched for, as `fingerprint` names
+   * it, so a poll that finds the same hashes again does not fetch the paper
+   * again. The disk moving a second time changes the fingerprint and is
+   * fetched; the disk moving BACK to the reading — a checkout undone — clears
+   * both.
+   */
+  const askedFor = useRef<string | null>(null)
+
+  /**
    * Which project the last context put this page in.
    *
    * Three values for the same reason `standingOn` has three, and one extra
@@ -313,6 +370,10 @@ export function usePaper(framed: boolean) {
       return
     }
     setSight({ at: 'asking', epic })
+    /* A different paper has no comparison: whatever the disk did to the last
+       one is not a fact about this one. */
+    setChanged(null)
+    askedFor.current = null
     try {
       const body = await json('/api/paper', { epic })
       if (mine !== asking.current) return
@@ -556,6 +617,33 @@ export function usePaper(framed: boolean) {
   const showing = useRef<Paper | null>(null)
   showing.current = sight.at === 'reading' ? sight.paper : null
 
+  /** Whether a comparison is up, where a callback can reach it. Same reason as `showing`. */
+  const comparing = useRef<Paper | null>(null)
+  comparing.current = changed
+
+  /**
+   * A paper this page's own write handed back, put where it belongs.
+   *
+   * Ordinarily it REPLACES the reading: the write landed, the file is what
+   * this says, and every offset on screen should be about it. While a
+   * comparison is up the reading is deliberately held still for the reader to
+   * finish comparing, so a write that lands then — the Auto tick accepting a
+   * suggestion, which is the one write the view still allows — moves the
+   * DISK's side of the comparison instead. The reading stays what the reader
+   * was looking at; the disk side is now the file with that change in it,
+   * which is the truth; and the control still says what it says.
+   */
+  const landed = useCallback((paper: Paper) => {
+    if (comparing.current) {
+      askedFor.current = fingerprint(paper.hashes)
+      setChanged(paper)
+      return
+    }
+    setSight({ at: 'reading', paper })
+    setChanged(null)
+    askedFor.current = null
+  }, [])
+
   /**
    * Write one correction back into the `.tex` file, and catch the reading up.
    *
@@ -615,7 +703,7 @@ export function usePaper(framed: boolean) {
            a list measured against a file it has stopped believing in. */
         if (Array.isArray(body.proposals)) setProposals(body.proposals as Proposal[])
         if (body.ok === true && body.paper) {
-          setSight({ at: 'reading', paper: body.paper as Paper })
+          landed(body.paper as Paper)
           if (body.said) setSaid(String(body.said))
           /* The file just changed, so what Save would do just changed. Asked
              again now rather than waiting up to four seconds for the poll,
@@ -623,13 +711,13 @@ export function usePaper(framed: boolean) {
           askAgain()
           return null
         }
-        if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
+        if (body.paper) landed(body.paper as Paper)
         return String(body.error ?? 'That correction was not written.')
       } catch (e) {
         return `That correction could not be sent: ${(e as Error).message}`
       }
     },
-    [askAgain],
+    [askAgain, landed],
   )
 
   /**
@@ -674,6 +762,11 @@ export function usePaper(framed: boolean) {
              paragraph it has nothing to do with. */
           if (stopped) return
           if (Array.isArray(body.proposals)) setProposals(body.proposals as Proposal[])
+          /* The door measures the list against the disk before it answers —
+             see `remeasure` in `proposals.ts` — and says what that dropped. A
+             suggestion leaving the page while somebody was deciding about it
+             has to be said out loud, and this is the one place it is known. */
+          if (typeof body.said === 'string' && body.said) setSaid(body.said)
         })
         .catch(() => {
           /* Swallowed, like `point`'s refusal and for the same reason: the
@@ -731,6 +824,51 @@ export function usePaper(framed: boolean) {
              leave it where it was rather than become a button. */
           const read = asStanding(body.standing)
           if (read) setSaving(read)
+          /*
+           * The other half of the answer: what the disk holds, against what
+           * this page read. The comparison is `changedFiles`, and it is made
+           * against the reading on screen NOW rather than the one this effect
+           * closed over, because the reading is replaced by this page's own
+           * writes without this effect being restarted.
+           *
+           * A difference fetches the paper once per state of the disk — the
+           * fingerprint is what says "once" — and puts it in `changed`; no
+           * difference clears it, which is what happens when a checkout is
+           * undone or the author saves the file back to what it was. A fetch
+           * that fails, or that arrives after the disk has moved again, is
+           * dropped: the next tick asks again with the newer fingerprint.
+           */
+          const held = showing.current
+          const now = asHashes(body.hashes)
+          if (!held || now === undefined) return
+          if (!changedFiles(held.hashes, now).length) {
+            if (askedFor.current !== null) {
+              askedFor.current = null
+              setChanged(null)
+            }
+            return
+          }
+          const stamp = fingerprint(now)
+          if (askedFor.current === stamp) return
+          askedFor.current = stamp
+          void json('/api/paper', { epic: epicOnScreen })
+            .then((answer) => {
+              if (stopped || askedFor.current !== stamp) return
+              const reading = showing.current
+              if (!reading || answer.ok !== true || !answer.paper) return
+              const paper = answer.paper as Paper
+              /* Compared once more against what arrived, not against the
+                 hashes the poll reported: the file may have moved between the
+                 two requests, and what is drawn must be the difference between
+                 the reading and the paper actually held. */
+              setChanged(changedFiles(reading.hashes, paper.hashes).length ? paper : null)
+            })
+            .catch(() => {
+              /* Swallowed, as the poll's own failure is. The comparison is not
+                 drawn and the next tick that finds a different fingerprint
+                 tries again; the same fingerprint is not retried, so a paper
+                 that has vanished from the disk is asked about once. */
+            })
         })
         .catch(() => {
           /* Swallowed like the proposal poll's, and for the same reason: the
@@ -778,7 +916,7 @@ export function usePaper(framed: boolean) {
         const body = await post('/api/proposal', { epic: paper.epic }, { id, decision })
         const left = Array.isArray(body.proposals) ? (body.proposals as Proposal[]) : null
         if (left) setProposals(left)
-        if (body.paper) setSight({ at: 'reading', paper: body.paper as Paper })
+        if (body.paper) landed(body.paper as Paper)
         setSaid(body.ok === true ? String(body.said ?? '') : String(body.error ?? 'That suggestion was not answered.'))
         /*
          * The door's own answer, returned rather than only stored.
@@ -806,8 +944,37 @@ export function usePaper(framed: boolean) {
         askAgain()
       }
     },
-    [askAgain],
+    [askAgain, landed],
   )
+
+  /**
+   * Take the version on disk as the reading.
+   *
+   * ## The one way the comparison ends, and what it does to the rest
+   *
+   * The paper held in `changed` becomes `sight`; the comparison clears
+   * because there is nothing left to compare against. The reader's place is
+   * kept for the same reason it is kept across every other replacement of the
+   * paper — the scroll lives on the column and the column is not rebuilt.
+   *
+   * Nothing is asked of the server. The pending suggestions on screen were
+   * measured against the disk already, by the door, every time the list was
+   * polled during the comparison (`remeasure` in `proposals.ts`), and the
+   * ones that no longer fit the file were dropped then and said then, on the
+   * line under the paper. What changes here is only that the view draws them
+   * again, because the reading is now the file they were measured against.
+   * The standing poll is nudged so that the Save button and the hashes are
+   * confirmed against this new reading straight away rather than within four
+   * seconds.
+   */
+  const catchUp = useCallback(async (): Promise<void> => {
+    const next = comparing.current
+    if (!next) return
+    setSight({ at: 'reading', paper: next })
+    setChanged(null)
+    askedFor.current = null
+    askAgain()
+  }, [askAgain])
 
   /**
    * Accept everything waiting, oldest first.
@@ -946,8 +1113,26 @@ export function usePaper(framed: boolean) {
       busy,
       saving,
       save,
+      changed,
+      catchUp,
     }),
-    [sight, said, resize, point, pointed, start, correct, proposals, answerOne, acceptAll, busy, saving, save],
+    [
+      sight,
+      said,
+      resize,
+      point,
+      pointed,
+      start,
+      correct,
+      proposals,
+      answerOne,
+      acceptAll,
+      busy,
+      saving,
+      save,
+      changed,
+      catchUp,
+    ],
   )
 }
 

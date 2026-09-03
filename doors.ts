@@ -4,10 +4,11 @@ import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type
 import { MAX_EDIT_BYTES, sourceRefuses, whyNot } from './latex/edit.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
-import { drop, keep, pendingFor, proposalById, rebaseAll } from './proposals.ts'
+import { drop, keep, lostBecause, pendingFor, proposalById, rebaseAll, remeasure } from './proposals.ts'
 import {
   MAIN,
   PAPERS_AT,
+  hashesOf,
   isEpic,
   keepsPapers,
   listPapers,
@@ -635,6 +636,9 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         was,
         why,
         by: 'an agent',
+        /* Kept so the suggestion can be measured again if the file changes
+           under it before anybody answers — see `refile`. */
+        asked: { find, replace },
       })
       if (!filed.ok) return filed.why
       return (
@@ -671,13 +675,46 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       if (!isEpic(epic)) return 'that is not an epic name'
       const named = projectArg(args.project)
       if ('error' in named) return named.error
+      const gone = lostBecause(settled(named.project, epic))
       const held = pendingFor(named.project, epic)
-      if (!held.length) return 'Nothing is waiting on that paper.'
-      return held
-        .map((p) => `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}`)
-        .join('\n')
+      if (!held.length) return gone || 'Nothing is waiting on that paper.'
+      /* What was dropped is said first, because an agent reading the list to
+         learn "was mine accepted" has to be able to tell dropped from taken. */
+      return [...(gone ? [gone] : []), ...held.map((p) => `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}`)].join(
+        '\n',
+      )
     },
   },
+}
+
+/**
+ * The pending list, measured against the disk before it is read.
+ *
+ * ## Why every reader of the list goes through this
+ *
+ * `rebaseAll` keeps the list right across writes this process makes. This is
+ * the other half: a file rewritten by somebody else — an editor, a merge —
+ * leaves every proposal on it carrying a hash the door will refuse, and the
+ * only honest thing to hand a page or an agent is a list measured against the
+ * file as it now is. `remeasure` does the deciding; this is the wiring that
+ * gives it a file's hash and source, read fresh, and only for a file it asks
+ * about — a list whose hashes all still match costs no read at all.
+ *
+ * A read that changes what this process holds is a thing worth pausing on,
+ * and it is admitted because what changed is not a record but a MEASUREMENT.
+ * Nothing on the disk moves; a suggestion that was already un-acceptable
+ * becomes acceptable again where the quoted text still is, and is dropped
+ * where it is not. Deferring that to a write door would leave the list wrong
+ * for exactly as long as nobody pressed anything, which is the whole time a
+ * person spends reading. What it answers is the ones dropped, for the caller
+ * to say out loud.
+ */
+function settled(project: string, epic: string): { file: string; why: string }[] {
+  return remeasure(project, epic, (file) => {
+    const hash = hashesOf(epic, project)?.[file]
+    const source = readSource(epic, file, project)
+    return hash && source !== null ? { hash, source } : null
+  })
 }
 
 /** Rendered text of a run of segments, as one line. */
@@ -959,7 +996,11 @@ export function answer(
        waiting. The page polls this, and a refusal every four seconds while
        nobody has a project open would be a container that looks broken. */
     if (project === null) return ok({ ok: true, proposals: [] })
-    return ok({ ok: true, proposals: pendingFor(project, epic) })
+    /* Measured against the disk first — see `settled` — and what that dropped
+       rides along as a sentence, because a suggestion vanishing from a page
+       while somebody was deciding about it reads as the page losing it. */
+    const said = lostBecause(settled(project, epic))
+    return ok({ ok: true, proposals: pendingFor(project, epic), said })
   }
 
   /*
@@ -1213,14 +1254,35 @@ export function answer(
        is nowhere to have changed anything, so nothing is waiting. The page
        polls this and a refusal every four seconds would be a container that
        looks broken while a reader has simply not opened a project. */
-    if (project === null) return ok({ ok: true, standing: { at: 'nogit' } })
+    if (project === null) return ok({ ok: true, standing: { at: 'nogit' }, hashes: null })
     const dir = paperRoot(epic, project)
-    if (!dir) return ok({ ok: true, standing: { at: 'nogit' } })
-    /* The union as `git.ts` composed it, not flattened into a row of always-
-       present fields. The page draws a different control for each branch, and a
-       `files: []` sitting beside `at: 'refused'` is an empty list that means
-       nothing pretending to be one that means "none". */
-    return ok({ ok: true, standing: standing(dir) })
+    if (!dir) return ok({ ok: true, standing: { at: 'nogit' }, hashes: null })
+    /*
+     * Two answers to one question — "what has changed under this paper since
+     * I last looked?" — from the two things that can answer it.
+     *
+     * `standing` is git's: what would go into a commit. `hashes` is the
+     * disk's: what each file of the paper IS right now, keyed exactly as
+     * `Paper.hashes` is, so a page can lay the two side by side and learn
+     * that a chapter it is showing has been rewritten under it — by an
+     * editor, by a merge, by a checkout — without re-reading the paper on
+     * every tick to find out. That is the page's only way of hearing about a
+     * change this process did not make: nothing pushes, there is no watcher,
+     * and the paper door is deliberately not polled, because a paper is tens
+     * of kilobytes parsed and a hash is a line. See `hashesOf`.
+     *
+     * The two ride together rather than on two doors because they are read on
+     * the same tick for the same reason, and because they are the same
+     * question asked of two witnesses; a `standing` of `clean` beside hashes
+     * that differ from the page's is the reader's editor having committed for
+     * them, which is a thing worth being able to see in one answer.
+     *
+     * The union as `git.ts` composed it, not flattened into a row of always-
+     * present fields. The page draws a different control for each branch, and
+     * a `files: []` sitting beside `at: 'refused'` is an empty list that means
+     * nothing pretending to be one that means "none".
+     */
+    return ok({ ok: true, standing: standing(dir), hashes: hashesOf(epic, project) })
   }
 
   if (path === '/api/figure' && method === 'GET') {

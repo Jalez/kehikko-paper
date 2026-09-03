@@ -914,6 +914,64 @@ export function readPaper(epic: string, project: string | null): Paper | null {
 }
 
 /**
+ * What every file of a paper IS right now, as hashes and nothing else.
+ *
+ * ## Why this exists beside `readPaper`, which already answers it
+ *
+ * `readPaper` hands out `hashes` and could be called for them. It also parses
+ * every chapter, builds the label index and opens the bibliography, which is
+ * the right price for a paper somebody is about to read and the wrong price
+ * for a question asked every four seconds by every open page: "has anything I
+ * am showing moved on disk?" That question is answered by the bytes alone.
+ * So this reads the bytes, hashes them, and parses only `main.tex` — the one
+ * file that has to be parsed to know which other files the paper is made of.
+ *
+ * ## The same keys, by construction
+ *
+ * The page compares this answer against `Paper.hashes` file by file, so the
+ * two have to agree about which files a paper has: a file present in one and
+ * absent from the other would read as a change that never happened. The loop
+ * below is the same walk `readPaper` makes — `main.tex`, then each `\include`
+ * target that resolves inside the root, exists and is under the size bound —
+ * with the parse of the chapter left out. A chapter whose bytes cannot be
+ * read is absent here as it is there.
+ *
+ * `null` when there is no paper at all, which the page reads as "every file I
+ * hold has gone" only after it has failed to fetch the paper again; it is not
+ * an error and it is not a change to draw.
+ */
+export function hashesOf(epic: string, project: string | null): Record<string, string> | null {
+  if (!isEpic(epic)) return null
+  const root = paperRoot(epic, project)
+  if (!root) return null
+  const main = confine(root, MAIN)
+  if (!main || !existsSync(main)) return null
+
+  const hashes: Record<string, string> = {}
+  let source: string
+  try {
+    if (statSync(main).size > MAX_TEX_BYTES) return null
+    const bytes = readFileSync(main)
+    hashes[MAIN] = hashOf(bytes)
+    source = bytes.toString('utf8')
+  } catch {
+    return null
+  }
+  for (const target of includeTargets(source)) {
+    const relative = target.endsWith('.tex') ? target : `${target}.tex`
+    const child = confine(root, relative)
+    if (!child || !existsSync(child)) continue
+    try {
+      if (statSync(child).size > MAX_TEX_BYTES) continue
+      hashes[relative] = hashOf(readFileSync(child))
+    } catch {
+      continue
+    }
+  }
+  return hashes
+}
+
+/**
  * The bibliography a paper names, opened and parsed.
  *
  * Only the files the preamble names — `\addbibresource{references.bib}` in

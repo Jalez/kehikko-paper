@@ -6,6 +6,7 @@ import { standingIn } from './api.ts'
 import { autoApproveKey, autoApproveWas, rememberAutoApprove } from './remembered.ts'
 import { AskPopover } from './reader/ask.tsx'
 import { anchorId } from './reader/blocks.tsx'
+import { compare } from './reader/changed.ts'
 import { paginate, pageOf, visible } from './reader/pages.ts'
 import { PaginatedView } from './reader/paginated.tsx'
 import { isEcho, keyOf, pointedAt } from './reader/pointed.ts'
@@ -69,6 +70,8 @@ export function App() {
     busy,
     saving,
     save,
+    changed,
+    catchUp,
   } = usePaper(FRAMED)
   const root = useRef<HTMLElement | null>(null)
   /**
@@ -132,6 +135,16 @@ export function App() {
   const [editing, setEditing] = useState(false)
 
   const paper = sight.at === 'reading' ? sight.paper : null
+
+  /**
+   * The disk laid over the reading, when the two differ.
+   *
+   * Computed here and once, because it is a function of two papers the hook
+   * holds and the view only draws it. Memoised on both, so the LCS in
+   * `compare` runs when a reading is detected as moved and not on every
+   * scroll — the view re-renders on each page turn.
+   */
+  const comparison = useMemo(() => (paper && changed ? compare(paper, changed) : null), [paper, changed])
 
   /**
    * The last passage this module put on the canvas, so its echo can be known.
@@ -645,6 +658,8 @@ export function App() {
             onAuto={changeAuto}
             saving={saving}
             onSave={() => void save()}
+            comparison={comparison}
+            onCatchUp={() => void catchUp()}
           />
         ) : (
           <Screen sight={sight} onStart={(epic) => void start(epic)} />
