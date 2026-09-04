@@ -346,6 +346,55 @@ function isMarked(segment: Segment, mark: { from: number; to: number } | null): 
 }
 
 /**
+ * Where inside a marked run the mark actually falls, in the run's rendered
+ * text — or null when the whole run is the honest unit.
+ *
+ * ## The complaint, measured
+ *
+ * "The learning module doesn't seem to correctly highlight the passage." The
+ * learning module publishes the exact bytes of a question's quote — checked
+ * with this module's own parser over the thesis's thirty-seven questions — and
+ * this file painted the whole RUN those bytes fell in. A run is everything
+ * between two pieces of markup, so in a plain paragraph it is the paragraph,
+ * and a sentence pointed at in the middle of one came out marked with up to
+ * four hundred characters around it: twenty-five of the thirty-seven were
+ * widened by more than forty. The pointing was right and the painting was
+ * wide, which from the other container looks like the pointing being wrong.
+ *
+ * ## The same map a suggestion is drawn with
+ *
+ * `renderedRange` is the inverse of `place`: it turns a byte range of the file
+ * into a slice of the run's text, exactly inside a literal piece, snapped
+ * outward over a gap (one rendered space standing for a run of source
+ * whitespace has no offset inside it that means anything), and refused across
+ * anything derived. `withProposals` draws a change with it, and a mark is the
+ * same problem with nothing to replace, so it uses the same function rather
+ * than a second account of where bytes land on screen that could disagree.
+ *
+ * ## When the answer is null, the run is marked whole — as before
+ *
+ * A refusal — a derived run such as a citation's rendering, a run whose
+ * pieces no longer add up to its text after `stripPin` — means there is no
+ * honest cut, and the run keeps the class on its own span, which is what every
+ * mark did until now. So does a range that covers the run: cutting it would
+ * draw the same paint on an inner span for nothing. Nothing that was marked
+ * stops being marked; what changes is that a mark no longer spills over words
+ * the range never named. `data-marked` stays on the run either way, because it
+ * says which runs the range TOUCHED, which is what the block's margin rule and
+ * `dev/measure-marked.mjs` read.
+ */
+function markedSlice(run: Run, mark: { from: number; to: number }): { at: number; upto: number } | null {
+  let rendered = 0
+  for (const piece of run.pieces) rendered += piece.text.length
+  if (rendered !== run.text.length) return null
+  const where = renderedRange(run.pieces, mark.from, mark.to)
+  if ('why' in where) return null
+  if (where.upto <= where.at) return null
+  if (where.at <= 0 && where.upto >= run.text.length) return null
+  return where
+}
+
+/**
  * What the browser did to the text, undone, before it is compared to the file.
  *
  * A `contenteditable` region does not hold exactly what somebody typed. A space
@@ -491,7 +540,18 @@ function styled(
   proposals: readonly Proposal[],
 ): ReactNode {
   const proposed = withProposals(segment, proposals)
-  let node: ReactNode = proposed ?? segment.text
+  const marked = isMarked(segment, mark)
+  /* Cut only where nothing else is drawn in the run: a suggestion already
+     splits the text into its own pieces, and a mark cut across those would be
+     two accounts of one span's characters. Such a run stays marked whole. */
+  const cut = marked && mark && proposed === null ? markedSlice(segment, mark) : null
+  let node: ReactNode = proposed ?? (cut
+    ? <>
+        {segment.text.slice(0, cut.at)}
+        <span className="passage-mark">{segment.text.slice(cut.at, cut.upto)}</span>
+        {segment.text.slice(cut.upto)}
+      </>
+    : segment.text)
   for (const style of NESTING) {
     if (!segment.styles.includes(style)) continue
     const spec = INLINE[style]
@@ -513,7 +573,6 @@ function styled(
   } else if (proposed === null && segment.target) {
     node = <RefLink target={segment.target}>{node}</RefLink>
   }
-  const marked = isMarked(segment, mark)
   /*
    * `typeable`, and NOT `literal`. The two are different claims and the
    * difference is the whole of `coalesce`'s second essay: a paragraph whose
@@ -693,7 +752,7 @@ function styled(
           : undefined)
       }
       className={cn(
-        marked && 'passage-mark',
+        marked && !cut && 'passage-mark',
         typing !== null && (editable ? 'typeable' : speaks && 'not-typeable'),
       )}
     >
