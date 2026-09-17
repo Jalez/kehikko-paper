@@ -525,6 +525,56 @@ export function ProposalControls({
   const [placed, setPlaced] = useState<ReadonlyMap<string, Placed>>(NOWHERE)
   /* Which single change is drawn. See `nearestProposal`. */
   const [current, setCurrent] = useState<string | null>(null)
+  /* What to move to once the change being answered has actually gone. See
+     `answer` below. */
+  const advancing = useRef<{ answered: string; to: string } | null>(null)
+
+  /**
+   * Answer one, and line up the one after it.
+   *
+   * The reader is left where they were when a change is answered, and the
+   * change they answered is the one they were looking at — so what is in front
+   * of them afterwards is a paragraph with nothing to do in it, while the next
+   * suggestion may be several sheets down. Pressing Accept is the clearest
+   * statement a reader can make that they are working through these, so the
+   * next one is brought to them rather than waiting to be found.
+   *
+   * The SUCCESSOR is remembered, not the nearest. After the answered change is
+   * written out, the nearest remaining one may well be the one BEHIND the
+   * reader, which would walk them backwards through a list they are going
+   * forwards through. Wraps to the first still waiting when the last is
+   * answered, for the same reason `Next suggestion` wraps.
+   */
+  const answer = useCallback(
+    (id: string, decision: Decision) => {
+      const i = proposals.findIndex((p) => p.id === id)
+      const to = proposals[i + 1] ?? proposals.find((p) => p.id !== id)
+      advancing.current = to ? { answered: id, to: to.id } : null
+      answering.decide(id, decision)
+    },
+    [proposals, answering],
+  )
+
+  /* Deliberately waits for the answered change to LEAVE the list rather than
+     moving as soon as the button is pressed: the door is what decides, the
+     write can fail, and a reader scrolled away from a change that turned out
+     not to have been written would be the worst of both. Re-runs as the anchor
+     store fills, because after an accept the paper is re-read and the next
+     change's span is registered again some frames later. */
+  useEffect(() => {
+    const plan = advancing.current
+    if (!plan) return
+    if (proposals.some((p) => p.id === plan.answered)) return
+    const next = proposals.find((p) => p.id === plan.to)
+    if (!next) {
+      advancing.current = null
+      return
+    }
+    const at = anchors.get(next.id) ?? fallback(next)
+    if (!at) return
+    advancing.current = null
+    at.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [proposals, version, anchors, fallback])
 
   const look = useCallback(() => {
     if (!column) return
@@ -613,7 +663,7 @@ export function ProposalControls({
           total={proposals.length}
           placed={placed.get(proposal.id) ?? null}
           anchored={anchors.get(proposal.id) ? 'words' : 'block'}
-          decide={answering.decide}
+          decide={answer}
           busy={answering.busy}
           keep={(el) => {
             if (el) cards.current.set(proposal.id, el)

@@ -466,6 +466,53 @@ describe('x of y, beside the buttons', () => {
     for (const c of cards()) expect(counts(c)).toEndWith('of 3')
   })
 
+  test('answering one moves to the next, and only once it has gone', () => {
+    /* The reader is left where they were when a change is answered, and what
+       is in front of them is the paragraph they have just finished with. This
+       is the move to the next one. It waits for the door: pressing Accept does
+       not scroll, the change leaving the list does. */
+    const wiring = answering()
+    const all = three()
+    const view = (proposals: Proposal[]) => (
+      <PaginatedView
+        paper={fixture()}
+        walk={null}
+        mark={null}
+        rootRef={ref()}
+        proposals={proposals}
+        answering={wiring.answering}
+        onPen={() => {}}
+        pen={null}
+        onAuto={() => {}}
+      />
+    )
+    const { rerender } = render(view(all))
+    const one = card()
+    expect(one.getAttribute('data-proposal')).toBe('p-A claim')
+
+    const asked: Element[] = []
+    const proto = Element.prototype as unknown as { scrollIntoView: unknown }
+    const had = proto.scrollIntoView
+    proto.scrollIntoView = function (this: Element) {
+      asked.push(this)
+    }
+    try {
+      const buttons = Array.from(one.querySelectorAll<HTMLButtonElement>('[data-slot="button-group"] button'))
+      fireEvent.click(buttons[0]!)
+      expect(wiring.answered).toEqual([{ id: 'p-A claim', decision: 'accept' }])
+      /* Nothing has moved: the door has not said it wrote anything, and a
+         reader scrolled away from a change that failed to write would be the
+         worst of both. */
+      expect(asked).toHaveLength(0)
+      /* The door writes it, and the change leaves the list. */
+      rerender(view(all.filter((p) => p.id !== 'p-A claim')))
+      expect(asked).toHaveLength(1)
+      expect(asked[0]!.closest('[data-has-proposals]')).not.toBeNull()
+    } finally {
+      proto.scrollIntoView = had
+    }
+  })
+
   test('Next suggestion is in the chrome row and moves to the one after', () => {
     /* Only the nearest change is drawn, so the others have no card until they
        are reached. This is the control that reaches them. happy-dom has no
