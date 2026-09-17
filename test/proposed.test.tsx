@@ -397,12 +397,20 @@ describe('what is waiting, and the one control that answers all of it', () => {
     expect(countAll()).toBe(1)
   })
 
-  test('two suggestions in two paragraphs get one control each', () => {
-    draw([
+  test('two suggestions in two paragraphs get ONE control, not one each', () => {
+    /* Both are marked in the prose; only the one the reader is nearest is
+       drawn. happy-dom lays nothing out, so every anchor reports the same
+       rectangle and `nearestProposal` falls back to the first in document
+       order — which is the paragraph with the typo. */
+    const { container } = draw([
       about('tpyo', 'typo'),
       about('prose after them', 'the prose after them', 'It reads better.'),
     ])
-    expect(cards()).toHaveLength(2)
+    expect(cards()).toHaveLength(1)
+    expect(cards()[0]!.getAttribute('data-proposal')).toBe('p-tpyo')
+    /* And nothing about the marking changed: both paragraphs still say they
+       have something suggested about them. */
+    expect(container.querySelectorAll('[data-has-proposals]')).toHaveLength(2)
   })
 })
 
@@ -434,14 +442,19 @@ describe('x of y, beside the buttons', () => {
   test('it counts down the paper, not up the filing order', () => {
     const { container } = draw(three())
     /* Heading first, then the first paragraph, then the second — which is the
-       order these blocks appear in the fixture and not the order `at` gives. */
-    const counted = cards().map(counts)
-    expect(counted.sort()).toEqual(['1 of 3', '2 of 3', '3 of 3'])
-    const byId = new Map(cards().map((c) => [c.getAttribute('data-proposal'), counts(c)]))
+       order these blocks appear in the fixture and not the order `at` gives.
+       Only the nearest is drawn, and with nothing laid out that is the first in
+       DOCUMENT order, the heading's. That single card is enough to hold the
+       join: filed third in this fixture, it would read "3 of 3" if the ordinal
+       came from the filing order, and it reads "1 of 3". */
+    const drawn = cards()
+    expect(drawn).toHaveLength(1)
+    const byId = new Map(drawn.map((c) => [c.getAttribute('data-proposal'), counts(c)]))
     expect(byId.get('p-A claim')).toBe('1 of 3')
-    expect(byId.get('p-tpyo')).toBe('2 of 3')
-    expect(byId.get('p-prose after them')).toBe('3 of 3')
-    /* And nothing about the paper moved to make that true. */
+    /* The y is still every waiting change, not the one drawn. */
+    expect(counts(drawn[0]!)).toEndWith('of 3')
+    /* And nothing about the paper moved to make that true: all three
+       paragraphs still carry their mark. */
     expect(container.querySelectorAll('[data-has-proposals]')).toHaveLength(3)
   })
 
@@ -453,16 +466,46 @@ describe('x of y, beside the buttons', () => {
     for (const c of cards()) expect(counts(c)).toEndWith('of 3')
   })
 
+  test('Next suggestion is in the chrome row and moves to the one after', () => {
+    /* Only the nearest change is drawn, so the others have no card until they
+       are reached. This is the control that reaches them. happy-dom has no
+       scrolling, so what is held here is the wiring — that the button exists
+       beside the count, and that pressing it asks the NEXT change's anchor,
+       not the drawn one's, to come into view. */
+    const { container } = draw(three())
+    const next = container.querySelector<HTMLButtonElement>('[data-next-proposal]')!
+    expect(next).not.toBeNull()
+    expect(next.textContent).toContain('Next suggestion')
+    const asked: Element[] = []
+    const proto = Element.prototype as unknown as { scrollIntoView: unknown }
+    const had = proto.scrollIntoView
+    proto.scrollIntoView = function (this: Element) {
+      asked.push(this)
+    }
+    try {
+      fireEvent.click(next)
+    } finally {
+      proto.scrollIntoView = had
+    }
+    /* Exactly one thing was asked to come into view, and it is inside a block
+       that has something suggested about it — the next change, not the drawn
+       one's card. */
+    expect(asked).toHaveLength(1)
+    expect(asked[0]!.closest('[data-has-proposals]')).not.toBeNull()
+  })
+
   test('the word “changes” is said where it costs no line', () => {
     /* Not in the visible text: at 220 pixels it is what pushes the count onto a
        line of its own. In the title and in the group's accessible name, which
        is the same move the page readout's caveat made. */
     draw(three())
-    const one = cards().find((c) => c.getAttribute('data-proposal') === 'p-tpyo')!
+    /* The drawn one, which is the first in document order — see the test
+       above for why only one is drawn. */
+    const one = cards().find((c) => c.getAttribute('data-proposal') === 'p-A claim')!
     const count = one.querySelector<HTMLElement>('.proposal-count')!
-    expect(count.textContent).toBe('2 of 3')
-    expect(count.title).toContain('2nd of 3 suggested changes')
-    expect(one.getAttribute('aria-label')).toContain('Suggested change 2 of 3')
+    expect(count.textContent).toBe('1 of 3')
+    expect(count.title).toContain('1st of 3 suggested changes')
+    expect(one.getAttribute('aria-label')).toContain('Suggested change 1 of 3')
   })
 })
 

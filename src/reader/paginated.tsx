@@ -21,7 +21,7 @@ import type { Proposal } from '../../latex/propose.ts'
 import type { Standing } from '../../git.ts'
 import { Reading } from './anchor.ts'
 import { BlockRow, anchorId, covers, type Pen } from './blocks.tsx'
-import { Anchoring, NO_PROPOSALS, ProposalControls, anchorStore, type Answering } from './proposed.tsx'
+import { Anchoring, NO_PROPOSALS, ProposalControls, anchorStore, nearestProposal, type Answering } from './proposed.tsx'
 import { PAGE, pageOf, paginate } from './pages.ts'
 
 /**
@@ -788,6 +788,40 @@ export function PaginatedView({
               <span className="text-[0.7rem] text-[var(--mark)]">
                 {inOrder.length} suggested
               </span>
+              {/*
+                Where the next one is, which is the one thing the count cannot
+                say. Only the change the reader is nearest is drawn now, so the
+                others are marked in the prose and have no card until they are
+                reached — and on a paper of 2,437 blocks the next one may be
+                several sheets away. This scrolls it to the middle of the
+                column, which is the same middle `nearestProposal` measures
+                from, so the change this lands on is the change that then draws
+                its card. Wraps at the end rather than going dead, because the
+                reader who answers the last one is usually going back for the
+                ones they skipped.
+              */}
+              <Button
+                type="button"
+                variant="outline"
+                size="container"
+                className="text-[0.7rem] font-normal text-muted-foreground"
+                data-next-proposal=""
+                onClick={() => {
+                  if (!columnEl) return
+                  const here = nearestProposal(inOrder, anchors, fallback, columnEl)
+                  const i = inOrder.findIndex((p) => p.id === here)
+                  const next = inOrder[(i + 1) % inOrder.length]
+                  if (!next) return
+                  const at = anchors.get(next.id) ?? fallback(next)
+                  at?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+                }}
+                title={
+                  'Scroll the next suggested change into the middle of the column. Only the change nearest the '
+                  + 'middle is drawn, so this is what opens the one after this. Wraps round at the last.'
+                }
+              >
+                Next suggestion
+              </Button>
               {inOrder.length > 1 && (
                 <Button
                   type="button"

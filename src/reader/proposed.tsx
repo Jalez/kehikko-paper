@@ -458,6 +458,50 @@ const NOWHERE: ReadonlyMap<string, Placed> = new Map()
  * None of these can loop: a card's position affects neither the anchors nor
  * the card's size, and the placement is a pure function of those two.
  */
+/**
+ * Which suggestion the reader is nearest, and therefore the only one drawn.
+ *
+ * The card used to be drawn for every waiting change at once, with
+ * `placeCards` keeping them off each other — above the words, below them when
+ * there was no room, pushed down and stripped of its arrow when even that
+ * collided. That packing was the whole reason the `why` sentence was clamped
+ * to two lines: a tall card had neighbours to land on.
+ *
+ * Only the nearest one is drawn now, so a card has nothing to collide with and
+ * can say its whole reason. `placeCards` is still what places it, because rules
+ * one and two — inside the column, and below the words when there is nothing
+ * above them on the sheet — are about the sheet and not about other cards, and
+ * they still apply to a single card.
+ *
+ * Nearest is measured from the middle of the COLUMN, not of the window: the
+ * column is what scrolls, and its middle is where a reader's eye is when they
+ * have scrolled a change into view. Falls back to the first change in document
+ * order when nothing has been drawn into the prose yet, so there is always a
+ * card to answer rather than a blank wait for the first measurement.
+ */
+export function nearestProposal(
+  proposals: readonly Proposal[],
+  anchors: Anchors,
+  fallback: (proposal: Proposal) => HTMLElement | null,
+  column: HTMLElement,
+): string | null {
+  const col = column.getBoundingClientRect()
+  const middle = col.top + col.height / 2
+  let best: string | null = null
+  let bestGap = Infinity
+  for (const p of proposals) {
+    const at = anchors.get(p.id) ?? fallback(p)
+    if (!at) continue
+    const r = at.getBoundingClientRect()
+    const gap = Math.abs(r.top + r.height / 2 - middle)
+    if (gap < bestGap) {
+      bestGap = gap
+      best = p.id
+    }
+  }
+  return best ?? proposals[0]?.id ?? null
+}
+
 export function ProposalControls({
   proposals,
   anchors,
@@ -479,6 +523,39 @@ export function ProposalControls({
   const version = useSyncExternalStore(anchors.subscribe, anchors.version, anchors.version)
   const cards = useRef(new Map<string, HTMLElement>())
   const [placed, setPlaced] = useState<ReadonlyMap<string, Placed>>(NOWHERE)
+  /* Which single change is drawn. See `nearestProposal`. */
+  const [current, setCurrent] = useState<string | null>(null)
+
+  const look = useCallback(() => {
+    if (!column) return
+    setCurrent(nearestProposal(proposals, anchors, fallback, column))
+  }, [column, proposals, anchors, fallback])
+
+  useLayoutEffect(look, [look, version, laidOut])
+
+  /* Scrolling moves the words past the column's middle without telling React,
+     so the one measurement that has to follow the scroll is this one. Read in a
+     frame rather than in the scroll event: `getBoundingClientRect` on every
+     anchor is a forced layout, and a reader flicking down the paper fires
+     scroll far faster than they can read. */
+  useEffect(() => {
+    if (!column) return
+    let frame = 0
+    const onScroll = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        look()
+      })
+    }
+    column.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      column.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [column, look])
 
   const place = useCallback(() => {
     if (!column) return
@@ -509,7 +586,7 @@ export function ProposalControls({
     setPlaced(new Map(ids.map((id, i) => [id, out[i]!])))
   }, [column, proposals, anchors, fallback])
 
-  useLayoutEffect(place, [place, version, laidOut])
+  useLayoutEffect(place, [place, version, laidOut, current])
 
   useEffect(() => {
     if (!column) return
@@ -524,11 +601,11 @@ export function ProposalControls({
       ro.disconnect()
       column.removeEventListener('load', place, true)
     }
-  }, [column, place])
+  }, [column, place, current])
 
   return (
     <>
-      {proposals.map((proposal, i) => (
+      {proposals.map((proposal, i) => proposal.id !== current ? null : (
         <ProposalCard
           key={proposal.id}
           proposal={proposal}

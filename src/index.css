@@ -605,13 +605,12 @@
 
   .proposal-why {
     color: var(--muted-foreground);
-    /* Two lines at most. The door bounds the sentence at 240 characters, and a
-       control that grew to five lines would cover the paragraph above the one
-       it is about as well as the one below it. */
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    /* The whole sentence, however many lines it takes. It used to be clamped to
+       two, because a card that grew to five lines would cover the paragraph
+       above the one it is about as well as the one below it. Only one card is
+       drawn now — the one the reader is nearest — so there is no second card
+       for a tall one to collide with, and the reason a reader is being asked to
+       approve something is not a thing to show them half of. */
     /* A 240-character sentence with a path or a URL in it has to wrap somewhere,
        and the one place it must not go is sideways past the edge of the card. */
     overflow-wrap: anywhere;
