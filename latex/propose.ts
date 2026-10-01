@@ -60,6 +60,59 @@ export interface Proposal {
   by: string
   /** When it arrived, so the page can order several of them. */
   at: number
+  /**
+   * What the proposer literally asked for, kept so the proposal can be
+   * measured AGAIN.
+   *
+   * `from`, `to`, `text` and `was_text` are the narrowed answer to "replace
+   * this text with that text", and they are the right thing to draw and to
+   * write. They are the wrong thing to keep when the file has been rewritten by
+   * somebody this process did not see — an author in a real editor, a merge —
+   * because there is no arithmetic that moves a byte range across a change
+   * whose shape nobody knows. What CAN be done is what was done the first time:
+   * find the quoted text in the file as it now is, exactly once, and narrow it
+   * again. `refile` does that, and this is the only reason the pair is kept.
+   *
+   * Optional, because a proposal is a value a test can build by hand and a
+   * field every fixture has to invent is a field that will be invented wrongly;
+   * a proposal without it cannot be measured again and is dropped instead,
+   * which is the answer it would have got before this field existed.
+   */
+  asked?: { find: string; replace: string }
+}
+
+/**
+ * The same proposal, measured against a file that changed under it — or
+ * `null`, when it no longer describes anything in that file.
+ *
+ * ## This is the answer to an OUTSIDE change, and `rebase` is not
+ *
+ * `rebase` shifts a range by the length of an edit this process made itself,
+ * which is exact and needs no search. An author saving a chapter from their
+ * editor, or a `git merge` landing, is a change with no known shape: the hash
+ * on the proposal stops matching the file and nothing here knows what moved.
+ * Every pending proposal on that file is then refused by `writeRange`, exactly
+ * as it should be, and would sit on the page un-acceptable forever.
+ *
+ * So it is filed AGAIN, by the same rule the door applied when it was filed
+ * the first time: the text the proposer quoted has to appear in the file
+ * exactly once, and the differing middle of it is the range. That is not the
+ * "re-diff against the new file" guess that `rebase`'s essay refuses — that
+ * guess searched for the narrowed text, which is often one word and lands on
+ * any of its occurrences. This searches for the whole quoted window and
+ * refuses ambiguity, so a proposal that survives is about the one place its
+ * window still names. A proposal whose window is gone — because the author
+ * rewrote the sentence, or applied the very change themselves — is dropped,
+ * and the page says so.
+ *
+ * Restamped with the file's hash so the door will accept it. That is the
+ * right stamp, because these offsets were just measured against that file.
+ */
+export function refile(proposal: Proposal, source: string, hash: string): Proposal | null {
+  if (!proposal.asked) return null
+  const again = propose(source, proposal.asked.find, proposal.asked.replace)
+  if ('why' in again) return null
+  return { ...proposal, from: again.from, to: again.to, text: again.text, was_text: again.was_text, was: hash }
 }
 
 /**
