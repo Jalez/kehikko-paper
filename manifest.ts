@@ -229,7 +229,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
        about the disk. An `about` still promising a machine-wide list would have
        an agent call `list_papers` with no project and read the refusal as a
        fault in the module. */
-    about: 'The papers in a project: which epics have one, and the prose or the raw source of any section.',
+    about: 'The papers in a project: which epics have one, their sections, and the prose or the raw source of any section.',
   },
   extensions: { emits: [], consumes: [] },
   declares: {

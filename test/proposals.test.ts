@@ -104,7 +104,7 @@ describe('nothing an agent can reach writes', () => {
   test('the MCP door offers exactly these tools, and only one of them is not a read', () => {
     const reply = answer('POST', '/mcp', new URLSearchParams(), { jsonrpc: '2.0', id: 1, method: 'tools/list' })
     const names = ((reply?.body as { result: { tools: { name: string }[] } }).result.tools).map((t) => t.name)
-    expect(names.sort()).toEqual(['list_papers', 'list_proposals', 'propose_edit', 'read_paper', 'read_source'])
+    expect(names.sort()).toEqual(['list_papers', 'list_proposals', 'list_sections', 'propose_edit', 'read_paper', 'read_source'])
   })
 
   test('proposing leaves the file byte-identical', () => {

@@ -166,6 +166,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
     expect(tools.sort()).toEqual([
       'list_papers',
       'list_proposals',
+      'list_sections',
       'propose_edit',
       'read_paper',
       'read_source',
@@ -298,6 +299,23 @@ describe('the MCP door', () => {
     expect(text).not.toContain('\\begin{document}')
   })
 
+  test('list_sections names each heading by project-relative path, title, level and span', () => {
+    const reply = post('/mcp', {
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: { name: 'list_sections', arguments: { project: roadmap, epic: 'a-paper' } },
+    })
+    const text = (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
+    const sections = JSON.parse(text) as { path: string; title: string; level: number; from: number; to: number }[]
+    expect(sections).toHaveLength(1)
+    const [only] = sections
+    expect(only).toMatchObject({ path: '.kehikot/paper/a-paper/main.tex', title: 'A claim' })
+    expect(typeof only!.level).toBe('number')
+    /* No later heading, so the span runs to the end of what the file holds. */
+    expect(only!.to).toBeGreaterThan(only!.from)
+  })
+
   test('read_source answers markup, because an edit cannot be made from prose', () => {
     const reply = post('/mcp', {
       jsonrpc: '2.0',
@@ -316,7 +334,7 @@ describe('the MCP door', () => {
      * papers" is right until there are two — and a tool that guessed would
      * answer confidently about a paper nobody asked for.
      */
-    for (const name of ['list_papers', 'read_paper', 'read_source']) {
+    for (const name of ['list_papers', 'read_paper', 'read_source', 'list_sections']) {
       const reply = post('/mcp', {
         jsonrpc: '2.0',
         id: 9,
