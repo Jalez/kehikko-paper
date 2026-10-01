@@ -21,7 +21,7 @@
     "lucide-react": "^1.37.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "roadmap-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#feat/passage-section",
+    "roadmap-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#main",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
