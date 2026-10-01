@@ -22,7 +22,7 @@ import type { Standing } from '../../git.ts'
 import { Reading } from './anchor.ts'
 import { BlockRow, anchorId, covers, type Pen } from './blocks.tsx'
 import { Anchoring, NO_PROPOSALS, ProposalControls, anchorStore, nearestProposal, type Answering } from './proposed.tsx'
-import { PAGE, pageOf, paginate } from './pages.ts'
+import { PAGE, pageOf, paginate, sectionAt } from './pages.ts'
 
 /**
  * The reading view: every page of the paper, at A4, in one scrolling column.
@@ -162,8 +162,15 @@ export interface PaginatedProps {
    * The file is reported with it rather than derived above, and for the reason
    * everything else in this file is measured rather than assumed: which file a
    * sheet started in is a property of the packing, and the packing is here.
+   *
+   * The section is reported here too, for the same reason: which heading the
+   * top of a sheet is under is a property of where the sheets broke.
    */
-  onSheet?: (sheet: { page: number; file: string | null }) => void
+  onSheet?: (sheet: {
+    page: number
+    file: string | null
+    section: { title: string; from: number; to: number } | null
+  }) => void
   /**
    * What a finished edit does, or `null` for a paper that is only read.
    *
@@ -316,9 +323,16 @@ export function PaginatedView({
   const told = useRef(onSheet)
   told.current = onSheet
   const file = pages[at]?.[0]?.file ?? null
+  const here = useMemo(() => sectionAt(paper, pages, at), [paper, pages, at])
+  /* Compared by value: a write replaces the paper and rebuilds `here`, and a
+     sheet whose section did not change has nothing new to report. */
+  const title = here?.title ?? null
+  const from = here?.from ?? null
+  const to = here?.to ?? null
   useEffect(() => {
-    told.current?.({ page: at + 1, file })
-  }, [at, file])
+    const section = title === null || from === null || to === null ? null : { title, from, to }
+    told.current?.({ page: at + 1, file, section })
+  }, [at, file, title, from, to])
 
   /*
    * The column, kept in STATE as well as in the ref, and only for the controls.

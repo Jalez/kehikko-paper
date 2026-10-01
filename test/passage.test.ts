@@ -48,6 +48,7 @@ describe('the three rungs, and no fourth', () => {
       from: null,
       to: null,
       quoted: '',
+      section: null,
     })
   })
 

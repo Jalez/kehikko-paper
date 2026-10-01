@@ -1,4 +1,5 @@
-import type { PlacedBlock } from '../../store.ts'
+import { plainText, spanOf } from '../../latex/parse.ts'
+import type { Paper, PlacedBlock } from '../../store.ts'
 
 /**
  * The page, and where the pages break.
@@ -343,4 +344,50 @@ export function pageOf(
   id: string,
 ): number {
   return pages.findIndex((page) => page.some((b) => b.file === file && b.id === id))
+}
+
+/** A heading the reader is under, with its byte span in that heading's file. */
+export interface SectionHere {
+  /** Relative to `paper.dir`, as on every block. */
+  file: string
+  title: string
+  from: number
+  to: number
+}
+
+/**
+ * The section the TOP of sheet `at` is under, or null.
+ *
+ * The last heading on any earlier sheet, unless sheet `at` itself opens on a
+ * heading. A heading half-way down a sheet does not count yet: the reader is
+ * still reading the end of the previous section above it, and a section that
+ * flipped the moment a heading came into view would announce the next chapter
+ * while the last one is still on screen.
+ *
+ * Null when the heading is in another file than the sheet starts in — the
+ * passage names the sheet's file, and a section of a different file under
+ * that path would be a claim about bytes that are not there.
+ *
+ * The span runs to the next heading of ANY level in the same file, else to
+ * the end of what that file holds. Any level, because a link is to the words
+ * under one heading and not to its subsections too.
+ */
+export function sectionAt(
+  paper: Pick<Paper, 'blocks'>,
+  pages: readonly (readonly PlacedBlock[])[],
+  at: number,
+): SectionHere | null {
+  const sheet = pages[at]
+  if (!sheet) return null
+  let heading: PlacedBlock | null = null
+  for (let i = 0; i < at; i++) {
+    for (const block of pages[i] ?? []) if (block.kind === 'heading') heading = block
+  }
+  if (sheet[0]?.kind === 'heading') heading = sheet[0]
+  if (!heading || heading.kind !== 'heading') return null
+  if (heading.file !== sheet[0]?.file) return null
+
+  const title = plainText(heading.segments)
+  if (!title) return null
+  return { file: heading.file, title, ...spanOf(paper.blocks, heading) }
 }

@@ -8,7 +8,7 @@ import { AskPopover } from './reader/ask.tsx'
 import { anchorId } from './reader/blocks.tsx'
 import { paginate, pageOf, visible } from './reader/pages.ts'
 import { PaginatedView } from './reader/paginated.tsx'
-import { isEcho, keyOf, pointedAt } from './reader/pointed.ts'
+import { keyOf, received } from './reader/pointed.ts'
 import { plain } from './reader/segments.tsx'
 import { usePaper, type Sight } from './use-paper.ts'
 import { usePublishedPassage, type Sheet } from './use-published-passage.ts'
@@ -93,7 +93,7 @@ export function App() {
    * state change rather than two, which matters because every change of it is
    * a candidate broadcast to every container on the canvas.
    */
-  const [sheet, setSheet] = useState<Sheet>({ page: 1, file: null })
+  const [sheet, setSheet] = useState<Sheet>({ page: 1, file: null, section: null })
   /**
    * The range somebody else is pointing at, drawn in the paper.
    *
@@ -221,10 +221,9 @@ export function App() {
      * the essay on `isEcho`. It is dropped here rather than in that file
      * because the ref is the state and that file has none.
      */
-    const own = isEcho(mine.current, pointed)
+    const { own, answer } = received(paper, pointed, mine.current)
     if (!own) mine.current = null
 
-    const answer = pointedAt(paper, pointed)
     if (answer.at === 'nowhere') {
       walkedFor.current = null
       setMark(null)

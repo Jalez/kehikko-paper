@@ -1,4 +1,4 @@
-import { LIMITS, type Passage as WirePassage } from 'roadmap-module-protocol'
+import { LIMITS, type Passage as WirePassage, type Section } from 'roadmap-module-protocol'
 import { useEffect, useRef } from 'react'
 
 import type { Paper } from '../store.ts'
@@ -58,6 +58,11 @@ export interface Sheet {
   page: number
   /** Relative to `paper.dir`, or null when the page holds nothing placed. */
   file: string | null
+  /**
+   * The heading the top of this sheet is under, with its span in `file`.
+   * Optional so a caller that knows no sections need not say so.
+   */
+  section?: { title: string; from: number; to: number } | null
 }
 
 /**
@@ -101,7 +106,14 @@ export function passageFor(
   const path = join(paper.dir, file)
   if (path.length > LIMITS.PATH) return null
 
-  if (!highlighted) return { path, page: sheet.page, from: null, to: null, quoted: '' }
+  /* Where the reader is, beside what they point at — never instead of it, and
+     never a mark: `from`/`to` alone say "this text". A title over the quote
+     limit is dropped, not clipped, since a clipped title matches no heading. */
+  const at = sheet.section ?? null
+  const section: Section | null =
+    at && at.title.length >= 1 && at.title.length <= LIMITS.QUOTE ? { title: at.title, from: at.from, to: at.to } : null
+
+  if (!highlighted) return { path, page: sheet.page, from: null, to: null, quoted: '', section }
 
   /**
    * The quote, or nothing, and never a piece of one.
@@ -124,6 +136,7 @@ export function passageFor(
     from: highlighted.srcStart,
     to: highlighted.srcEnd,
     quoted,
+    section,
   }
 }
 
@@ -141,7 +154,20 @@ function join(dir: string, file: string): string {
  */
 function same(a: WirePassage | null, b: WirePassage | null): boolean {
   if (a === null || b === null) return a === b
-  return a.path === b.path && a.page === b.page && a.from === b.from && a.to === b.to && a.quoted === b.quoted
+  return (
+    a.path === b.path && a.page === b.page && a.from === b.from && a.to === b.to && a.quoted === b.quoted
+    && sameSection(a.section ?? null, b.section ?? null)
+  )
+}
+
+function sameSection(a: Section | null, b: Section | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.title === b.title && a.from === b.from && a.to === b.to
+}
+
+/** The section as part of the effect's key, so a change of heading alone re-runs it. */
+function sectionKey(section: Section | null | undefined): string {
+  return section ? `${section.from}\0${section.to}\0${section.title}` : ''
 }
 
 /**
@@ -222,7 +248,7 @@ export function usePublishedPassage(
      effect depending on it by identity would fire on every render — and the
      first thing it would do is find it equal and do nothing, which works and
      leaves a timer being set and cleared forever behind somebody's reading. */
-  const key = next === null ? '' : `${next.path} ${next.page} ${next.from} ${next.to} ${next.quoted}`
+  const key = next === null ? '' : `${next.path} ${next.page} ${next.from} ${next.to} ${next.quoted} ${sectionKey(next.section)}`
 
   const latest = useRef(next)
   latest.current = next
