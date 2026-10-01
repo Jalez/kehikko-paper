@@ -1,5 +1,6 @@
 import type { Passage } from 'roadmap-module-protocol'
 
+import { plainText } from '../../latex/parse.ts'
 import type { Paper, PlacedBlock } from '../../store.ts'
 import { visible } from './pages.ts'
 
@@ -86,7 +87,13 @@ export type Pointed =
  * there is no equality without one spelling.
  */
 export function keyOf(passage: Passage): string {
-  return `${passage.path} ${passage.page ?? ''} ${passage.from ?? ''} ${passage.to ?? ''}`
+  /* The section's TITLE is part of it, and not its span. Two section passages
+     with no range and no page (a slides container sends `page: null`) differ
+     only by title: without it, the walk stamp in `app.tsx` would refuse to turn
+     to the second section pressed, and an echo record would swallow somebody
+     else pointing at another heading of the page this reader is on. The span
+     is left out for the quote's reason — a sender may not know it. */
+  return `${passage.path} ${passage.page ?? ''} ${passage.from ?? ''} ${passage.to ?? ''} ${passage.section?.title ?? ''}`
 }
 
 /**
@@ -276,7 +283,23 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
    * nothing is marked" — was the app narrating its own plumbing at somebody
    * reading a thesis.
    */
-  if (!range) return { at: 'holding', file: block.file }
+  if (!range) {
+    const section = passage.section ?? null
+    if (!section) return { at: 'holding', file: block.file }
+    /* A section named without a range: turn to its heading and mark only the
+       heading line. A title this paper does not hold — renamed, or never here —
+       stays put rather than saying "elsewhere": the FILE is open, and only the
+       link is stale. */
+    const heading = headingFor(paper, file, section)
+    if (!heading) return { at: 'holding', file: block.file }
+    return {
+      at: 'here',
+      file: heading.file,
+      id: heading.id,
+      mark: { file: heading.file, id: heading.id, from: heading.srcStart, to: heading.srcEnd },
+      said: `Something pointed at the section “${section.title}” of ${file}.`,
+    }
+  }
 
   return {
     at: 'here',
@@ -285,4 +308,44 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
     mark: { file: block.file, id: block.id, ...range },
     said: `Something pointed at ${file}, bytes ${range.from}–${range.to}. It is marked below.`,
   }
+}
+
+/**
+ * The heading a section names, by its words.
+ *
+ * Title first, because that is what survives edits above it; the span only
+ * breaks a tie between two headings with the same words ("Discussion" in two
+ * chapters of one file), and when it matches neither the first one wins.
+ */
+export function headingFor(
+  paper: Paper,
+  file: string,
+  section: { title: string; from: number | null },
+): PlacedBlock | null {
+  const named = paper.blocks.filter(
+    (b) => b.file === file && b.kind === 'heading' && plainText(b.segments) === section.title,
+  )
+  return named.find((b) => b.srcStart === section.from) ?? named[0] ?? null
+}
+
+/**
+ * A passage arriving, decided: is it ours, and what to do about it.
+ *
+ * Our own section coming back is NOT a request to turn to that heading. It is
+ * what this module said on a page turn — "the reader is under this heading" —
+ * and answering it would walk the reader back to the top of the section they
+ * are scrolling through, then mark it. So an echo with no range holds. An echo
+ * WITH a range keeps its `here`: `app.tsx` draws that mark and does not move.
+ */
+export function received(
+  paper: Paper | null,
+  passage: Passage | null,
+  published: string | null,
+): { own: boolean; answer: Pointed } {
+  const own = isEcho(published, passage)
+  const answer = pointedAt(paper, passage)
+  if (own && answer.at === 'here' && (passage?.from === null || passage?.to === null)) {
+    return { own, answer: { at: 'holding', file: answer.file } }
+  }
+  return { own, answer }
 }

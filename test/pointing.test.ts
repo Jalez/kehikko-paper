@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import type { Passage } from 'roadmap-module-protocol'
 
 import type { Paper, PlacedBlock } from '../store.ts'
-import { blockFor, fileOf, isEcho, keyOf, pointedAt } from '../src/reader/pointed.ts'
-import { shouldPublish } from '../src/use-published-passage.ts'
+import { blockFor, fileOf, isEcho, keyOf, pointedAt, received } from '../src/reader/pointed.ts'
+import { passageFor, shouldPublish } from '../src/use-published-passage.ts'
 
 /**
  * The wire, read as well as written — and the guard that stops the two halves
@@ -57,6 +57,7 @@ const at = (over: Partial<Passage> = {}): Passage => ({
   from: 420,
   to: 460,
   quoted: 'a passage names both ends of a selection or neither',
+  section: null,
   ...over,
 })
 
@@ -312,5 +313,58 @@ describe('the echo of this module\u2019s own highlight', () => {
     const page = at({ from: null, to: null, quoted: '' })
     expect(isEcho(keyOf(page), page)).toBe(true)
     expect(keyOf(page)).not.toBe(keyOf(mine))
+  })
+})
+
+describe('a section named without a range', () => {
+  const seg = (text: string) => [{ text, srcStart: 0, srcEnd: 0, literal: true, styles: [] }]
+  const sectioned = {
+    ...paper,
+    blocks: [
+      block({ id: 'h-a', kind: 'heading', srcStart: 0, srcEnd: 30, level: 1, segments: seg('Bridging the gap') }),
+      block({ id: 'p-a', srcStart: 30, srcEnd: 400 }),
+      block({ id: 'h-d1', kind: 'heading', srcStart: 400, srcEnd: 420, level: 2, segments: seg('Discussion') }),
+      block({ id: 'p-b', srcStart: 420, srcEnd: 900 }),
+      block({ id: 'h-d2', kind: 'heading', srcStart: 900, srcEnd: 920, level: 2, segments: seg('Discussion') }),
+    ],
+  } as unknown as Paper
+  const named = (title: string, from: number | null = null) =>
+    at({ page: null, from: null, to: null, quoted: '', section: { title, from, to: null } })
+
+  test('turns to the heading with those words and marks only the heading line', () => {
+    const answer = pointedAt(sectioned, named('Bridging the gap'))
+    expect(answer.at).toBe('here')
+    if (answer.at !== 'here') return
+    expect(answer.id).toBe('h-a')
+    expect(answer.mark).toEqual({ file: 'chapters/bridge.tex', id: 'h-a', from: 0, to: 30 })
+    expect(answer.said).toContain('Bridging the gap')
+  })
+
+  test('the span breaks a tie between two headings with the same words, and the first wins otherwise', () => {
+    const first = pointedAt(sectioned, named('Discussion'))
+    const second = pointedAt(sectioned, named('Discussion', 900))
+    expect(first.at === 'here' && first.id).toBe('h-d1')
+    expect(second.at === 'here' && second.id).toBe('h-d2')
+  })
+
+  test('a title this paper does not hold stays put, and is not "elsewhere"', () => {
+    expect(pointedAt(sectioned, named('Renamed since'))).toEqual({ at: 'holding', file: 'chapters/bridge.tex' })
+  })
+
+  test('two sections of one file, with no page, key differently', () => {
+    /* Otherwise the walk stamp in app.tsx would refuse the second press. */
+    expect(keyOf(named('Discussion'))).not.toBe(keyOf(named('Bridging the gap')))
+  })
+
+  test('this module’s own section passage coming back turns nothing and marks nothing', () => {
+    /* A page turn publishes "the reader is under this heading"; the host
+       broadcasts it back. Walking to it would pull the reader to the top of the
+       section they are scrolling through. */
+    const mine = passageFor(sectioned, { page: 7, file: 'chapters/bridge.tex', section: { title: 'Discussion', from: 400, to: 900 } }, null)!
+    const { own, answer } = received(sectioned, mine, keyOf(mine))
+    expect(own).toBe(true)
+    expect(answer).toEqual({ at: 'holding', file: 'chapters/bridge.tex' })
+    /* The same passage from somebody else is a request to turn. */
+    expect(received(sectioned, mine, null).answer.at).toBe('here')
   })
 })

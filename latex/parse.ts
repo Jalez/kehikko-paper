@@ -178,6 +178,36 @@ export type Block =
   | { kind: "structure"; id: string; srcStart: number; srcEnd: number; command: string }
   | { kind: "unknown"; id: string; srcStart: number; srcEnd: number; raw: string; env?: string };
 
+/**
+ * A run of segments as one line of plain text — a heading's title, mostly.
+ *
+ * One function because three places read a heading's words: the outline in
+ * `store.ts`, `passage.section` published from the page, and `list_sections`.
+ * A section is matched by its TITLE across modules, so two spellings of one
+ * heading would be a link that never resolves.
+ */
+export function plainText(segments: readonly { text: string }[]): string {
+  return segments
+    .map((s) => s.text)
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+type Spanned = { file: string; kind: string; srcStart: number; srcEnd: number };
+
+/**
+ * A section's byte span: from its heading to the next heading of any level in
+ * the same file, else to the end of what that file holds. Shared by the page
+ * (`passage.section`) and the door (`list_sections`) so the two agree.
+ */
+export function spanOf(blocks: readonly Spanned[], heading: Spanned): { from: number; to: number } {
+  const same = blocks.filter((b) => b.file === heading.file);
+  const next = same.find((b) => b.kind === "heading" && b.srcStart > heading.srcStart);
+  const end = next ? next.srcStart : Math.max(heading.srcEnd, ...same.map((b) => b.srcEnd));
+  return { from: heading.srcStart, to: end };
+}
+
 export type CellAlign = "left" | "center" | "right";
 
 export interface TableCell {

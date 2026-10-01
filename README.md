@@ -827,7 +827,7 @@ below.
 | `/api/proposal` (POST)            | accept or reject one. Ticketed; accepting is `writeRange`, and then one commit |
 | `/api/uncommitted?epic=…`         | whether this paper has anything to commit, and whether a commit here would work — a read, ungated |
 | `/api/save` (POST)                | commit what has changed under the paper. Ticketed; writes no bytes |
-| `/mcp`                            | `list_papers`, `read_paper`, `read_source`, `propose_edit`, `list_proposals` |
+| `/mcp`                            | `list_papers`, `read_paper`, `list_sections`, `read_source`, `propose_edit`, `list_proposals` |
 
 All of it is middleware in front of the one Vite server. A module is one origin
 or it is nothing — and two ports is exactly where the wide-open `cors()` in the

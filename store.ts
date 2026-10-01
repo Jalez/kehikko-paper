@@ -17,7 +17,7 @@ import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'roadmap-module-protocol'
 import { NO_BIBLIOGRAPHY, bibFilesNamed, parseBib, resolveCite, type Bibliography } from './latex/bib.ts'
 import { onBoundary, sourceRefuses, whyNot } from './latex/edit.ts'
 import { buildLabelIndex, mapSegments, resolveRef } from './latex/labels.ts'
-import { findMacros, parseLatex, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
+import { findMacros, parseLatex, plainText, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
 import { ID } from './manifest.ts'
 
 /**
@@ -872,11 +872,7 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     .map((b) => ({
       id: b.id,
       level: b.level,
-      text: b.segments
-        .map((s) => s.text)
-        .join('')
-        .replace(/\s+/g, ' ')
-        .trim(),
+      text: plainText(b.segments),
     }))
 
   /*

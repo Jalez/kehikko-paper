@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { join, relative } from 'node:path'
 
 import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
 import { MAX_EDIT_BYTES, sourceRefuses, whyNot } from './latex/edit.ts'
+import { plainText, spanOf } from './latex/parse.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
 import { drop, keep, pendingFor, proposalById, rebaseAll } from './proposals.ts'
@@ -478,6 +480,44 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
     },
   },
 
+  /**
+   * The headings, with where each section spans, for linking to one.
+   *
+   * The path is relative to the PROJECT (`.kehikot/paper/<epic>/chapters/x.tex`)
+   * rather than to the paper, because the reader of this is another module's
+   * agent, which knows the project and not where this module keeps papers.
+   * The title is the same string `passage.section` carries, from the same
+   * function, so a link written from this list matches what the page publishes.
+   */
+  list_sections: {
+    description:
+      'Every heading of one epic\'s paper, in document order, as JSON: [{path, title, level, from, to}]. path is ' +
+      'relative to the project folder; from/to are the section\'s byte span in that file, up to the next heading. ' +
+      'Link to a section by path and title — the title survives edits that move the bytes.',
+    schema: {
+      type: 'object',
+      properties: { project: PROJECT_ARG, epic: { type: 'string', description: 'e.g. modes-are-modules' } },
+      required: ['project', 'epic'],
+    },
+    run(args) {
+      const epic = str(args.epic, MAX_SLUG)
+      if (!isEpic(epic)) return 'that is not an epic name'
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const paper = readPaper(epic, named.project)
+      if (!paper) {
+        const known = listPapers(named.project).map((p) => p.epic).join(', ')
+        return known ? `no paper for "${epic}" there. Known: ${known}` : noPaper(epic, named.project)
+      }
+      const sections = paper.blocks.flatMap((block) => {
+        if (block.kind !== 'heading') return []
+        const { from, to } = spanOf(paper.blocks, block)
+        return [{ path: relative(named.project, join(paper.dir, block.file)), title: text(block.segments), level: block.level, from, to }]
+      })
+      return JSON.stringify(sections, null, 2)
+    },
+  },
+
   read_source: {
     description:
       'The raw .tex of one file of one paper, exactly as it is on disk. The file must be one the paper itself ' +
@@ -680,14 +720,8 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
   },
 }
 
-/** Rendered text of a run of segments, as one line. */
-function text(segments: { text: string }[]): string {
-  return segments
-    .map((s) => s.text)
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+/** Rendered text of a run of segments, as one line — the same spelling the outline uses. */
+const text = plainText
 
 interface Rpc {
   id?: number | string
