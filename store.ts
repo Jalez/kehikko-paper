@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   existsSync,
@@ -10,6 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'roadmap-module-protocol'
@@ -665,7 +667,9 @@ export function listPapers(project: string | null): PaperBrief[] {
     out.push({
       epic: root.epic,
       title: braced(source, 'title'),
-      files: 1 + includeTargets(source).length,
+      /* Walked rather than counted off `main.tex`, so a chapter's own
+         `\input`s are files of the paper here as they are in the read. */
+      files: walk(root.dir, source, {}, findMacros(source)).files.length,
       bytes,
     })
   }
@@ -736,13 +740,158 @@ function braced(source: string, command: string): string | null {
   return null
 }
 
-/** Every `\include{…}` / `\input{…}` target in a source, in the order written. */
-function includeTargets(source: string): string[] {
-  const out: string[] = []
-  for (const block of parseLatex(source, MAIN).blocks) {
-    if (block.kind === 'include') out.push(block.target)
+/**
+ * How deep one file may include another before the walk stops following.
+ *
+ * Not a number any real paper comes near — the thesis on this machine is two
+ * deep, `main.tex` → a chapter → `generated/…` — and it is not the cycle guard,
+ * which is the `chain` below and is exact. It is the bound for the case the
+ * chain cannot see: the same file reached under two spellings
+ * (`chapters/x` and `./chapters/x`), which are two names to a string
+ * comparison and one file to the disk, and would otherwise recurse until the
+ * stack ran out.
+ */
+const MAX_INCLUDE_DEPTH = 8
+
+/** One paper's files, opened in reading order: what `walk` hands back. */
+interface Walked {
+  /** Every block, `\include` and `\input` expanded in place, each on its own file. */
+  blocks: PlacedBlock[]
+  /** Every file that was opened, in the order it was reached, `main.tex` first. */
+  files: string[]
+}
+
+/**
+ * The name LaTeX would open for an inclusion target: `.tex` added when the
+ * author left it off, which `\include` always does and `\input` usually does.
+ */
+function texName(target: string): string {
+  return target.endsWith('.tex') ? target : `${target}.tex`
+}
+
+/**
+ * The bytes of one `.tex` file of a paper, or null — through the fence, under
+ * the size bound, and with every failure the same failure, for the reason
+ * `confine` gives.
+ */
+function readTex(root: string, relative: string): Buffer | null {
+  const path = confine(root, relative)
+  if (!path || !existsSync(path)) return null
+  try {
+    if (statSync(path).size > MAX_TEX_BYTES) return null
+    return readFileSync(path)
+  } catch {
+    return null
   }
-  return out
+}
+
+/**
+ * Every file of a paper, followed from `main.tex` in the order LaTeX reads them,
+ * with each inclusion replaced by the blocks of the file it names.
+ *
+ * ## Recursive, because the thesis is
+ *
+ * This used to follow `main.tex`'s own `\include`s and stop, on the argument
+ * that LaTeX's `\include` cannot nest. That is true of `\include` and it was
+ * the wrong command to reason from: `\input` nests, and the thesis's Results
+ * chapter `\input`s the two tables a script generates from the coding sheet,
+ * and its appendices `\input` the codebook and the coding protocol. One level
+ * deep, those were `include` blocks the page does not draw, so two tables, a
+ * list of quotations and two appendices were simply not in the reading view —
+ * and because the tables were not there to be counted, every table after them
+ * was numbered two lower than the PDF numbers it, and the prose's own
+ * `Table~\ref{tab:themes-final}` printed as `§tab:themes-final`.
+ *
+ * ## What every expanded block keeps
+ *
+ * Its own file. A block from `generated/tab_categories.tex` is placed with
+ * `file: 'generated/tab_categories.tex'` and the offsets its own parse gave it,
+ * not the chapter's: every offset in a `Paper` is per-file, and a highlight, a
+ * proposal or another module's byte range that named the chapter would land on
+ * whatever happens to sit at those bytes of the chapter. The inclusion itself
+ * leaves no block — the same as at the top level.
+ *
+ * ## The fence, and the three ways a target is not followed
+ *
+ * Every target, at every depth, goes through `confine` against the paper's
+ * root, and is resolved against the ROOT rather than against the including
+ * file, because that is what LaTeX does: `\input{generated/quotes}` written in
+ * `chapters/4_results.tex` means `<root>/generated/quotes.tex`.
+ *
+ * A target that cannot be read — outside the root, not on disk, over the size
+ * bound — becomes an `unknown` block saying so in the command the author
+ * wrote, as a missing top-level include always has. A target that is already
+ * open on the way down is a cycle and is not followed; one that is already
+ * shown elsewhere in the paper is not shown twice either, because blocks are
+ * addressed by (file, id) and `files` and `hashes` are keyed by file, and a
+ * file placed twice would be two anchors with one name. Both say so, visibly.
+ * LaTeX would happily `\input` a snippet twice; no paper here does, and the
+ * day one does it gets a sentence on screen rather than a page that jumps.
+ *
+ * ## `\IfFileExists`
+ *
+ * Answered here, for the parser, with the same fence: a target outside the
+ * root does not exist as far as this paper is concerned. LaTeX looks for the
+ * name as written and then with `.tex` added, and so does this.
+ *
+ * ## Shared by the read, the hashes and the list
+ *
+ * `readPaper`, `hashesOf` and `listPapers` all walk the paper through here, so
+ * the three cannot disagree about which files a paper has. They used to walk
+ * it three times in two styles, which was fine while the walk was one loop
+ * over `main.tex`; a recursive walk spelled three times is three chances for
+ * the page to see a change in a file the read never opened.
+ */
+function walk(root: string, source: string, hashes: Record<string, string>, macros: ReadonlyMap<string, Macro>): Walked {
+  const blocks: PlacedBlock[] = []
+  const files: string[] = [MAIN]
+  const exists = (target: string): boolean => {
+    for (const name of target.endsWith('.tex') ? [target] : [target, `${target}.tex`]) {
+      const path = confine(root, name)
+      if (path && existsSync(path)) return true
+    }
+    return false
+  }
+
+  const place = (parsed: ParsedDocument, file: string, chain: readonly string[]): void => {
+    for (const block of parsed.blocks) {
+      if (block.kind !== 'include') {
+        /* A chapter file has no preamble of its own; when the parser reports
+           one it is because the file opens with a comment run before any
+           command, and folding that away would drop the provenance note the
+           author wrote at the top of the chapter. Comments survive; a real
+           preamble cannot occur here because `\begin{document}` cannot. */
+        blocks.push({ ...block, file })
+        continue
+      }
+      const relative = texName(block.target)
+      const not = (why: string) =>
+        blocks.push({ ...block, kind: 'unknown', raw: `\\${block.command}{${block.target}} — ${why}`, file } as PlacedBlock)
+      if (chain.includes(relative)) {
+        not('this file is already open above this line, so following it would go round forever. Not followed.')
+        continue
+      }
+      if (files.includes(relative)) {
+        not('this file is already shown earlier in the paper, and is shown once.')
+        continue
+      }
+      if (chain.length > MAX_INCLUDE_DEPTH) {
+        not(`included more than ${MAX_INCLUDE_DEPTH} files deep. Not followed.`)
+        continue
+      }
+      const bytes = readTex(root, relative)
+      if (!bytes) {
+        not('this file is named by the paper and is not on disk here.')
+        continue
+      }
+      hashes[relative] = hashOf(bytes)
+      files.push(relative)
+      place(parseLatex(bytes.toString('utf8'), relative, macros, exists), relative, [...chain, relative])
+    }
+  }
+
+  place(parseLatex(source, MAIN, macros, exists), MAIN, [MAIN])
+  return { blocks, files }
 }
 
 /**
@@ -757,12 +906,12 @@ function includeTargets(source: string): string[] {
  * screen saying so. The document order is a fact about the source; it is
  * decided where the source is.
  *
- * One level deep, deliberately. LaTeX's own `\include` cannot nest — it is
- * `\input` that can — and a paper that reached for arbitrary depth would be a
- * paper this reader could be made to walk in a cycle. A target that is itself
- * missing becomes an `unknown` block saying which file was not there, which is
- * a sentence a reader can act on; silently skipping it would present a paper
- * with a hole in it as a complete one.
+ * Recursively, and with a guard: a chapter's own `\input`s are followed in
+ * place, a cycle is refused, and so is anything deeper than a bound — see
+ * `walk`, which says why one level used to be the rule and why it was wrong. A
+ * target that is itself missing becomes an `unknown` block saying which file
+ * was not there, which is a sentence a reader can act on; silently skipping it
+ * would present a paper with a hole in it as a complete one.
  */
 export function readPaper(epic: string, project: string | null): Paper | null {
   if (!isEpic(epic)) return null
@@ -799,48 +948,7 @@ export function readPaper(epic: string, project: string | null): Paper | null {
    * PDF says `gh#111`. See the essay on `Macro` in the parser.
    */
   const macros: ReadonlyMap<string, Macro> = findMacros(source)
-  const parsed = parseLatex(source, MAIN, macros)
-  const blocks: PlacedBlock[] = []
-  const files: string[] = [MAIN]
-
-  for (const block of parsed.blocks) {
-    if (block.kind !== 'include') {
-      blocks.push({ ...block, file: MAIN })
-      continue
-    }
-    const relative = block.target.endsWith('.tex') ? block.target : `${block.target}.tex`
-    const child = confine(root, relative)
-    let chapter: ParsedDocument | null = null
-    if (child && existsSync(child)) {
-      try {
-        if (statSync(child).size <= MAX_TEX_BYTES) {
-          const bytes = readFileSync(child)
-          chapter = parseLatex(bytes.toString('utf8'), relative, macros)
-          hashes[relative] = hashOf(bytes)
-        }
-      } catch {
-        chapter = null
-      }
-    }
-    if (!chapter) {
-      blocks.push({
-        ...block,
-        kind: 'unknown',
-        raw: `\\include{${block.target}} — this file is named by the paper and is not on disk here.`,
-        file: MAIN,
-      } as PlacedBlock)
-      continue
-    }
-    files.push(relative)
-    for (const inner of chapter.blocks) {
-      /* A chapter file has no preamble of its own; when the parser reports one
-         it is because the file opens with a comment run before any command, and
-         folding that away would drop the provenance note the author wrote at
-         the top of the chapter. Comments survive; a real preamble cannot occur
-         here because `\begin{document}` cannot. */
-      blocks.push({ ...inner, file: relative })
-    }
-  }
+  const { blocks, files } = walk(root, source, hashes, macros)
 
   /*
    * Every `\ref` and every `\cite` in the paper, rewritten from its placeholder
@@ -918,19 +1026,23 @@ export function readPaper(epic: string, project: string | null): Paper | null {
  * every chapter, builds the label index and opens the bibliography, which is
  * the right price for a paper somebody is about to read and the wrong price
  * for a question asked every four seconds by every open page: "has anything I
- * am showing moved on disk?" That question is answered by the bytes alone.
- * So this reads the bytes, hashes them, and parses only `main.tex` — the one
- * file that has to be parsed to know which other files the paper is made of.
+ * am showing moved on disk?" That question is answered by the bytes alone,
+ * plus the parse that says which files there are: so this reads and hashes
+ * the bytes and walks the paper, and leaves out the label index and the
+ * bibliography. It used to parse `main.tex` only. Once a chapter's own
+ * `\input`s are files of the paper, the only way to know them is to parse
+ * the chapter, so every file is parsed here now — a linear pass over a couple
+ * of hundred kilobytes, measured in milliseconds, against a page that would
+ * otherwise never hear that a generated table had been regenerated.
  *
  * ## The same keys, by construction
  *
  * The page compares this answer against `Paper.hashes` file by file, so the
  * two have to agree about which files a paper has: a file present in one and
- * absent from the other would read as a change that never happened. The loop
- * below is the same walk `readPaper` makes — `main.tex`, then each `\include`
- * target that resolves inside the root, exists and is under the size bound —
- * with the parse of the chapter left out. A chapter whose bytes cannot be
- * read is absent here as it is there.
+ * absent from the other would read as a change that never happened. So the
+ * two do not make the same walk, they make ONE walk — `walk`, below `readPaper`
+ * in this file — and a file whose bytes cannot be read is absent here because
+ * it is absent there.
  *
  * `null` when there is no paper at all, which the page reads as "every file I
  * hold has gone" only after it has failed to fetch the paper again; it is not
@@ -953,17 +1065,7 @@ export function hashesOf(epic: string, project: string | null): Record<string, s
   } catch {
     return null
   }
-  for (const target of includeTargets(source)) {
-    const relative = target.endsWith('.tex') ? target : `${target}.tex`
-    const child = confine(root, relative)
-    if (!child || !existsSync(child)) continue
-    try {
-      if (statSync(child).size > MAX_TEX_BYTES) continue
-      hashes[relative] = hashOf(readFileSync(child))
-    } catch {
-      continue
-    }
-  }
+  walk(root, source, hashes, findMacros(source))
   return hashes
 }
 
@@ -1007,26 +1109,33 @@ function readBibliography(root: string, source: string): Bibliography {
 }
 
 /**
- * The image types this app will hand back, and the two it deliberately will not.
+ * The image types this app will hand back, and the one it deliberately will not.
  *
  * The content type is looked up here rather than sniffed or guessed from the
  * bytes, because a guessed type is how a file that is not what it claims gets
- * executed as what it claims. A file whose extension is not in this table is
- * not served at all — the reading view keeps showing its filename in a box,
- * which is what it did for every figure before this door existed.
+ * executed as what it claims. A file whose extension is not in this table, and
+ * is not a PDF, is not served at all — the reading view keeps showing its
+ * filename in a box, which is what it did for every figure before this door
+ * existed.
  *
  * SVG is absent on purpose and it is the interesting omission. An SVG is a
  * document, it can carry `<script>`, and this app serves it from
  * `127.0.0.1:7870` — the same origin as its own `/api`. A paper that included a
  * hostile SVG would get script execution against this module's origin, which is
- * precisely the origin `manifest.ts` argues so carefully for keeping.
+ * precisely the origin `manifest.ts` argues so carefully for keeping. That
+ * argument was looked at again when PDFs started being drawn and it still
+ * stands: nothing about an SVG changed, and rasterising one would need a
+ * renderer this machine does not reliably have. It keeps its filename box.
  *
- * PDF is absent for a duller reason and one honest one. `<img>` cannot draw it,
- * so serving it would mean an `<object>` or an iframe — an embedded viewer on
- * this origin, which is the same hazard as the SVG with a bigger attack
- * surface. The thesis on this machine has one PDF figure and three PNGs; the
- * PDF keeps its filename box, and that is a visible, explicable gap rather than
- * a silent one.
+ * PDF is absent from the TABLE, and still drawn. The reason it was refused is
+ * still right — `<img>` cannot draw one, so serving it would mean an
+ * `<object>` or an iframe, an embedded viewer on this origin, which is the SVG
+ * hazard with a bigger attack surface. What changed is the thesis: every one of
+ * its figures is a PDF (TikZ diagrams and plots compiled on their own), so the
+ * filename box had stopped being a visible gap and become the whole of every
+ * figure. So a PDF is turned into a PNG HERE, on this side, and the browser
+ * only ever receives the PNG — see `rasterized`. The type sent is still a
+ * constant (`image/png`), and the bytes are still checked to be one.
  */
 const IMAGE_TYPES: Record<string, string> = {
   '.png': 'image/png',
@@ -1039,9 +1148,163 @@ const IMAGE_TYPES: Record<string, string> = {
 /** A bound on one image, for the reason `MAX_TEX_BYTES` exists. */
 const MAX_IMAGE_BYTES = 16_000_000
 
+/**
+ * A bound on one PDF handed to the rasteriser. A figure is tens of kilobytes;
+ * the thesis's biggest is under thirty. This is the size of a PDF that is a
+ * scanned book someone dropped into `figures/`, which should be a filename box
+ * rather than a dev server busy for a minute.
+ */
+const MAX_PDF_BYTES = 16_000_000
+
 export interface Figure {
   bytes: Uint8Array
   type: string
+}
+
+/**
+ * Turns the first page of a PDF into a PNG, or says it could not.
+ *
+ * A parameter rather than a call inside `readFigure`, so a test can hand in a
+ * converter that counts its calls or one that is "not installed", and so the
+ * fallback — a filename box, never a broken picture — is a path that is
+ * exercised rather than one that is only reached on somebody else's machine.
+ */
+export type Rasterize = (pdf: Uint8Array) => Uint8Array | null
+
+/** How a PDF figure is drawn: the resolution, and the size it may not exceed. */
+const RASTER_DPI = 150
+/**
+ * The longest side, in pixels, a rendered figure may have.
+ *
+ * 150 dpi puts a full A4 page at about 1240 × 1754, which is a little more
+ * than the reading column ever shows and so stays sharp on a dense screen. A
+ * page that is a metre-wide poster would be six thousand pixels at the same
+ * resolution; that is re-rendered to fit this box instead of being shipped.
+ */
+const RASTER_MAX_SIDE = 2400
+/** How long one conversion may take before it is killed and the box is shown. */
+const RASTER_TIMEOUT_MS = 15_000
+
+/**
+ * Where `pdftoppm` might be, in order.
+ *
+ * The bare name first, which is the `PATH` the server was started with. The
+ * two Homebrew prefixes after it because a server started by `launchd` or a
+ * host's process manager has a `PATH` of `/usr/bin:/bin`, and "poppler is
+ * installed but the app cannot find it" would be a box with no explanation.
+ */
+const PDFTOPPM = ['pdftoppm', '/opt/homebrew/bin/pdftoppm', '/usr/local/bin/pdftoppm']
+
+/**
+ * The first page of a PDF, rendered by poppler's `pdftoppm`, or null.
+ *
+ * The PDF goes in on stdin and the PNG comes out on stdout, so the converter
+ * is handed exactly the bytes this program read and confined — not a path it
+ * would open again, after a moment in which the file could have been swapped —
+ * and nothing is written next to the paper. The arguments are an array and
+ * never a shell string: nothing in the paper reaches the command line at all,
+ * not even the file name.
+ *
+ * Synchronous, like every read in this file, and it is a deliberate price: a
+ * figure is converted once per version of its bytes (see `rasterized`) and
+ * takes a fraction of a second, and making `/api/figure` the one door that
+ * answers asynchronously would change the shape of every door for it.
+ */
+export const pdftoppm: Rasterize = (pdf) => {
+  const run = (size: string[]): Buffer | null => {
+    for (const command of PDFTOPPM) {
+      const out = spawnSync(command, ['-png', '-f', '1', '-l', '1', '-singlefile', ...size, '-'], {
+        input: pdf,
+        timeout: RASTER_TIMEOUT_MS,
+        maxBuffer: 64_000_000,
+      })
+      /* Not there under this name: try the next. Anything else — a timeout, a
+         PDF poppler cannot read — is the answer, and the next name would give
+         the same one. */
+      if ((out.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') continue
+      if (out.error || out.status !== 0 || !out.stdout?.length) return null
+      return out.stdout
+    }
+    return null
+  }
+  const first = run(['-r', String(RASTER_DPI)])
+  if (!first) return null
+  const size = pngSize(first)
+  if (!size) return null
+  if (size.width <= RASTER_MAX_SIDE && size.height <= RASTER_MAX_SIDE) return first
+  return run(['-scale-to', String(RASTER_MAX_SIDE)])
+}
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+
+/** Width and height out of a PNG's header, or null when these bytes are not one. */
+function pngSize(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 24 || PNG_SIGNATURE.some((b, i) => bytes[i] !== b)) return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  return { width: view.getUint32(16), height: view.getUint32(20) }
+}
+
+/**
+ * Where rendered figures are kept: a folder in the OS temp directory.
+ *
+ * ## Why temp, and not `<project>/.kehikot/paper/`
+ *
+ * The storage rule puts a project's DATA under `.kehikot/<module>/`, and a
+ * rendered figure is not data: it is a function of bytes that are already in
+ * the project, and losing every one of them costs a fraction of a second per
+ * figure on the next read. Written under the project, it would be a pile of
+ * PNGs in somebody's thesis repository — untracked files in their `git status`,
+ * or committed by accident beside the PDFs they were made from. The rule
+ * allows temp directories because "scratch, not storage" is exactly this.
+ *
+ * ## Keyed by content
+ *
+ * A SHA-256 of the PDF's bytes and of how it was drawn, rather than of its
+ * path and mtime. The bytes have been read anyway (they are what goes to the
+ * converter), a hash of them cannot be fooled by an mtime that did not move,
+ * and a figure that is regenerated byte-for-byte the same keeps its picture.
+ * Two projects holding the same PDF share one PNG, which discloses nothing: to
+ * reach it, a request has to name a PDF its own paper includes with the same
+ * bytes.
+ */
+const RASTER_CACHE = join(tmpdir(), 'kehikko-paper-figures')
+
+/**
+ * A PDF's first page as PNG bytes, from the cache or freshly drawn, or null.
+ *
+ * The cache is best-effort in both directions: a write that fails costs a
+ * conversion next time, and a read that fails is a cache miss. What comes back
+ * from the converter is checked to be a PNG before it is kept or served — the
+ * type sent is a constant, and this is what keeps the constant true.
+ */
+function rasterized(pdf: Uint8Array, rasterize: Rasterize, cache: string): Uint8Array | null {
+  const key = createHash('sha256').update(`${RASTER_DPI}:${RASTER_MAX_SIDE}:`).update(pdf).digest('hex')
+  const kept = join(cache, `${key}.png`)
+  try {
+    const bytes = readFileSync(kept)
+    if (pngSize(bytes)) return bytes
+  } catch {
+    /* Not drawn yet. */
+  }
+  const png = rasterize(pdf)
+  if (!png || !pngSize(png)) return null
+  try {
+    mkdirSync(cache, { recursive: true })
+    /* Written beside and renamed, so a second request arriving mid-write never
+       reads half a picture. */
+    const partial = `${kept}.${process.pid}.part`
+    writeFileSync(partial, png)
+    renameSync(partial, kept)
+  } catch {
+    /* A cache that cannot be written is a cache that is not used. */
+  }
+  return png
+}
+
+/** What a test may swap: the converter, and where its output is kept. */
+export interface FigureOptions {
+  rasterize?: Rasterize
+  cache?: string
 }
 
 /**
@@ -1052,28 +1315,41 @@ export interface Figure {
  *  1. `isEpic` on the slug, as everywhere.
  *  2. The file must appear in the paper's own `figures` list — see the comment
  *     there. This is the check that stops the door being a file server.
- *  3. The extension must be in `IMAGE_TYPES`, so the type sent is a constant in
- *     this file and never a function of the bytes.
+ *  3. The extension must be in `IMAGE_TYPES`, or be `.pdf`, so the type sent is
+ *     a constant in this file and never a function of the bytes.
  *  4. `confine` against the paper's own root, which is what catches a
  *     `\includegraphics{../../../.ssh/id_rsa.png}` and a symlink pointing out
  *     of the tree. Check 2 already makes that hard — the author would have to
  *     have written it into their own paper — but this is a typo threat model
  *     more than a hostile one, and the fence costs a line.
+ *
+ * A PDF then has to start like one before it is handed to the converter, and
+ * is answered with the PNG of its first page — or with null, the same refusal
+ * as everything else, when the converter is missing or fails. The page draws
+ * its filename box for that, which is what a PDF figure always got before.
  */
-export function readFigure(epic: string, file: string, project: string | null): Figure | null {
+export function readFigure(epic: string, file: string, project: string | null, options: FigureOptions = {}): Figure | null {
   const paper = readPaper(epic, project)
   if (!paper) return null
   if (!paper.figures.includes(file)) return null
   const dot = file.lastIndexOf('.')
-  const type = dot === -1 ? undefined : IMAGE_TYPES[file.slice(dot).toLowerCase()]
-  if (!type) return null
+  const extension = dot === -1 ? '' : file.slice(dot).toLowerCase()
+  const type = IMAGE_TYPES[extension]
+  if (!type && extension !== '.pdf') return null
   const root = paperRoot(epic, project)
   if (!root) return null
   const path = confine(root, file)
   if (!path) return null
   try {
-    if (statSync(path).size > MAX_IMAGE_BYTES) return null
-    return { bytes: readFileSync(path), type }
+    if (type) {
+      if (statSync(path).size > MAX_IMAGE_BYTES) return null
+      return { bytes: readFileSync(path), type }
+    }
+    if (statSync(path).size > MAX_PDF_BYTES) return null
+    const pdf = readFileSync(path)
+    if (pdf.subarray(0, 5).toString('latin1') !== '%PDF-') return null
+    const png = rasterized(pdf, options.rasterize ?? pdftoppm, options.cache ?? RASTER_CACHE)
+    return png ? { bytes: png, type: 'image/png' } : null
   } catch {
     return null
   }

@@ -172,8 +172,16 @@ export type Block =
     }
   | { kind: "comment"; id: string; srcStart: number; srcEnd: number; text: string }
   | { kind: "preamble"; id: string; srcStart: number; srcEnd: number; raw: string }
-  /** \include{chapters/3_methods} — the edge that defines document order. */
-  | { kind: "include"; id: string; srcStart: number; srcEnd: number; target: string }
+  /**
+   * \include{chapters/3_methods} — the edge that defines document order.
+   *
+   * `command` is which of the inclusion commands it was (`include`, `input`,
+   * `subfile`), kept so that a target that is not on disk can be reported in
+   * the words the author wrote: `\input{generated/quotes}` is missing, not
+   * `\include{generated/quotes}`, and the second is a command they would go
+   * looking for in the source and not find.
+   */
+  | { kind: "include"; id: string; srcStart: number; srcEnd: number; target: string; command: string }
   /** \maketitle, \tableofcontents, \printbibliography … structural, not prose. */
   | { kind: "structure"; id: string; srcStart: number; srcEnd: number; command: string }
   | { kind: "unknown"; id: string; srcStart: number; srcEnd: number; raw: string; env?: string };
@@ -999,6 +1007,13 @@ function normalizeWhitespace(segments: Segment[]): Segment[] {
 // Block parsing
 // ---------------------------------------------------------------------------
 
+/** The first non-space index at or after `from`, stopping at `limit`. */
+function skipSpace(src: string, from: number, limit: number): number {
+  let i = from;
+  while (i < limit && /\s/.test(ch(src, i))) i++;
+  return i;
+}
+
 /** Consume a `\label{...}` immediately following `pos`, if present. */
 function peekLabel(src: string, pos: number, limit: number): { label?: string; end: number } {
   let i = pos;
@@ -1262,11 +1277,18 @@ function parseItems(src: string, start: number, end: number): Segment[][] {
  * Parse a full .tex source into blocks.
  *
  * `path` is carried through so blocks can be addressed as (path, srcStart).
+ *
+ * `exists` answers `\IfFileExists{f}{…}{…}` — whether LaTeX would find `f`.
+ * The parser reads no disk, so the question is put to whoever called it:
+ * `store.ts` answers it with the same fence every include goes through. Left
+ * out, nothing exists and the false branch is taken, which is the answer a
+ * parse of a string with no directory behind it can honestly give.
  */
 export function parseLatex(
   src: string,
   path: string,
   macros: ReadonlyMap<string, Macro> = findMacros(src),
+  exists: (target: string) => boolean = () => false,
 ): ParsedDocument {
   idCounter = 0;
   /* Saved and restored rather than simply assigned, so that a caller which is
@@ -1275,13 +1297,13 @@ export function parseLatex(
   const outerMacros = activeMacros;
   activeMacros = macros;
   try {
-    return parseBlocks(src, path);
+    return parseBlocks(src, path, exists);
   } finally {
     activeMacros = outerMacros;
   }
 }
 
-function parseBlocks(src: string, path: string): ParsedDocument {
+function parseBlocks(src: string, path: string, exists: (target: string) => boolean): ParsedDocument {
   const blocks: Block[] = [];
   let i = 0;
 
@@ -1299,225 +1321,278 @@ function parseBlocks(src: string, path: string): ParsedDocument {
     i = docBegin + "\\begin{document}".length;
   }
 
-  while (i < src.length) {
-    // Skip blank space between blocks.
-    if (/\s/.test(ch(src, i))) { i++; continue; }
+  /*
+   * The block loop, over one range of the source.
+   *
+   * A range and not the whole file because of `\IfFileExists{f}{yes}{no}`:
+   * the branch LaTeX would take is parsed in place, as blocks of this file at
+   * their own offsets, and it has to stop at the brace that closes the branch
+   * rather than run on into the other one. Everything below that used to say
+   * `src.length` says `limit`, and for the file as a whole the two are equal.
+   */
+  const scan = (from: number, limit: number): void => {
+    let i = from;
+    while (i < limit) {
+      // Skip blank space between blocks.
+      if (/\s/.test(ch(src, i))) { i++; continue; }
 
-    // Comment runs collapse into a single block so provenance notes stay visible.
-    if (isCommentStart(src, i)) {
-      const startAt = i;
-      while (i < src.length) {
-        if (!isCommentStart(src, i)) break;
-        const nl = src.indexOf("\n", i);
-        i = nl === -1 ? src.length : nl + 1;
-        // Keep consuming only if the next line is also a comment.
-        let j = i;
-        while (j < src.length && /[ \t]/.test(ch(src, j))) j++;
-        if (!isCommentStart(src, j)) break;
-        i = j;
-      }
-      const text = src
-        .slice(startAt, i)
-        .split("\n")
-        .map((l) => l.replace(/^\s*%+\s?/, ""))
-        .join("\n")
-        .trim();
-      if (text) {
-        blocks.push({ kind: "comment", id: nextId("comment"), srcStart: startAt, srcEnd: i, text });
-      }
-      continue;
-    }
-
-    if (src[i] === "\\") {
-      const cmd = readCommandName(src, i);
-
-      if (cmd && HEADING_LEVELS[cmd.name.replace(/\*$/, "")] !== undefined && src[cmd.end] === "{") {
-        const bare = cmd.name.replace(/\*$/, "");
-        const close = matchBrace(src, cmd.end);
-        const { label, end: afterLabel } = peekLabel(src, close, src.length);
-        blocks.push({
-          kind: "heading",
-          id: nextId("heading"),
-          srcStart: i,
-          srcEnd: afterLabel,
-          level: HEADING_LEVELS[bare]!,
-          segments: parseInline(src, cmd.end + 1, close - 1),
-          label,
-          numbered: !cmd.name.endsWith("*"),
-        });
-        i = afterLabel;
-        continue;
-      }
-
-      if (cmd && INCLUDE_CMDS.has(cmd.name) && src[cmd.end] === "{") {
-        const close = matchBrace(src, cmd.end);
-        blocks.push({
-          kind: "include",
-          id: nextId("include"),
-          srcStart: i,
-          srcEnd: close,
-          target: src.slice(cmd.end + 1, close - 1).trim(),
-        });
-        i = close;
-        continue;
-      }
-
-      if (cmd && STRUCTURE_CMDS.has(cmd.name.replace(/\*$/, ""))) {
-        let e = cmd.end;
-        // Swallow an optional [..] title and an empty {} terminator.
-        e = matchBracket(src, e);
-        if (src[e] === "{") e = matchBrace(src, e);
-        blocks.push({
-          kind: "structure",
-          id: nextId("structure"),
-          srcStart: i,
-          srcEnd: e,
-          command: src.slice(i, e).trim(),
-        });
-        i = e;
-        continue;
-      }
-
-      if (cmd && cmd.name === "end") {
-        // A stray \end{document} or similar: consume and move on.
-        const close = src[cmd.end] === "{" ? matchBrace(src, cmd.end) : cmd.end;
-        i = close;
-        continue;
-      }
-
-      if (cmd && cmd.name === "begin" && src[cmd.end] === "{") {
-        const nameClose = matchBrace(src, cmd.end);
-        const env = src.slice(cmd.end + 1, nameClose - 1).trim();
-        const bodyEnd = findEnvEnd(src, nameClose, env);
-        const contentEnd = bodyEnd.contentEnd;
-        const blockEnd = bodyEnd.blockEnd;
-        const { label, end: afterLabel } = peekLabel(src, blockEnd, src.length);
-
-        if (FIGURE_ENVS.has(env)) {
-          const inner = findLabelIn(src, nameClose, contentEnd);
-          blocks.push({
-            kind: "figure",
-            id: nextId("figure"),
-            srcStart: i,
-            srcEnd: afterLabel,
-            graphics: extractGraphics(src, nameClose, contentEnd),
-            caption: extractCaption(src, nameClose, contentEnd),
-            label: inner ?? label,
-          });
-        } else if (TABLE_ENVS.has(env)) {
-          const inner = findLabelIn(src, nameClose, contentEnd);
-          blocks.push({
-            kind: "table",
-            id: nextId("table"),
-            srcStart: i,
-            srcEnd: afterLabel,
-            raw: src.slice(i, blockEnd),
-            caption: extractCaption(src, nameClose, contentEnd),
-            label: inner ?? label,
-            grid: parseTabular(src, nameClose, contentEnd),
-          });
-        } else if (LIST_ENVS.has(env)) {
-          blocks.push({
-            kind: "list",
-            id: nextId("list"),
-            srcStart: i,
-            srcEnd: afterLabel,
-            ordered: env === "enumerate",
-            items: parseItems(src, nameClose, contentEnd),
-          });
-        } else if (MATH_ENVS.has(env)) {
-          const inner = findLabelIn(src, nameClose, contentEnd);
-          blocks.push({
-            kind: "equation",
-            id: nextId("equation"),
-            srcStart: i,
-            srcEnd: afterLabel,
-            latex: src.slice(nameClose, contentEnd).trim(),
-            label: inner ?? label,
-            env,
-          });
-        } else if (VERBATIM_ENVS.has(env)) {
-          const options = listingOptions(src, nameClose, contentEnd);
-          blocks.push({
-            kind: "verbatim",
-            id: nextId("verbatim"),
-            srcStart: i,
-            srcEnd: afterLabel,
-            raw: src.slice(options.end, contentEnd),
-            env,
-            label: options.label,
-            title: options.caption,
-          });
-        } else if (env === "document" || env === "abstract" || env === "center") {
-          // Transparent wrappers: step inside and keep parsing normally.
-          i = nameClose;
-          continue;
-        } else {
-          blocks.push({
-            kind: "unknown",
-            id: nextId("env"),
-            srcStart: i,
-            srcEnd: afterLabel,
-            raw: src.slice(i, blockEnd),
-            env,
-          });
+      // Comment runs collapse into a single block so provenance notes stay visible.
+      if (isCommentStart(src, i)) {
+        const startAt = i;
+        while (i < limit) {
+          if (!isCommentStart(src, i)) break;
+          const nl = src.indexOf("\n", i);
+          i = nl === -1 || nl >= limit ? limit : nl + 1;
+          // Keep consuming only if the next line is also a comment.
+          let j = i;
+          while (j < limit && /[ \t]/.test(ch(src, j))) j++;
+          if (!isCommentStart(src, j)) break;
+          i = j;
         }
-        i = afterLabel;
+        const text = src
+          .slice(startAt, i)
+          .split("\n")
+          .map((l) => l.replace(/^\s*%+\s?/, ""))
+          .join("\n")
+          .trim();
+        if (text) {
+          blocks.push({ kind: "comment", id: nextId("comment"), srcStart: startAt, srcEnd: i, text });
+        }
         continue;
       }
-    }
 
-    // Anything else is running prose: consume to the next blank line or to the
-    // next construct that starts its own block.
-    const paraStart = i;
-    let j = i;
-    while (j < src.length) {
-      if (src[j] === "\n") {
-        // A blank line ends the paragraph.
-        let k = j + 1;
-        while (k < src.length && /[ \t\r]/.test(ch(src, k))) k++;
-        if (k >= src.length || src[k] === "\n") { j = k; break; }
-        // A line starting a new construct also ends it.
-        //
-        // `\include` and `\input` are constructs too, and they were not on
-        // this list: a chapter that ended in prose with `\include{chapters/2}`
-        // on the very next line — no blank line between — swallowed the
-        // include into the paragraph, where the unknown-command fallback
-        // rendered it as the bare word `chapters/2` and the chapter it named
-        // was never opened. The thesis's own `main.tex` carries a comment
-        // about exactly this ("an \input abstract shows up in the reading
-        // view as a bare filename"). LaTeX's `\include` starts a new page, so
-        // it is never mid-paragraph in any document that compiles.
-        if (src[k] === "\\") {
-          const c2 = readCommandName(src, k);
-          const bare = c2?.name.replace(/\*$/, "");
-          if (
-            c2 &&
-            (bare === "begin" || bare === "end" || (bare && HEADING_LEVELS[bare] !== undefined) || INCLUDE_CMDS.has(c2.name))
-          ) {
-            j = j + 1;
-            break;
+      if (src[i] === "\\") {
+        const cmd = readCommandName(src, i);
+
+        if (cmd && HEADING_LEVELS[cmd.name.replace(/\*$/, "")] !== undefined && src[cmd.end] === "{") {
+          const bare = cmd.name.replace(/\*$/, "");
+          const close = matchBrace(src, cmd.end);
+          const { label, end: afterLabel } = peekLabel(src, close, limit);
+          blocks.push({
+            kind: "heading",
+            id: nextId("heading"),
+            srcStart: i,
+            srcEnd: afterLabel,
+            level: HEADING_LEVELS[bare]!,
+            segments: parseInline(src, cmd.end + 1, close - 1),
+            label,
+            numbered: !cmd.name.endsWith("*"),
+          });
+          i = afterLabel;
+          continue;
+        }
+
+        /*
+         * `\IfFileExists{generated/recode_agreement.tex}{…}{…}`, at the start
+         * of a block, resolved the way LaTeX resolves it: whichever branch
+         * applies is parsed in place, as blocks of this file at their own
+         * offsets, and the other branch is skipped. The thesis uses it for a
+         * section that appears once a script has produced its file, and before
+         * this the whole line was read as a paragraph and printed as
+         * `generated/recode_agreement.texStability checkgenerated/…`.
+         *
+         * The head — `\IfFileExists{…}` itself — becomes a `structure` block,
+         * which the page does not draw, so the line is still real source with
+         * a block over it rather than a gap. Only a well-formed call with all
+         * three groups is taken; anything else falls through to prose, which is
+         * what it was before and at least visibly wrong.
+         */
+        if (cmd && cmd.name === "IfFileExists" && src[cmd.end] === "{") {
+          const nameClose = matchBrace(src, cmd.end);
+          const yesOpen = skipSpace(src, nameClose, limit);
+          const yesClose = src[yesOpen] === "{" ? matchBrace(src, yesOpen) : yesOpen;
+          const noOpen = skipSpace(src, yesClose, limit);
+          const noClose = src[noOpen] === "{" ? matchBrace(src, noOpen) : noOpen;
+          if (yesClose > yesOpen && noClose > noOpen && noClose <= limit) {
+            const target = src.slice(cmd.end + 1, nameClose - 1).trim();
+            blocks.push({
+              kind: "structure",
+              id: nextId("structure"),
+              srcStart: i,
+              srcEnd: nameClose,
+              command: src.slice(i, nameClose),
+            });
+            if (exists(target)) scan(yesOpen + 1, yesClose - 1);
+            else scan(noOpen + 1, noClose - 1);
+            i = noClose;
+            continue;
           }
         }
-        if (isCommentStart(src, k)) { j = j + 1; break; }
-        j = k;
-        continue;
-      }
-      if (src[j] === "\\") {
-        const c2 = readCommandName(src, j);
-        if (c2 && (c2.name === "begin" || c2.name === "end")) break;
-        if (c2) { j = c2.end; continue; }
-      }
-      j++;
-    }
-    if (j <= paraStart) j = paraStart + 1;
-    const segments = parseInline(src, paraStart, j);
-    if (segments.some((s) => s.text.trim().length > 0)) {
-      blocks.push({ kind: "paragraph", id: nextId("para"), srcStart: paraStart, srcEnd: j, segments });
-    }
-    i = j;
-  }
 
+        if (cmd && INCLUDE_CMDS.has(cmd.name) && src[cmd.end] === "{") {
+          const close = matchBrace(src, cmd.end);
+          blocks.push({
+            kind: "include",
+            id: nextId("include"),
+            srcStart: i,
+            srcEnd: close,
+            target: src.slice(cmd.end + 1, close - 1).trim(),
+            command: cmd.name,
+          });
+          i = close;
+          continue;
+        }
+
+        if (cmd && STRUCTURE_CMDS.has(cmd.name.replace(/\*$/, ""))) {
+          let e = cmd.end;
+          // Swallow an optional [..] title and an empty {} terminator.
+          e = matchBracket(src, e);
+          if (src[e] === "{") e = matchBrace(src, e);
+          blocks.push({
+            kind: "structure",
+            id: nextId("structure"),
+            srcStart: i,
+            srcEnd: e,
+            command: src.slice(i, e).trim(),
+          });
+          i = e;
+          continue;
+        }
+
+        if (cmd && cmd.name === "end") {
+          // A stray \end{document} or similar: consume and move on.
+          const close = src[cmd.end] === "{" ? matchBrace(src, cmd.end) : cmd.end;
+          i = close;
+          continue;
+        }
+
+        if (cmd && cmd.name === "begin" && src[cmd.end] === "{") {
+          const nameClose = matchBrace(src, cmd.end);
+          const env = src.slice(cmd.end + 1, nameClose - 1).trim();
+          const bodyEnd = findEnvEnd(src, nameClose, env);
+          const contentEnd = bodyEnd.contentEnd;
+          const blockEnd = bodyEnd.blockEnd;
+          const { label, end: afterLabel } = peekLabel(src, blockEnd, limit);
+
+          if (FIGURE_ENVS.has(env)) {
+            const inner = findLabelIn(src, nameClose, contentEnd);
+            blocks.push({
+              kind: "figure",
+              id: nextId("figure"),
+              srcStart: i,
+              srcEnd: afterLabel,
+              graphics: extractGraphics(src, nameClose, contentEnd),
+              caption: extractCaption(src, nameClose, contentEnd),
+              label: inner ?? label,
+            });
+          } else if (TABLE_ENVS.has(env)) {
+            const inner = findLabelIn(src, nameClose, contentEnd);
+            blocks.push({
+              kind: "table",
+              id: nextId("table"),
+              srcStart: i,
+              srcEnd: afterLabel,
+              raw: src.slice(i, blockEnd),
+              caption: extractCaption(src, nameClose, contentEnd),
+              label: inner ?? label,
+              grid: parseTabular(src, nameClose, contentEnd),
+            });
+          } else if (LIST_ENVS.has(env)) {
+            blocks.push({
+              kind: "list",
+              id: nextId("list"),
+              srcStart: i,
+              srcEnd: afterLabel,
+              ordered: env === "enumerate",
+              items: parseItems(src, nameClose, contentEnd),
+            });
+          } else if (MATH_ENVS.has(env)) {
+            const inner = findLabelIn(src, nameClose, contentEnd);
+            blocks.push({
+              kind: "equation",
+              id: nextId("equation"),
+              srcStart: i,
+              srcEnd: afterLabel,
+              latex: src.slice(nameClose, contentEnd).trim(),
+              label: inner ?? label,
+              env,
+            });
+          } else if (VERBATIM_ENVS.has(env)) {
+            const options = listingOptions(src, nameClose, contentEnd);
+            blocks.push({
+              kind: "verbatim",
+              id: nextId("verbatim"),
+              srcStart: i,
+              srcEnd: afterLabel,
+              raw: src.slice(options.end, contentEnd),
+              env,
+              label: options.label,
+              title: options.caption,
+            });
+          } else if (env === "document" || env === "abstract" || env === "center") {
+            // Transparent wrappers: step inside and keep parsing normally.
+            i = nameClose;
+            continue;
+          } else {
+            blocks.push({
+              kind: "unknown",
+              id: nextId("env"),
+              srcStart: i,
+              srcEnd: afterLabel,
+              raw: src.slice(i, blockEnd),
+              env,
+            });
+          }
+          i = afterLabel;
+          continue;
+        }
+      }
+
+      // Anything else is running prose: consume to the next blank line or to the
+      // next construct that starts its own block.
+      const paraStart = i;
+      let j = i;
+      while (j < limit) {
+        if (src[j] === "\n") {
+          // A blank line ends the paragraph.
+          let k = j + 1;
+          while (k < limit && /[ \t\r]/.test(ch(src, k))) k++;
+          if (k >= limit || src[k] === "\n") { j = k; break; }
+          // A line starting a new construct also ends it.
+          //
+          // `\include` and `\input` are constructs too, and they were not on
+          // this list: a chapter that ended in prose with `\include{chapters/2}`
+          // on the very next line — no blank line between — swallowed the
+          // include into the paragraph, where the unknown-command fallback
+          // rendered it as the bare word `chapters/2` and the chapter it named
+          // was never opened. The thesis's own `main.tex` carries a comment
+          // about exactly this ("an \input abstract shows up in the reading
+          // view as a bare filename"). LaTeX's `\include` starts a new page, so
+          // it is never mid-paragraph in any document that compiles.
+          // `\IfFileExists` is here for the same reason: the thesis writes it on
+          // the line after an `\input`, and its branch can hold a heading.
+          if (src[k] === "\\") {
+            const c2 = readCommandName(src, k);
+            const bare = c2?.name.replace(/\*$/, "");
+            if (
+              c2 &&
+              (bare === "begin" || bare === "end" || (bare && HEADING_LEVELS[bare] !== undefined) || INCLUDE_CMDS.has(c2.name) || c2.name === "IfFileExists")
+            ) {
+              j = j + 1;
+              break;
+            }
+          }
+          if (isCommentStart(src, k)) { j = j + 1; break; }
+          j = k;
+          continue;
+        }
+        if (src[j] === "\\") {
+          const c2 = readCommandName(src, j);
+          if (c2 && (c2.name === "begin" || c2.name === "end")) break;
+          if (c2) { j = c2.end; continue; }
+        }
+        j++;
+      }
+      if (j <= paraStart) j = paraStart + 1;
+      const segments = parseInline(src, paraStart, j);
+      if (segments.some((s) => s.text.trim().length > 0)) {
+        blocks.push({ kind: "paragraph", id: nextId("para"), srcStart: paraStart, srcEnd: j, segments });
+      }
+      i = j;
+    }
+  };
+
+  scan(i, src.length);
   return { path, blocks: inBytes(blocks, src), sourceLength: byteLengthOf(src) };
 }
 

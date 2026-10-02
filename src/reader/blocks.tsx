@@ -459,32 +459,42 @@ function BlockBody({ block, epic, change = null }: BlockProps) {
 
 
 /**
- * The raster image types this page will ASK for.
+ * The figure types this page will ASK for.
  *
- * Deliberately the same list as `IMAGE_TYPES` in `store.ts`, and deliberately a
- * second copy of it rather than an import: importing would drag `store.ts` —
- * and with it `node:fs` — into the browser bundle, which is the failure mode
- * this codebase has hit before and which neither `tsc` nor `bun test` can see.
- * The server is the authority; this list only decides whether to render an
- * `<img>` at all, and being wrong about it costs a fallback box rather than a
- * broken picture.
+ * Deliberately the same list as `IMAGE_TYPES` in `store.ts` plus `.pdf`, and
+ * deliberately a second copy of it rather than an import: importing would drag
+ * `store.ts` — and with it `node:fs` — into the browser bundle, which is the
+ * failure mode this codebase has hit before and which neither `tsc` nor `bun
+ * test` can see. The server is the authority; this list only decides whether
+ * to render an `<img>` at all, and being wrong about it costs a fallback box
+ * rather than a broken picture.
+ *
+ * `.pdf` is here because the server answers it with a PNG of its first page,
+ * not with the PDF — see the essay on `IMAGE_TYPES`. The `<img>` never sees a
+ * PDF, so asking for one is no different from asking for a PNG.
  */
-const DRAWABLE = /\.(png|jpe?g|gif|webp)$/i
+const DRAWABLE = /\.(png|jpe?g|gif|webp|pdf)$/i
 
 /**
  * One `\includegraphics` target, as a picture when it can be one.
  *
  * Three states and all three are visible:
  *
- *  - A raster the server will serve: an `<img>`, with the filename underneath
- *    in the same monospace it always had, because a reader comparing the page
- *    to the source still needs to know which file this is.
- *  - A PDF or an SVG: the filename box, unchanged, because the server refuses
- *    those on purpose — see the essay on `IMAGE_TYPES`. The thesis on this
- *    machine has one PDF figure, so this branch is live rather than theoretical.
- *  - A raster that failed to load: the box, via `onError`. A broken-image glyph
- *    with no explanation is the one outcome worth ruling out, because it looks
- *    like the reader's browser is broken rather than like the file is missing.
+ *  - A raster or a PDF the server will serve: an `<img>`, with the filename
+ *    underneath in the same monospace it always had, because a reader
+ *    comparing the page to the source still needs to know which file this is.
+ *    Every figure in the thesis on this machine is a PDF, drawn this way.
+ *  - An SVG: the filename box, unchanged, because the server refuses those on
+ *    purpose — see the essay on `IMAGE_TYPES`.
+ *  - A figure that failed to load — a missing file, or a PDF the server could
+ *    not draw because `pdftoppm` is not installed or gave up: the box, via
+ *    `onError`. A broken-image glyph with no explanation is the one outcome
+ *    worth ruling out, because it looks like the reader's browser is broken
+ *    rather than like the file is missing.
+ *
+ * A figure float with no `\includegraphics` at all — the thesis's inline TikZ
+ * plots — has no `Graphic` and shows its caption alone, which is the honest
+ * amount of it this reader can draw.
  */
 function Graphic({ epic, file }: { epic: string; file: string }) {
   const [failed, setFailed] = useState(false)

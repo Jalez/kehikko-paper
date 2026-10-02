@@ -1330,8 +1330,10 @@ export function answer(
      * answers them with a guessed content type". That is the right objection
      * and it is answered rather than overruled: the file must be one the paper
      * itself named (`Paper.figures`), the type is a constant looked up by
-     * extension in `store.ts` rather than guessed, SVG and PDF are refused
-     * outright, and `confine` still stands underneath all three.
+     * extension in `store.ts` rather than guessed, SVG is refused outright,
+     * a PDF is answered with a PNG of its first page drawn on this side (the
+     * browser never receives the PDF), and `confine` still stands underneath
+     * all of it.
      *
      * `nosniff` and a `default-src 'none'` policy ride along because a browser
      * that decides for itself what these bytes are would undo the third check
