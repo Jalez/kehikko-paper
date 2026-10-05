@@ -9,7 +9,7 @@
 #   - No port on the `vite` line, and no `--strictPort`. Both used to be there,
 #     with 7870 written here and again in `register.ts` — 7820 through 7960
 #     belong to the other modules on this machine — so moving this one meant two
-#     edits and then remembering that the file in `~/.roadmap/modules` still
+#     edits and then remembering that the file in `~/Library/Application Support/Kehikot/modules` still
 #     named the old address. It is said once now, beside the id, as
 #     `PREFERRED_PORT` in `manifest.ts`.
 #
@@ -82,9 +82,25 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-if [ ! -d node_modules ]; then
+# Install when nothing is installed, AND whenever bun.lock or package.json is
+# newer than the last install here — the same rule as the host's own run.sh. A
+# pull that moves the protocol pin leaves the old package in node_modules, and
+# a page that imports a name the old package does not have draws nothing.
+# `--frozen-lockfile`, so a start installs exactly what bun.lock says and never
+# rewrites it behind somebody's back. The stamp is written only after an
+# install that succeeded.
+INSTALLED=node_modules/.kehikot-installed
+VITE_FORCE=
+if [ ! -d node_modules ] || [ ! -f "$INSTALLED" ] || [ bun.lock -nt "$INSTALLED" ] || [ package.json -nt "$INSTALLED" ]; then
   echo "installing…" >&2
-  bun install >&2
+  if [ -f bun.lock ]; then
+    bun install --frozen-lockfile >&2 || { echo "bun install --frozen-lockfile failed: bun.lock does not match package.json. Run \`bun install\` and commit bun.lock." >&2; exit 1; }
+  else
+    bun install >&2
+  fi
+  touch "$INSTALLED"
+  # Rebuild Vite's pre-bundle rather than trust one made from the old packages.
+  VITE_FORCE=--force
 fi
 
-exec bunx vite
+exec bunx vite $VITE_FORCE

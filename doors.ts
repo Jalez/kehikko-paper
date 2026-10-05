@@ -117,7 +117,7 @@ import {
  * ## Reads are not gated, and that is deliberate
  *
  * `/api/papers` and `/api/paper` answer anybody who asks on loopback. A paper
- * in this roadmap is a document its author is publishing; gating a read would
+ * in this workspace is a document its author is publishing; gating a read would
  * mean an agent's `curl` needed a credential to look at a page it can already
  * open in a browser, which buys nothing and costs the thing that makes this app
  * usable from a terminal. What IS guarded is the shape of the epic name and the
@@ -137,7 +137,7 @@ import {
  * environment variables this replaces were a fourth, and their failure was
  * measured rather than imagined — see the essay at the head of `store.ts`.
  *
- * The page is told which project by the host, in `roadmap.context.projectPath`,
+ * The page is told which project by the host, in `kehikot.context.projectPath`,
  * and sends it with every request. An unframed page carries `?project=` in its
  * own URL, beside the `?epic=` it already had. An agent over MCP is told
  * nothing and must say, and is refused with a sentence when it does not. From
@@ -387,14 +387,14 @@ interface ToolCall {
  * The `project` argument, spelled once for all three tools.
  *
  * It is required on every one of them, and the description says what a host
- * would put in `roadmap.context.projectPath` because that is the string an
+ * would put in `kehikot.context.projectPath` because that is the string an
  * agent is most likely to be able to find. A tool whose project were optional
  * would be a tool with a default, and the head of this file is about why there
  * is no default that is not silently wrong.
  */
 const PROJECT_ARG = {
   type: 'string',
-  description: 'Absolute path of the project folder — the same path a host puts in roadmap.context.projectPath',
+  description: 'Absolute path of the project folder — the same path a host puts in kehikot.context.projectPath',
 }
 
 /**
@@ -775,7 +775,7 @@ function mcp(rpc: Rpc): Reply {
       capabilities: { tools: {} },
       serverInfo: { name: ID, version: VERSION },
       instructions:
-        'The papers the epics in this roadmap are aimed at: LaTeX on disk, read as prose. Three tools read and ' +
+        'The papers the epics in this workspace are aimed at: LaTeX on disk, read as prose. Three tools read and ' +
         'one suggests. There is deliberately no tool that EDITS: propose_edit puts a change in front of the ' +
         'person reading the paper, drawn into the prose where it happens, and the file is untouched until they ' +
         'accept it — nothing on this door can accept it for them, and there is no argument that skips them. ' +

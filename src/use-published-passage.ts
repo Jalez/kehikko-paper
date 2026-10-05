@@ -1,4 +1,4 @@
-import { LIMITS, type Passage as WirePassage, type Section } from 'roadmap-module-protocol'
+import { LIMITS, type Passage as WirePassage, type Section } from 'kehikot-module-protocol'
 import { useEffect, useRef } from 'react'
 
 import type { Paper } from '../store.ts'
@@ -70,7 +70,7 @@ export interface Sheet {
  *
  * ## Not a taste, a measured hazard
  *
- * A passage goes into `roadmap.context`, and a context is posted into EVERY
+ * A passage goes into `kehikot.context`, and a context is posted into EVERY
  * framed module on the canvas. A selection changes on every pointer move during
  * a drag; a reader dragging across a paragraph produces dozens of them in a
  * second, and sent per event that is dozens of broadcasts to every container, each

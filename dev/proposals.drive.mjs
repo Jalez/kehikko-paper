@@ -28,7 +28,7 @@
  *
  * A project folder holding `.kehikot/paper/<epic>/main.tex` whose prose contains
  * the three FIND strings below, and this module running against a SCRATCH
- * `ROADMAP_MODULES_DIR`, because the dev server rewrites the registration for
+ * `KEHIKOT_MODULES_DIR`, because the dev server rewrites the registration for
  * whatever port it binds. Pressing Accept WRITES the file and commits, so the
  * driver puts the file back from `main.tex.orig` beside the project and clears
  * `proposals.json` before it starts, and files its own suggestions through the
@@ -63,7 +63,7 @@ if (existsSync(orig)) copyFileSync(orig, join(paperDir, 'main.tex'))
    door the page uses, with the ticket the page is printed with — suggestions
    live in the server's memory, so there is no file to clear. */
 const ticket = JSON.parse(
-  (await (await fetch(`${ORIGIN}/app`)).text()).match(/id="roadmap-paper-ticket"[^>]*>([^<]*)</)[1],
+  (await (await fetch(`${ORIGIN}/app`)).text()).match(/id="kehikot-paper-ticket"[^>]*>([^<]*)</)[1],
 )
 const where = `epic=${encodeURIComponent(EPIC)}&project=${encodeURIComponent(PROJECT)}`
 const waiting = await (await fetch(`${ORIGIN}/api/proposals?${where}`)).json()
@@ -310,7 +310,7 @@ await frame.evaluate(
   ({ projectPath, epic, passage }) => {
     window.postMessage(
       {
-        type: 'roadmap.hello',
+        type: 'kehikot.hello',
         protocol: 2,
         session: 'proposals-drive',
         context: { projectPath, project: 'scratch', epic, theme: 'light', passage },

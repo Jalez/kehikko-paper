@@ -71,7 +71,7 @@ export const PAGE = {
    *
    * It was 0.5, which was a guess at a serif rather than a measurement of THIS
    * one, and the guess was 8% too wide. Every paragraph in the thesis and in
-   * one roadmap paper was measured as drawn — 74 of them, six lines or longer
+   * one paper was measured as drawn — 74 of them, six lines or longer
    * so the partial last line does not dominate — and the median came out at
    * 96.5 characters to a full line against the 88 this arithmetic assumed.
    * Range 88.7 to 105.3, which is the spread of English prose and not of the
@@ -330,7 +330,7 @@ export function paginate(blocks: readonly PlacedBlock[], budget = LINES_PER_PAGE
 /**
  * Which sheet a given block landed on, or -1.
  *
- * This is how `roadmap.goto` walks to a reference that is not on the page the
+ * This is how `kehikot.goto` walks to a reference that is not on the page the
  * reader is standing on, and how a press in the sections sidebar turns to a
  * section: the block is found in the block list, this says which sheet holds
  * it, and the reader is turned to that sheet before the anchor is scrolled into

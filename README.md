@@ -22,14 +22,14 @@ bun run typecheck
 ## Where the papers come from
 
 **The open project.** A paper lives in the project it is about, and the project
-is the one the host names in `roadmap.context.projectPath` — the same
+is the one the host names in `kehikot.context.projectPath` — the same
 convention notes, checklist and journeys already keep. There is nothing to set.
 
 | Where                                        | Means                                              |
 | -------------------------------------------- | -------------------------------------------------- |
 | `<project>/.kehikot/paper/<epic>/main.tex`   | a paper. The only place one is looked for          |
 | `PORT`                                       | 7870 by default                                    |
-| `ROADMAP_ORIGIN`                             | who may frame this page; the local host by default |
+| `KEHIKOT_ORIGINS`                           | who may frame this page (`KEHIKOT_ORIGIN`, then the older `ROADMAP_ORIGIN`, are fallbacks); every local host origin by default |
 
 A paper is that directory's `main.tex`, plus whatever it `\include`s. Nothing
 is cached: the file is opened on every read, so a paper edited in an editor is
@@ -80,7 +80,7 @@ a path that does not exist rather than trusting a lexical prefix.
 
 ## What it does
 
-- Reads `context.epic` from the greeting and from every `roadmap.context`, and
+- Reads `context.epic` from the greeting and from every `kehikot.context`, and
   shows that epic's paper.
 - `epic: null` is an ordinary state with its own screen, not an error — it is
   what the canvas looks like before anybody opens anything.
@@ -139,7 +139,7 @@ focus is on the sections trigger is forwarded to it rather than doing nothing.
 2,437 DOM nodes and 16,101 words rendered at once, first paint in ~610ms against
 a Vite dev server. Virtualising would cost three things that do not throw when
 they break: `scrollIntoView` on an unrendered page does nothing, so a
-`roadmap.goto` at the end of the paper fails silently; the browser's own
+`kehikot.goto` at the end of the paper fails silently; the browser's own
 find-in-page can only see what is in the DOM; and a highlight anchored to page 30
 cannot be resolved. Measured, the cost of rendering everything was not there.
 
@@ -462,7 +462,7 @@ Those are checked in a headless Chrome by `dev/proposals.drive.mjs`, which files
 three suggestions through the MCP door, scrolls, presses Accept, and measures —
 unframed for the geometry and framed, in an iframe with a greeting carrying a
 passage, for the walk. It is a driver and not a test: it needs the module running
-against a scratch `ROADMAP_MODULES_DIR`, and it writes to the paper it is pointed
+against a scratch `KEHIKOT_MODULES_DIR`, and it writes to the paper it is pointed
 at. What is still unchecked by anything: how it looks and reads to a person, and
 whether the card covers prose somebody wanted at either width.
 
@@ -577,7 +577,7 @@ cannot become one.
 
 **`selection.ts` stays, and publishes nothing yet.** A Notes module should be
 able to attach a note to the passage a reader has highlighted here. The canvas
-`selection` on `roadmap.context` is the wrong pipe for it: that field carries
+`selection` on `kehikot.context` is the wrong pipe for it: that field carries
 tracker refs (`gh#105`) and every module that reads it looks the string up in a
 tracker, so a byte range posted there would be handed to Journeys and to
 References as an issue neither can find. A passage needs a shape of its own, and
@@ -866,7 +866,7 @@ larger surface. Both keep the filename box. The thesis on this machine has three
 PNG figures, which render, and one PDF figure, which does not: a visible,
 explicable gap rather than a silent one.
 
-There is also no KaTeX. Not one of the twenty-two `.tex` files in this roadmap
+There is also no KaTeX. Not one of the twenty-two `.tex` files in this workspace
 contains a `$`, an `equation` or an `align` — measured, not assumed — so an
 equation is shown as its own LaTeX in a monospace box rather than shipping a
 typesetting library for a case that does not occur. `parse.ts` keeps the raw
@@ -875,8 +875,8 @@ that changes.
 
 And there is no `tailwind.config.js`. Tailwind v4 is configured in CSS, in
 `src/index.css`, which is also where the dark variant is defined — as a class
-the wire sets from `roadmap.context.theme` rather than `prefers-color-scheme`,
-because the theme this page has to agree with is the roadmap's and not the
+the wire sets from `kehikot.context.theme` rather than `prefers-color-scheme`,
+because the theme this page has to agree with is Kehikot's and not the
 reader's operating system's. The one place the media query is consulted is
 `main.tsx`, to decide what that class starts as on a page nobody is framing.
 
@@ -903,7 +903,7 @@ below.
 | Path                              | |
 | --------------------------------- | ----------------------------------------- |
 | `/app`                            | the page |
-| `/.well-known/roadmap-module.json`| the manifest |
+| `/.well-known/kehikot-module.json`| the manifest (also at `/.well-known/roadmap-module.json` for hosts from before the rename) |
 | `/healthz`                        | |
 | `/api/papers`                     | every epic with a paper, and whether this app was configured at all — the page reads only the second half, the MCP `list_papers` tool the first |
 | `/api/paper?epic=…`               | one paper, parsed, chapters folded in |

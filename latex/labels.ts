@@ -44,7 +44,7 @@ import type { Block, Segment } from './parse.ts'
  * file can `\LoadClass{report}` under any name it likes, and what actually
  * decides the numbering in LaTeX is whether the chapter counter is ever
  * stepped. So this asks the same question — does the paper contain a numbered
- * `\chapter` anywhere — and every roadmap paper on this machine, which is an
+ * `\chapter` anywhere — and every paper on this machine, which is an
  * article, numbers plainly, while the thesis, which is a report, prefixes.
  */
 

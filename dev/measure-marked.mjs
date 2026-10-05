@@ -101,16 +101,16 @@ await page.evaluate(
     const send = (message) => frame.contentWindow?.postMessage(message, '*')
     window.__point = (passage) => {
       context.passage = passage
-      send({ ...context, type: 'roadmap.context', protocol: 1 })
+      send({ ...context, type: 'kehikot.context', protocol: 1 })
     }
     window.addEventListener('message', (ev) => {
       const m = ev.data
-      if (!m || typeof m.type !== 'string' || m.type !== 'roadmap.request') return
-      send({ type: 'roadmap.response', id: m.id, ok: true, data: {} })
+      if (!m || typeof m.type !== 'string' || m.type !== 'kehikot.request') return
+      send({ type: 'kehikot.response', id: m.id, ok: true, data: {} })
     })
     for (const wait of [400, 500, 500]) {
       await new Promise((r) => setTimeout(r, wait))
-      send({ type: 'roadmap.hello', protocol: 1, session: 'probe-session', context, state: null })
+      send({ type: 'kehikot.hello', protocol: 1, session: 'probe-session', context, state: null })
     }
   },
   { paper: PAPER, project: PROJECT, epic: EPIC },

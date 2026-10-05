@@ -324,7 +324,7 @@ function BlockBody({ block, epic, change = null }: BlockProps) {
        *
        * The reader this was rebuilt from used KaTeX, and that was right for a
        * thesis full of maths. Not one of the twenty-two `.tex` files in this
-       * roadmap contains a single `$` — measured, not assumed — so shipping a
+       * workspace contains a single `$` — measured, not assumed — so shipping a
        * typesetting library and its stylesheet would spend the page's whole
        * load budget on a case that does not occur. Showing the source is honest
        * about it: nobody can mistake `\frac{a}{b}` in a monospace box for a
@@ -426,7 +426,7 @@ function BlockBody({ block, epic, change = null }: BlockProps) {
        *
        * `pre-wrap` keeps the author's own line breaks, which is the point of
        * showing a comment at all — and it does NOT break a run with no spaces
-       * in it. Every roadmap paper's comments are prose, so that never showed;
+       * in it. Every paper's comments are prose, so that never showed;
        * the thesis opens its files with `% ===============…` banner rules sixty
        * characters wide, and without `anywhere` one of those widens the sheet.
        */

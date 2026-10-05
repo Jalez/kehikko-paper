@@ -21,7 +21,7 @@ import { clearSelection, fileOfSelection, readSelection, selectionRect, type Sou
  *
  * This file used to end with an open question: the user wants a Notes module to
  * be able to attach a note to the passage a reader has highlighted here, and
- * the obvious-looking route — the canvas `selection` on `roadmap.context` — is
+ * the obvious-looking route — the canvas `selection` on `kehikot.context` — is
  * wrong, because that field carries TRACKER REFS. A byte range posted into it
  * would be handed to Journeys and to References as though it were an issue, and
  * each would fail to find it silently, in a way whose cause is three modules

@@ -13,8 +13,8 @@
  *
  * Tailwind's stock dark variant is `prefers-color-scheme`, which asks the wrong
  * question for a framed module: the theme this page has to agree with is the
- * one the roadmap around it is painted in, and that arrives on every
- * `roadmap.context` as `theme`. So the variant below is a class the wire sets,
+ * one the host around it is painted in, and that arrives on every
+ * `kehikot.context` as `theme`. So the variant below is a class the wire sets,
  * and `.light` is set explicitly as well, so a host asking for light on a
  * machine set to dark actually gets light.
  *
@@ -254,7 +254,7 @@
 
   /*
    * Long, unbroken strings are the one thing that widens a container past its frame:
-   * a `\texttt` span holding `roadmap-module-protocol`, a label like
+   * a `\texttt` span holding `kehikot-module-protocol`, a label like
    * `sec:extraction`, a URL in a footnote. Breaking them is the honest fix —
    * the whole string stays on screen, wrapped, rather than being clipped by an
    * `overflow: hidden` that says nothing about what is missing.

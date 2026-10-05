@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { LIMITS, passageSchema } from 'roadmap-module-protocol'
+import { LIMITS, passageSchema } from 'kehikot-module-protocol'
 
 import type { Paper, PlacedBlock } from '../store.ts'
 import { sectionAt } from '../src/reader/pages.ts'

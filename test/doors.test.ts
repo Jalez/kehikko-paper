@@ -31,15 +31,15 @@ import { ID } from '../manifest.ts'
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'kehikko-paper-doors-')))
 
 /** A project holding one paper among its other things. */
-const roadmap = join(root, 'roadmap')
+const projectDir = join(root, 'project')
 /** A project whose one paper is a thesis. Same folder, same rule. */
 const thesisProject = join(root, 'thesis')
 const thesis = join(thesisProject, '.kehikot', 'paper', 'thesis')
 
 beforeAll(() => {
-  mkdirSync(join(roadmap, '.kehikot', 'paper', 'a-paper'), { recursive: true })
+  mkdirSync(join(projectDir, '.kehikot', 'paper', 'a-paper'), { recursive: true })
   writeFileSync(
-    join(roadmap, '.kehikot', 'paper', 'a-paper', 'main.tex'),
+    join(projectDir, '.kehikot', 'paper', 'a-paper', 'main.tex'),
     [
       '\\title{Something argued}',
       '\\begin{document}',
@@ -117,7 +117,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
    * does, and nothing else on the page would ever show it.
    */
   test.each(['/api/paper', '/api/edit', '/api/proposal'])('POST %s without the ticket is 403', (path) => {
-    const reply = answer('POST', path, new URLSearchParams(inProject(roadmap, 'epic=a-paper')), {
+    const reply = answer('POST', path, new URLSearchParams(inProject(projectDir, 'epic=a-paper')), {
       file: 'main.tex',
       from: 0,
       to: 1,
@@ -128,7 +128,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
   })
 
   test('a ticket from some other process is refused the same way', () => {
-    const reply = answer('POST', '/api/edit', new URLSearchParams(inProject(roadmap, 'epic=a-paper')), {
+    const reply = answer('POST', '/api/edit', new URLSearchParams(inProject(projectDir, 'epic=a-paper')), {
       ticket: '00000000-0000-4000-8000-000000000000',
       file: 'main.tex',
       from: 0,
@@ -184,12 +184,12 @@ describe('the ordinary doors', () => {
        There is no such list any more and there should never have been one: a
        container is standing in a project, and papers from a project nobody is
        looking at are somebody else's material drawn under this project's name. */
-    const body = get('/api/papers', inProject(roadmap))?.body as {
+    const body = get('/api/papers', inProject(projectDir))?.body as {
       project: string | null
       keeps: boolean
       papers: { epic: string }[]
     }
-    expect(body.project).toBe(roadmap)
+    expect(body.project).toBe(projectDir)
     expect(body.keeps).toBe(true)
     expect(body.papers.map((p) => p.epic)).toEqual(['a-paper'])
 
@@ -216,7 +216,7 @@ describe('the ordinary doors', () => {
     expect(unset.project).toBe(bare)
     expect(unset.keeps).toBe(false)
 
-    const empty = join(root, 'empty-roadmap')
+    const empty = join(root, 'empty-project')
     mkdirSync(join(empty, '.kehikot', 'paper'), { recursive: true })
     const nonePlease = get('/api/papers', inProject(empty))?.body as {
       keeps: boolean
@@ -240,11 +240,11 @@ describe('the ordinary doors', () => {
        still does: nothing resolves against a root it does not belong to. The
        slug is right, the paper exists on this disk, and the answer is still no. */
     expect(get('/api/paper', inProject(thesisProject, 'epic=a-paper'))?.status).toBe(404)
-    expect(get('/api/paper', inProject(roadmap, 'epic=thesis'))?.status).toBe(404)
+    expect(get('/api/paper', inProject(projectDir, 'epic=thesis'))?.status).toBe(404)
   })
 
   test('one paper comes back parsed, with its chapters in reading order', () => {
-    const body = get('/api/paper', inProject(roadmap, 'epic=a-paper'))?.body as {
+    const body = get('/api/paper', inProject(projectDir, 'epic=a-paper'))?.body as {
       ok: boolean
       paper: { title: string; outline: { text: string }[] }
     }
@@ -254,14 +254,14 @@ describe('the ordinary doors', () => {
   })
 
   test('an epic with no paper is a 404 and not an empty document', () => {
-    expect(get('/api/paper', inProject(roadmap, 'epic=nothing-here'))?.status).toBe(404)
+    expect(get('/api/paper', inProject(projectDir, 'epic=nothing-here'))?.status).toBe(404)
   })
 
   test('a name that is not an epic name is refused the same way whatever exists', () => {
     /* Identical refusals, so the door cannot be used to enumerate what is on
        this disk by timing or by wording. */
-    const a = get('/api/paper', inProject(roadmap, 'epic=' + encodeURIComponent('../../etc/passwd')))
-    const b = get('/api/paper', inProject(roadmap, 'epic=' + encodeURIComponent('Not A Slug')))
+    const a = get('/api/paper', inProject(projectDir, 'epic=' + encodeURIComponent('../../etc/passwd')))
+    const b = get('/api/paper', inProject(projectDir, 'epic=' + encodeURIComponent('Not A Slug')))
     expect(a?.status).toBe(400)
     expect(a?.body).toEqual(b?.body as object)
   })
@@ -292,7 +292,7 @@ describe('the MCP door', () => {
       jsonrpc: '2.0',
       id: 3,
       method: 'tools/call',
-      params: { name: 'read_paper', arguments: { project: roadmap, epic: 'a-paper' } },
+      params: { name: 'read_paper', arguments: { project: projectDir, epic: 'a-paper' } },
     })
     const text = (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
     expect(text).toContain('The claim, in a sentence.')
@@ -304,7 +304,7 @@ describe('the MCP door', () => {
       jsonrpc: '2.0',
       id: 5,
       method: 'tools/call',
-      params: { name: 'list_sections', arguments: { project: roadmap, epic: 'a-paper' } },
+      params: { name: 'list_sections', arguments: { project: projectDir, epic: 'a-paper' } },
     })
     const text = (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
     const sections = JSON.parse(text) as { path: string; title: string; level: number; from: number; to: number }[]
@@ -321,7 +321,7 @@ describe('the MCP door', () => {
       jsonrpc: '2.0',
       id: 4,
       method: 'tools/call',
-      params: { name: 'read_source', arguments: { project: roadmap, epic: 'a-paper' } },
+      params: { name: 'read_source', arguments: { project: projectDir, epic: 'a-paper' } },
     })
     const text = (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
     expect(text).toContain('\\begin{document}')
@@ -356,8 +356,8 @@ describe('the MCP door', () => {
       })
       return (reply?.body as { result: { content: { text: string }[] } }).result.content[0]!.text
     }
-    expect(ask(roadmap)).toContain('a-paper')
-    expect(ask(roadmap)).not.toContain('thesis')
+    expect(ask(projectDir)).toContain('a-paper')
+    expect(ask(projectDir)).not.toContain('thesis')
     expect(ask(thesisProject)).toContain('thesis')
   })
 
@@ -423,6 +423,6 @@ describe('the figure door', () => {
        directory and names no figures at all; asking for the thesis's figure
        under its slug must not resolve, because a union of roots is exactly what
        a second root must not become. */
-    expect(get('/api/figure', inProject(roadmap, 'epic=a-paper&file=figures%2Fplot.png'))?.status).toBe(404)
+    expect(get('/api/figure', inProject(projectDir, 'epic=a-paper&file=figures%2Fplot.png'))?.status).toBe(404)
   })
 })

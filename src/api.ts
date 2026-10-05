@@ -98,7 +98,7 @@ export async function json(path: string, params: Record<string, string> = {}): P
  * not travel: it goes back to the origin that issued it and nowhere else. The
  * essay on `TICKET` in `doors.ts` says what it does and does not separate.
  */
-const TICKET_ID = 'roadmap-paper-ticket'
+const TICKET_ID = 'kehikot-paper-ticket'
 let ticket: string | null = null
 
 export function writeTicket(): string {

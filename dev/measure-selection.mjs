@@ -79,7 +79,7 @@ const ORIGIN = process.env.PAPER_ORIGIN ?? 'http://127.0.0.1:7870'
  */
 const HOST_PAGE = `${ORIGIN}/app?probe=host`
 const PAPER = `${ORIGIN}/app?probe=frame`
-const PROJECT = process.env.PROJECT ?? '/Users/jaakkorajala/Projects/roadmap'
+const PROJECT = process.env.PROJECT ?? '/Users/jaakkorajala/Projects/kehikko'
 const EPIC = process.env.EPIC ?? 'a-green-gate-means-something'
 
 const browser = await chromium.launch({
@@ -117,22 +117,22 @@ await page.evaluate(
        difference between the two halves this probe measures. */
     window.__point = (passage) => {
       context.passage = passage
-      send({ ...context, type: 'roadmap.context', protocol: 1 })
+      send({ ...context, type: 'kehikot.context', protocol: 1 })
     }
 
     window.addEventListener('message', (ev) => {
       const m = ev.data
-      if (!m || typeof m.type !== 'string' || !m.type.startsWith('roadmap.')) return
-      if (m.type !== 'roadmap.request') return
+      if (!m || typeof m.type !== 'string' || !m.type.startsWith('kehikot.')) return
+      if (m.type !== 'kehikot.request') return
       window.__log.requests.push({ method: m.method, params: m.params })
-      send({ type: 'roadmap.response', id: m.id, ok: true, data: {} })
+      send({ type: 'kehikot.response', id: m.id, ok: true, data: {} })
       /* The half of a host that this probe exists to reproduce: a passage set
          by one module becomes the context every module is told about, the
          sender included. */
       if (m.method === 'passage.set') {
         context.passage = m.params?.passage ?? null
         window.__log.echoed = true
-        send({ ...context, type: 'roadmap.context', protocol: 1 })
+        send({ ...context, type: 'kehikot.context', protocol: 1 })
       }
     })
 
@@ -144,7 +144,7 @@ await page.evaluate(
        the one under test. */
     for (const wait of [400, 900, 1600]) {
       await new Promise((r) => setTimeout(r, wait === 400 ? 400 : 500))
-      send({ type: 'roadmap.hello', protocol: 1, session: 'probe-session', context, state: null })
+      send({ type: 'kehikot.hello', protocol: 1, session: 'probe-session', context, state: null })
     }
   },
   { paper: PAPER, project: PROJECT, epic: EPIC },

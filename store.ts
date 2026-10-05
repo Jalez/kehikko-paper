@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
-import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'roadmap-module-protocol'
+import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'kehikot-module-protocol'
 
 import { NO_BIBLIOGRAPHY, bibFilesNamed, parseBib, resolveCite, type Bibliography } from './latex/bib.ts'
 import { onBoundary, sourceRefuses, whyNot } from './latex/edit.ts'
@@ -46,7 +46,7 @@ import { ID } from './manifest.ts'
  * sibling papers to point at. Both are gone, and what replaced them is the
  * convention every other module in this workspace already keeps: the material
  * lives in the PROJECT the host says is open, and the module derives its
- * location from `roadmap.context.projectPath` rather than from the shell that
+ * location from `kehikot.context.projectPath` rather than from the shell that
  * happened to start it.
  *
  * Three things were wrong with the variables, and only the third is about
@@ -450,7 +450,7 @@ export function isEpic(value: unknown): value is string {
  * refuses anything it cannot realpath at all, which it can afford because it
  * only ever asks about things it has just listed. Two modules implementing "the
  * fence" two different ways is how one of them ends up wrong — this one did —
- * and the answer is one implementation in `roadmap-module-protocol` that both
+ * and the answer is one implementation in `kehikot-module-protocol` that both
  * import. That is not done here on purpose: another agent is in that package as
  * this is written, and a shared fence landed by two hands at once is the worst
  * possible file to have a merge conflict in. It is the next move, and this

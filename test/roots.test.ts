@@ -58,8 +58,8 @@ writeFileSync(join(root, 'secret.png'), PNG)
  * folder is where `moduleDir` says this module's folder is.
  * ------------------------------------------------------------------ */
 
-const roadmap = join(root, 'roadmap')
-const papers = join(roadmap, '.kehikot', 'paper')
+const projectDir = join(root, 'project')
+const papers = join(projectDir, '.kehikot', 'paper')
 mkdirSync(join(papers, 'good-epic'), { recursive: true })
 writeFileSync(
   join(papers, 'good-epic', 'main.tex'),
@@ -68,7 +68,7 @@ writeFileSync(
 /* A folder with no `main.tex`: an epic with no paper, not a paper that failed. */
 mkdirSync(join(papers, 'empty-epic'), { recursive: true })
 /* Inside the project and outside every paper root, for the fences to refuse. */
-writeFileSync(join(roadmap, 'in-project-secret.tex'), 'nor this')
+writeFileSync(join(projectDir, 'in-project-secret.tex'), 'nor this')
 
 /* ------------------------------------------------------------------ *
  * A project whose one paper is a thesis: a `main.tex` with a class and a
@@ -121,7 +121,7 @@ writeFileSync(join(thesis, 'figures', 'drawing.pdf'), '%PDF-1.7 not an image thi
 writeFileSync(join(thesis, 'figures', 'private.png'), PNG)
 /* Inside the thesis PROJECT and outside its paper, for the fences to refuse. */
 writeFileSync(join(thesisProject, 'in-project-secret.tex'), 'nor this')
-/* And a `references.bib`, which the roadmap's own papers do not have. It was
+/* And a `references.bib`, which the the project's own papers do not have. It was
    put here so that a paper root carrying one was exercised rather than assumed
    harmless, and nothing read it then. `readPaper` reads it now, when the
    preamble names it — this one's does not, so the citation in `one.tex` stays
@@ -151,20 +151,20 @@ describe('which directory is a project at all', () => {
   })
 
   test('a real project comes back resolved, so every later fence measures one string', () => {
-    expect(projectOf(roadmap)).toBe(roadmap)
-    expect(projectOf(`${roadmap}/`)).toBe(roadmap)
+    expect(projectOf(projectDir)).toBe(projectDir)
+    expect(projectOf(`${projectDir}/`)).toBe(projectDir)
   })
 })
 
 describe('a paper is found by looking, and there is one place to look', () => {
   test('.kehikot/paper/<epic>/main.tex is found with no configuration at all', () => {
-    expect(listPapers(roadmap).map((p) => p.epic)).toEqual(['good-epic'])
-    expect(readPaper('good-epic', roadmap)!.title).toBe('A paper with a title')
+    expect(listPapers(projectDir).map((p) => p.epic)).toEqual(['good-epic'])
+    expect(readPaper('good-epic', projectDir)!.title).toBe('A paper with a title')
   })
 
   test('a folder with no main.tex is an epic with no paper', () => {
-    expect(readPaper('empty-epic', roadmap)).toBeNull()
-    expect(listPapers(roadmap).map((p) => p.epic)).not.toContain('empty-epic')
+    expect(readPaper('empty-epic', projectDir)).toBeNull()
+    expect(listPapers(projectDir).map((p) => p.epic)).not.toContain('empty-epic')
   })
 
   test('no project means no papers, and never every paper on the machine', () => {
@@ -304,23 +304,23 @@ describe('figures, in a project whose paper is a thesis', () => {
 describe('each root is confined to itself, and each project to itself', () => {
   test('a paper in one project cannot be reached through another', () => {
     expect(readPaper('good-epic', thesisProject)).toBeNull()
-    expect(readPaper('thesis', roadmap)).toBeNull()
+    expect(readPaper('thesis', projectDir)).toBeNull()
   })
 
   test('a source file is resolved against its own root and no other', () => {
     expect(readSource('thesis', 'main.tex', thesisProject)).toContain('tauthesis')
     expect(readSource('thesis', '../secret.tex', thesisProject)).toBeNull()
-    expect(readSource('good-epic', '../../../../a-thesis/main.tex', roadmap)).toBeNull()
+    expect(readSource('good-epic', '../../../../a-thesis/main.tex', projectDir)).toBeNull()
   })
 
   test('the fence is the paper directory and not the project', () => {
-    /* `.kehikot/paper/good-epic/` is the root, not `roadmap/`. Otherwise one
+    /* `.kehikot/paper/good-epic/` is the root, not `project/`. Otherwise one
        epic's `\include` could reach into the next epic's paper, or into the
        rest of somebody's repository, and every path would still be "inside the
        project". The climb is longer now and the answer is the same. */
-    expect(readSource('good-epic', '../../../in-project-secret.tex', roadmap)).toBeNull()
-    expect(readSource('good-epic', '../../../../in-project-secret.tex', roadmap)).toBeNull()
-    expect(readPaper('good-epic', roadmap)!.files).toEqual(['main.tex'])
+    expect(readSource('good-epic', '../../../in-project-secret.tex', projectDir)).toBeNull()
+    expect(readSource('good-epic', '../../../../in-project-secret.tex', projectDir)).toBeNull()
+    expect(readPaper('good-epic', projectDir)!.files).toEqual(['main.tex'])
   })
 
   test('an include climbing out of the root reads nothing and says so', () => {
@@ -371,19 +371,19 @@ describe('each root is confined to itself, and each project to itself', () => {
     mkdirSync(join(others, '.kehikot', 'journeys'), { recursive: true })
     expect(keepsPapers(others)).toBe(false)
 
-    expect(keepsPapers(roadmap)).toBe(true)
+    expect(keepsPapers(projectDir)).toBe(true)
     expect(keepsPapers(thesisProject)).toBe(true)
   })
 })
 
 describe('starting a paper, which is the one thing this module writes', () => {
   test('says where a paper would go, whether or not one is there', () => {
-    expect(whereItWouldGo('good-epic', roadmap)).toBe(join(papers, 'good-epic'))
-    expect(whereItWouldGo('not-written-yet', roadmap)).toBe(join(papers, 'not-written-yet'))
+    expect(whereItWouldGo('good-epic', projectDir)).toBe(join(papers, 'good-epic'))
+    expect(whereItWouldGo('not-written-yet', projectDir)).toBe(join(papers, 'not-written-yet'))
     /* No project and no epic are both "there is no such place", and inventing a
        plausible-looking path would be worse than saying nothing. */
     expect(whereItWouldGo('good-epic', null)).toBeNull()
-    expect(whereItWouldGo('../climb', roadmap)).toBeNull()
+    expect(whereItWouldGo('../climb', projectDir)).toBeNull()
   })
 
   test('makes a folder with a document in it, and the paper reads immediately', () => {
@@ -407,17 +407,17 @@ describe('starting a paper, which is the one thing this module writes', () => {
    * flag to force it, so it cannot happen by being called wrongly.
    */
   test('refuses rather than overwriting, and touches nothing when it does', () => {
-    const before = readSource('good-epic', 'main.tex', roadmap)
-    const again = startPaper('good-epic', roadmap)
+    const before = readSource('good-epic', 'main.tex', projectDir)
+    const again = startPaper('good-epic', projectDir)
     expect(again.ok).toBe(false)
-    expect(readSource('good-epic', 'main.tex', roadmap)).toBe(before)
+    expect(readSource('good-epic', 'main.tex', projectDir)).toBe(before)
   })
 
   test('refuses a folder that is there but empty, rather than filling it in', () => {
     /* `empty-epic` is a directory with no `main.tex` — an epic with no paper.
        Writing into it would be this app deciding what somebody's empty folder
        was for. */
-    const said = startPaper('empty-epic', roadmap)
+    const said = startPaper('empty-epic', projectDir)
     expect(said.ok).toBe(false)
   })
 

@@ -132,7 +132,7 @@ describe('numbering, counted the way LaTeX counts', () => {
   })
 
   test('a paper with no chapters numbers its sections and figures plainly', () => {
-    /* Every roadmap paper on this machine is an article: `\section` is the
+    /* Every paper on this machine is an article: `\section` is the
        top, and a figure is "Figure 2", not "Figure 0.2". */
     const article = file(
       'main.tex',

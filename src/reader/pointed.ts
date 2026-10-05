@@ -1,4 +1,4 @@
-import type { Passage } from 'roadmap-module-protocol'
+import type { Passage } from 'kehikot-module-protocol'
 
 import { plainText } from '../../latex/parse.ts'
 import type { Paper, PlacedBlock } from '../../store.ts'
@@ -26,7 +26,7 @@ import { visible } from './pages.ts'
  * edge case: a note lives on a chapter, the canvas is on another epic, and the
  * note is pressed. The protocol's own note on `path` says consumers compare it
  * for EQUALITY, and this one cannot open what it was not asked to show — the
- * `roadmap.goto` handler in `app.tsx` refuses a walk aimed at another epic for
+ * `kehikot.goto` handler in `app.tsx` refuses a walk aimed at another epic for
  * a reason that applies unchanged here: loading it would answer for a place the
  * canvas is not standing, and the host is about to send a context for wherever
  * the reader really is.
