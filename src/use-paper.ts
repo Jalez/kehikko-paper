@@ -1,7 +1,7 @@
-import type { Goto, Passage } from 'roadmap-module-protocol'
+import type { Goto, Passage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { connect, type Connection } from 'roadmap-module-protocol/client'
+import { connect, type Connection } from 'kehikot-module-protocol/client'
 
 import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
@@ -13,7 +13,7 @@ import { changedFiles, fingerprint } from './reader/changed.ts'
  * What this page can see, and the one place the wire and the papers meet.
  *
  * `reader/` knows about LaTeX and nothing about the wire.
- * `roadmap-module-protocol/client` knows about the wire and nothing about
+ * `kehikot-module-protocol/client` knows about the wire and nothing about
  * papers. This hook is the only place the two meet, and it is deliberately the
  * only one — two places deciding which paper is on screen would eventually
  * disagree, and "which paper am I looking at" is the one question this app
@@ -99,7 +99,7 @@ export type Sight =
 
 export type GotoHandler = (goto: Goto, answer: (found: boolean, why?: string) => void) => void
 
-const ID = 'roadmap.paper'
+const ID = 'kehikot.paper'
 
 /**
  * How often the page asks what has been suggested about the paper it is showing.
@@ -220,7 +220,7 @@ export function usePaper(framed: boolean) {
    * It used to narrate the ordinary case as well — "this is the paper for the
    * epic the canvas is on" — which told a reader what the container header and the
    * canvas had both already told them, in the space where the paper goes. A
-   * `roadmap.goto` is different in kind: the page turned and the reader did not
+   * `kehikot.goto` is different in kind: the page turned and the reader did not
    * turn it, so something has to say why.
    */
   const [said, setSaid] = useState('')
@@ -266,7 +266,7 @@ export function usePaper(framed: boolean) {
    *
    * ## Every fetch on this page is keyed to this CHANGING
    *
-   * `roadmap.context` no longer means "the reader moved": it carries the
+   * `kehikot.context` no longer means "the reader moved": it carries the
    * canvas's selection too, so the host sends one after every selection change
    * anywhere on the canvas — several a second while somebody drags. Re-fetching
    * on each would throw the paper away and put the page back into `asking`

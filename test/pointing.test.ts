@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { Passage } from 'roadmap-module-protocol'
+import type { Passage } from 'kehikot-module-protocol'
 
 import type { Paper, PlacedBlock } from '../store.ts'
 import { blockFor, fileOf, isEcho, keyOf, pointedAt, received } from '../src/reader/pointed.ts'
@@ -24,7 +24,7 @@ import { passageFor, shouldPublish } from '../src/use-published-passage.ts'
  * checked. So the guard is a pure function and it is tested like one.
  */
 
-const DIR = '/Users/x/Projects/roadmap/.kehikot/paper/modes-are-modules'
+const DIR = '/Users/x/Projects/kehikko/.kehikot/paper/modes-are-modules'
 
 function block(over: Partial<PlacedBlock> = {}): PlacedBlock {
   return {
@@ -201,7 +201,7 @@ describe('what this container does about a passage', () => {
   test('a document this container does not have open says so, and never silently does nothing', () => {
     /* The real case: a note lives on another epic's chapter and somebody
        presses it. Opening it would answer for a place the canvas is not
-       standing — the `roadmap.goto` handler refuses the same thing for the same
+       standing — the `kehikot.goto` handler refuses the same thing for the same
        reason — and doing nothing quietly would look, from the container that sent
        it, exactly like it had worked. */
     const answer = pointedAt(paper, at({ path: '/Users/x/thesis/chapters/3_methods.tex' }))

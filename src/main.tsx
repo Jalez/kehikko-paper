@@ -19,7 +19,7 @@ import './index.css'
  * has not run yet, which is the same bug wearing a bundler's clothes. The
  * package's `sideEffects` field names the client files for the same reason.
  */
-import 'roadmap-module-protocol/client'
+import 'kehikot-module-protocol/client'
 import { App } from './app.tsx'
 
 /**
@@ -28,7 +28,7 @@ import { App } from './app.tsx'
  * This is the only place `prefers-color-scheme` is consulted in JavaScript, and
  * it is consulted for one case: a page nobody is framing, where there is no
  * host to have an opinion and the machine's is the only one going. Any
- * `roadmap.context` that arrives overrides it, which is what makes the class on
+ * `kehikot.context` that arrives overrides it, which is what makes the class on
  * the root element the single answer to "what theme is this" rather than one of
  * two mechanisms that can disagree.
  */

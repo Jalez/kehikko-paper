@@ -429,7 +429,7 @@ function ch(src: string, i: number): string {
 /**
  * A macro the paper defined for itself, and why this parser expands them.
  *
- * Every paper in this roadmap opens by defining its own three words:
+ * Every paper in this workspace opens by defining its own three words:
  *
  *     \newcommand{\gh}[1]{\texttt{gh\##1}}
  *     \newcommand{\mr}[1]{\texttt{!#1}}

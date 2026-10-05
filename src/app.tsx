@@ -1,4 +1,4 @@
-import type { Passage as WirePassage } from 'roadmap-module-protocol'
+import type { Passage as WirePassage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import type { Paper } from '../store.ts'
@@ -81,7 +81,7 @@ export function App() {
    * element that has it. Lifting it into this component would be a second place
    * that decides where in the paper somebody is, and it would be the place that
    * loses the argument every time a context arrives. So the only thing that
-   * travels down is an event: a `roadmap.goto` that found something, carrying a
+   * travels down is an event: a `kehikot.goto` that found something, carrying a
    * nonce because the same reference asked for twice is two walks.
    */
   const [walk, setWalk] = useState<{ file: string; id: string; nonce: number } | null>(null)
@@ -194,7 +194,7 @@ export function App() {
    * ## It reuses the walk rather than scrolling for itself
    *
    * `walk` is already the one way anything outside `PaginatedView` may move the
-   * reader — it is how `roadmap.goto` lands on a reference and how the sections
+   * reader — it is how `kehikot.goto` lands on a reference and how the sections
    * sidebar turns a page. A second scroller here would be a second answer to
    * "where is the reader", and the two would disagree the first time somebody
    * pressed a section while a passage was arriving.
@@ -353,7 +353,7 @@ export function App() {
    * through a context: a fresh identity on each render would be a new context
    * value for every paragraph every time the page number changed.
    *
-   * `say` goes to the same line at the foot of the page that a `roadmap.goto`
+   * `say` goes to the same line at the foot of the page that a `kehikot.goto`
    * announces itself on, and that is the right home for it rather than a toast
    * or a red box. It is the module's one place for "something happened that you
    * did not do and can see the result of", which is exactly what a refused
@@ -508,7 +508,7 @@ export function App() {
   /**
    * "Go to this reference", answered by looking.
    *
-   * The papers in this roadmap name work inline — `gh#111`, `!1801` — through
+   * The papers in this workspace name work inline — `gh#111`, `!1801` — through
    * macros the parser expands, so the reference the host asks about is
    * genuinely in the rendered text and this can answer honestly rather than
    * always saying no. The search is over the rendered text rather than the
@@ -519,7 +519,7 @@ export function App() {
    *
    * `answer` is called exactly once on every path, including the one where
    * nothing was found and the one where no paper is loaded.
-   * `roadmap-module-protocol/client` has a backstop for a module that forgets —
+   * `kehikot-module-protocol/client` has a backstop for a module that forgets —
    * 900ms here, which `use-paper.ts` passes explicitly — and this does not
    * intend to rely on it; there is a test for the contract.
    */
@@ -670,7 +670,7 @@ export function App() {
       )}
 
       {/*
-        Kept for one job: answering a `roadmap.goto` out loud. It is the only
+        Kept for one job: answering a `kehikot.goto` out loud. It is the only
         thing a reader could not otherwise see happening — the page turned and
         they did not turn it. It no longer narrates the ordinary case: a line
         saying "this is the paper for the epic the canvas is on" told a reader

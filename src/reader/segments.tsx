@@ -765,7 +765,7 @@ function styled(
  * A resolved cross-reference, as a link to the block it names.
  *
  * `scrollIntoView` on the block's anchor — the same primitive a walk from
- * `roadmap.goto` uses in `paginated.tsx`, and every page is in the DOM, so the
+ * `kehikot.goto` uses in `paginated.tsx`, and every page is in the DOM, so the
  * anchor is always there to scroll to. Not an `<a href="#…">`: a fragment
  * navigation would put the anchor in the location bar of a page that is framed
  * in somebody else's canvas, and the reader's place in the paper is kept by
@@ -904,7 +904,7 @@ function CiteCard({ sources, children }: { sources: readonly CiteSource[]; child
  *
  * One function, used by both `plain` and `Segments`, so that what is DRAWN and
  * what is SEARCHED cannot disagree. They disagreeing is a real bug rather than
- * an untidiness: `roadmap.goto` answers by looking for a reference in the text
+ * an untidiness: `kehikot.goto` answers by looking for a reference in the text
  * and then scrolling to the block that holds it, and a reference found only
  * inside a note nobody draws would turn the page to a paragraph with no visible
  * reference in it. This file's own rule about searching rendered text rather

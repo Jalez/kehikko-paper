@@ -13,7 +13,7 @@
  *    a host document above the module that standalone does not have.
  *
  * So this drives the real host: it opens the canvas, switches to the project and
- * the kehikko that carry `roadmap.paper`, finds that frame, and prints the
+ * the kehikko that carry `kehikot.paper`, finds that frame, and prints the
  * container's box beside the frame's box beside the module's own top-of-page
  * numbers — before and after a scroll to the end and back, and after asking the
  * sections sidebar to turn a page, which is the one thing in the module that

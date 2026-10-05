@@ -65,7 +65,7 @@ import { PAGE, pageOf, paginate, sectionAt } from './pages.ts'
  * correctness for a cost that was measured and found not to be there.
  *
  * What it would break: `scrollIntoView` on a page that is not rendered does
- * nothing, so a `roadmap.goto` at the end of the paper would silently fail; the
+ * nothing, so a `kehikot.goto` at the end of the paper would silently fail; the
  * browser's own find-in-page cannot see what is not in the DOM, which is how
  * people actually search a document; and a highlight or a note anchored to page
  * 30 could not be resolved. Those are three real losses against a first paint
@@ -122,7 +122,7 @@ const MIN_GAP = 3
 export interface PaginatedProps {
   paper: Paper
   /**
-   * A place to scroll to, from outside — the answer to a `roadmap.goto`.
+   * A place to scroll to, from outside — the answer to a `kehikot.goto`.
    *
    * `nonce` rather than value equality, because the same reference asked for
    * twice is two walks and the second one has to move the page as well. It is

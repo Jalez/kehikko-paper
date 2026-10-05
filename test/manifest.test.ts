@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { PROTOCOL, manifestSchema } from 'roadmap-module-protocol'
+import { PROTOCOL, manifestSchema } from 'kehikot-module-protocol'
 
 import { ID, MANIFEST } from '../manifest.ts'
 
@@ -60,7 +60,7 @@ describe('what this app claims about itself', () => {
   })
 
   test('the id is the one the registration file has to be named after', () => {
-    expect(ID).toBe('roadmap.paper')
+    expect(ID).toBe('kehikot.paper')
     expect(MANIFEST.id).toBe(ID)
   })
 
