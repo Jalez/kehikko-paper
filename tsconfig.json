@@ -16,5 +16,5 @@
     "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["latex", "page", "src", "wire", "test", "doors.ts", "manifest.ts", "register.ts", "store.ts", "vite.config.ts"]
+  "include": ["compile", "latex", "page", "src", "wire", "test", "doors.ts", "git.ts", "manifest.ts", "proposals.ts", "register.ts", "store.ts", "templates.ts", "vite.config.ts"]
 }

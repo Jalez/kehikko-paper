@@ -7,7 +7,7 @@ import { LEGACY_WELL_KNOWN, WELL_KNOWN, legacyManifest } from 'kehikot-module-pr
 import { frameAncestors, serves } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
-import { MANIFEST, TICKET, answer, type Reply } from './doors.ts'
+import { MANIFEST, TICKET, answer, later, type Reply } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { page } from './page/document.ts'
 
@@ -152,6 +152,10 @@ function doors(): Plugin {
            everything else. */
         void body(request)
           .then((parsed) => {
+            /* The one door that takes seconds — a compile — answers with a
+               promise and is asked first. See `later` in `doors.ts`. */
+            const slow = later(method, path, url.searchParams, parsed)
+            if (slow) return slow.then(send)
             const reply = answer(method, path, url.searchParams, parsed)
             if (!reply) return next()
             send(reply)
@@ -174,7 +178,7 @@ function doors(): Plugin {
  * Unparseable is null rather than a throw, and `doors.ts` says "that was not a
  * request" about it. A malformed body is an ordinary answer to give.
  */
-const MAX_BODY_BYTES = 1_000_000
+const MAX_BODY_BYTES = 6_000_000
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown> | null> {
   if ((request.method ?? 'GET').toUpperCase() !== 'POST') return null

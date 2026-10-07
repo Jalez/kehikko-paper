@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 
-import { renderedRange, type Piece } from '../latex/edit.ts'
 import { diffWords, tokenize } from '../latex/diff.ts'
 import { propose, rebase, type Proposal } from '../latex/propose.ts'
 
@@ -108,77 +107,6 @@ describe('what an applied edit does to a suggestion measured before it', () => {
   test('a shrinking edit shifts the other way', () => {
     const shrunk = { file: 'main.tex', from: 100, to: 120, text: 'x' }
     expect(rebase(at(200, 210), shrunk, fresh)).toMatchObject({ from: 181, to: 191 })
-  })
-})
-
-describe('finding a byte range in what is on screen', () => {
-  /*
-   * The pieces a paragraph is merged from, as `coalesce` builds them: words are
-   * literal, and the hard wrap between two of them is a `gap` whose one
-   * rendered space stands for a newline in the file.
-   */
-  const word = (text: string, srcStart: number): Piece => ({
-    text,
-    srcStart,
-    srcEnd: srcStart + text.length,
-    literal: true,
-  })
-  const gap = (srcStart: number, bytes: number): Piece => ({
-    text: ' ',
-    srcStart,
-    srcEnd: srcStart + bytes,
-    literal: false,
-    gap: true,
-  })
-
-  /* "one" gap "two" gap "three" — the gaps a byte each, as a plain newline is. */
-  const run: Piece[] = [word('one', 0), gap(3, 1), word('two', 4), gap(7, 1), word('three', 8)]
-
-  test('inside a literal piece the mapping is exact', () => {
-    expect(renderedRange(run, 4, 7)).toEqual({ at: 4, upto: 7 })
-  })
-
-  test('a range inside a gap snaps outward to the whole gap', () => {
-    /* There is no offset inside a gap that means anything: its one rendered
-       space stands for a whole run of source whitespace. Half of it is not a
-       place, so the honest unit is all of it — the same snap `place` makes. */
-    expect(renderedRange(run, 3, 4)).toEqual({ at: 3, upto: 4 })
-  })
-
-  test('a range spanning words and a wrap is one span on screen', () => {
-    expect(renderedRange(run, 0, 7)).toEqual({ at: 0, upto: 7 })
-  })
-
-  test('the range is clamped to the run, so three runs each answer for their share', () => {
-    expect(renderedRange(run, -50, 500)).toEqual({ at: 0, upto: 13 })
-  })
-
-  test('a citation in the run refuses rather than being drawn as its rendering', () => {
-    /* The temptation this refuses: strike `[jones]` and call it the seven bytes
-       that are leaving. They are not, and a person approving that would be
-       approving one thing having read another. */
-    const cite: Piece = { text: '[jones]', srcStart: 3, srcEnd: 20, literal: false }
-    const withCite: Piece[] = [word('one', 0), cite, { ...word('two', 20), srcStart: 20, srcEnd: 23 }]
-    expect(renderedRange(withCite, 0, 23)).toHaveProperty('why')
-    expect(renderedRange(withCite, 5, 8)).toHaveProperty('why')
-  })
-
-  test('a run assembled across a hole in the source is refused', () => {
-    const broken: Piece[] = [word('one', 0), word('two', 40)]
-    expect(renderedRange(broken, 0, 3)).toHaveProperty('why')
-  })
-
-  test('a multi-byte character is mapped by its bytes, not its units', () => {
-    const accented = word('päivä', 0)
-    /* `ä` is two bytes. The `i` begins at byte 3 and at unit 2. */
-    expect(renderedRange([{ ...accented, srcEnd: 7 }], 3, 4)).toEqual({ at: 2, upto: 3 })
-  })
-
-  test('a range that begins inside a character is refused rather than rounded', () => {
-    const accented: Piece = { text: 'päivä', srcStart: 0, srcEnd: 7, literal: true }
-    /* Byte 2 is the second byte of `ä`. Snapping to the nearest boundary would
-       paint the letter beside the one that is changing. */
-    expect(renderedRange([accented], 2, 4)).toHaveProperty('why')
   })
 })
 

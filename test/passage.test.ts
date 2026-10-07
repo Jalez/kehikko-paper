@@ -2,8 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { LIMITS, passageSchema } from 'kehikot-module-protocol'
 
 import type { Paper } from '../store.ts'
-import { passageFor } from '../src/use-published-passage.ts'
-import type { Passage as Highlighted } from '../src/use-selection.ts'
+import { passageFor, type Highlighted } from '../src/use-published-passage.ts'
 
 /**
  * What this module tells the canvas about where the reader is pointing.
@@ -20,11 +19,8 @@ const paper = { epic: 'modes-are-modules', dir: '/Users/x/Projects/kehikko/.kehi
 const highlight = (over: Partial<Highlighted> = {}): Highlighted => ({
   srcStart: 4120,
   srcEnd: 4180,
-  rendered: 'a passage names both ends of a selection or neither',
-  exact: true,
+  text: 'a passage names both ends of a selection or neither',
   file: 'chapters/bridge.tex',
-  x: 0,
-  y: 0,
   ...over,
 })
 
@@ -113,13 +109,13 @@ describe('the quote is whole or it is absent', () => {
        anchor from a rotten one. Half a paragraph will never match, so a clipped
        quote turns every long selection into a permanent false report of drift.
        An empty quote is visibly "there is nothing to check against". */
-    const passage = passageFor(paper, { page: 2, file: 'main.tex' }, highlight({ rendered: 'x'.repeat(LIMITS.QUOTE + 1) }))
+    const passage = passageFor(paper, { page: 2, file: 'main.tex' }, highlight({ text: 'x'.repeat(LIMITS.QUOTE + 1) }))
     expect(passage?.from).toBe(4120)
     expect(passage?.quoted).toBe('')
   })
 
   test('a selection exactly at the bound keeps its quote', () => {
-    const passage = passageFor(paper, { page: 2, file: 'main.tex' }, highlight({ rendered: 'x'.repeat(LIMITS.QUOTE) }))
+    const passage = passageFor(paper, { page: 2, file: 'main.tex' }, highlight({ text: 'x'.repeat(LIMITS.QUOTE) }))
     expect(passage?.quoted).toHaveLength(LIMITS.QUOTE)
   })
 })
@@ -133,7 +129,7 @@ describe('everything this module can send is something a host will take', () => 
     const rungs = [
       passageFor(paper, { page: 1, file: 'main.tex' }, null),
       passageFor(paper, { page: 3, file: 'chapters/bridge.tex' }, highlight()),
-      passageFor(paper, { page: 3, file: 'chapters/bridge.tex' }, highlight({ rendered: 'x'.repeat(LIMITS.QUOTE + 1) })),
+      passageFor(paper, { page: 3, file: 'chapters/bridge.tex' }, highlight({ text: 'x'.repeat(LIMITS.QUOTE + 1) })),
     ]
     for (const rung of rungs) {
       expect(rung).not.toBeNull()

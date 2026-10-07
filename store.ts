@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import {
+  copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -15,10 +17,11 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { KEHIKOT_DIR, moduleDir, moduleFolder } from 'kehikot-module-protocol'
 
 import { NO_BIBLIOGRAPHY, bibFilesNamed, parseBib, resolveCite, type Bibliography } from './latex/bib.ts'
-import { onBoundary, sourceRefuses, whyNot } from './latex/edit.ts'
+import { onBoundary } from './latex/edit.ts'
 import { buildLabelIndex, mapSegments, resolveRef } from './latex/labels.ts'
 import { findMacros, parseLatex, plainText, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
 import { ID } from './manifest.ts'
+import { templateById, titleFor, type TemplateFile } from './templates.ts'
 
 /**
  * The papers on this machine, and the one rule about where they may come from.
@@ -297,17 +300,47 @@ export type Started = { ok: true; dir: string } | { ok: false; why: string }
  * replacing a paper somebody had already started — and a program that can never
  * do it does not need to be careful about when it does.
  *
- * ## What it writes is a document and not a template
+ * ## What it writes: a document, a template, or somebody's folder
  *
- * `\documentclass{article}`, a title taken from the epic, and an empty
- * `document`. It compiles, the reader draws it immediately, and there is
- * nothing in it to delete before writing. A scaffold full of commented-out
- * suggestions would be this app having opinions about somebody's paper.
+ * With nothing said it writes what it always has: `\documentclass{article}`, a
+ * title taken from the epic, and an empty `document`. It compiles, and there is
+ * nothing in it to delete before writing.
+ *
+ * `from` adds two more starting points and both are still "files put in a
+ * folder that did not exist": a built-in from `templates.ts`, or a copy of a
+ * folder the person names — see `copyFolder`. Neither converts anything, and
+ * neither can be aimed at a paper that is already there.
  */
-export function startPaper(epic: string, project: string | null): Started {
+export type StartFrom = { template: string } | { folder: string }
+
+export function startPaper(epic: string, project: string | null, from?: StartFrom): Started {
   const dir = whereItWouldGo(epic, project)
   if (dir === null) return { ok: false, why: 'There is nowhere to start a paper: no project is open.' }
   if (existsSync(dir)) return { ok: false, why: `There is already something at ${dir}.` }
+
+  /* Decided before anything is made, so a template that does not exist or a
+     folder that is not a paper leaves no empty directory behind — which
+     `roots()` would ignore and the next "start a paper" would then refuse. */
+  let files: TemplateFile[] | null = null
+  let source: Copyable | null = null
+  if (from && 'template' in from) {
+    const template = templateById(from.template)
+    if (!template) return { ok: false, why: `There is no built-in template called “${from.template}”.` }
+    files = template.files(titleFor(epic))
+  } else if (from && 'folder' in from) {
+    const found = copyable(from.folder)
+    if ('why' in found) return { ok: false, why: found.why }
+    source = found
+  } else {
+    files = [
+      {
+        path: MAIN,
+        text: ['\\documentclass{article}', '', `\\title{${epic}}`, '', '\\begin{document}', '', '\\maketitle', '', '\\end{document}', ''].join(
+          '\n',
+        ),
+      },
+    ]
+  }
 
   try {
     mkdirSync(dir, { recursive: true })
@@ -316,26 +349,142 @@ export function startPaper(epic: string, project: string | null): Started {
        in the sibling modules: the only honest moment to ask what is at a path
        is once you are standing on it. */
     if (existsSync(main)) return { ok: false, why: `There is already a ${MAIN} at ${dir}.` }
-    writeFileSync(
-      main,
-      [
-        '\\documentclass{article}',
-        '',
-        `\\title{${epic}}`,
-        '',
-        '\\begin{document}',
-        '',
-        '\\maketitle',
-        '',
-        '\\end{document}',
-        '',
-      ].join('\n'),
-      'utf8',
-    )
+    if (source) {
+      for (const entry of source.entries) {
+        const to = join(dir, entry.to)
+        mkdirSync(dirname(to), { recursive: true })
+        copyFileSync(entry.from, to)
+      }
+    }
+    for (const file of files ?? []) {
+      /* Fenced, although every path here was written in `templates.ts`: the
+         day a template is loaded from anywhere else, these are the lines that
+         stop `../../x` in one from being a write outside the paper. Lexically
+         first, because the folder a file goes in has to be MADE before
+         `confine` can resolve it, and a folder must not be made on the wrong
+         side of the fence in order to find out which side it is on. */
+      if (isAbsolute(file.path) || file.path.split('/').some((part) => part === '..' || part === '')) continue
+      mkdirSync(dirname(join(dir, file.path)), { recursive: true })
+      const to = confine(dir, file.path)
+      if (!to) continue
+      writeFileSync(to, file.text, 'utf8')
+    }
     return { ok: true, dir }
   } catch (error) {
     return { ok: false, why: `That folder could not be made: ${(error as Error).message}` }
   }
+}
+
+/** How much of somebody's folder is copied. A venue's template is a dozen files; a home directory is not a template. */
+const MAX_COPY_FILES = 400
+const MAX_COPY_BYTES = 60_000_000
+const MAX_COPY_DEPTH = 6
+
+/** Build products and editor litter. A paper started from a folder should not begin with somebody's old `.aux`. */
+const NOT_COPIED = /\.(?:aux|log|out|toc|lof|lot|bbl|blg|bcf|fls|fdb_latexmk|synctex\.gz|synctex|run\.xml|nav|snm|vrb|xdv|tmp)$/i
+
+interface Copyable {
+  entries: { from: string; to: string }[]
+}
+
+/**
+ * What would be copied out of a folder the person named, or why nothing will.
+ *
+ * ## The folder is typed by a person, on this machine, and is only READ
+ *
+ * It arrives through the ticketed door from this module's own page, so it is
+ * the operator naming a directory on their own disk — the same trust as the
+ * `?project=` in the address. It is still walked with bounds: not followed
+ * through symlinks (a link in a downloaded template pointing at `~` would
+ * otherwise be copied into a repository), no dot-entries (`.git` is not part of
+ * a template), no build products, and a ceiling on files, bytes and depth so
+ * that naming `/` is a sentence and not an afternoon.
+ *
+ * ## Which file is the paper
+ *
+ * `main.tex` if the folder has one. Otherwise the ONE `.tex` at its top level
+ * that has a `\documentclass` — copied in under the name `main.tex`, because
+ * that is the only name this module looks for. Two candidates is a refusal
+ * that names them: picking one would be a guess, and the wrong guess is a
+ * paper that opens on somebody's sample chapter.
+ */
+function copyable(folder: string): Copyable | { why: string } {
+  const typed = folder.trim()
+  if (!typed || !isAbsolute(typed)) return { why: 'A template folder has to be named by its full path, starting with a slash.' }
+  const base = real(typed)
+  let isDir = false
+  try {
+    isDir = base !== null && statSync(base).isDirectory()
+  } catch {
+    isDir = false
+  }
+  if (base === null || !isDir) return { why: `There is no folder at ${typed}.` }
+
+  const entries: { from: string; to: string }[] = []
+  let bytes = 0
+  let over = false
+  const walk = (dir: string, relative: string, depth: number): void => {
+    if (over || depth > MAX_COPY_DEPTH) return
+    let names: string[] = []
+    try {
+      names = readdirSync(dir).sort()
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (over) return
+      if (name.startsWith('.') || NOT_COPIED.test(name)) continue
+      const from = join(dir, name)
+      let found
+      try {
+        found = lstatSync(from)
+      } catch {
+        continue
+      }
+      if (found.isSymbolicLink()) continue
+      const to = relative ? `${relative}/${name}` : name
+      if (found.isDirectory()) walk(from, to, depth + 1)
+      else if (found.isFile()) {
+        bytes += found.size
+        if (entries.length >= MAX_COPY_FILES || bytes > MAX_COPY_BYTES) {
+          over = true
+          return
+        }
+        entries.push({ from, to })
+      }
+    }
+  }
+  walk(base, '', 0)
+  if (over) {
+    return {
+      why:
+        `${typed} holds more than a template would — over ${MAX_COPY_FILES} files or ${Math.round(MAX_COPY_BYTES / 1_000_000)} MB — `
+        + 'so nothing was copied. Point at the folder that holds just the paper.',
+    }
+  }
+
+  if (!entries.some((one) => one.to === MAIN)) {
+    const candidates = entries.filter((one) => {
+      if (one.to.includes('/') || !one.to.toLowerCase().endsWith('.tex')) return false
+      try {
+        return statSync(one.from).size <= MAX_TEX_BYTES && /^[^%\n]*\\documentclass/m.test(readFileSync(one.from, 'utf8'))
+      } catch {
+        return false
+      }
+    })
+    if (candidates.length === 0) {
+      return { why: `${typed} has no ${MAIN} and no .tex file with a \\documentclass at its top level, so there is no paper in it to start from.` }
+    }
+    if (candidates.length > 1) {
+      return {
+        why:
+          `${typed} has no ${MAIN} and ${candidates.length} files that could be the paper (${candidates.map((one) => one.to).join(', ')}). `
+          + `Rename the one that is to ${MAIN} and try again.`,
+      }
+    }
+    candidates[0]!.to = MAIN
+  }
+  return { entries }
 }
 
 /**
@@ -532,6 +681,9 @@ export const PAPERS_AT = `${KEHIKOT_DIR}/${moduleFolder(ID)}`
  * dump should produce a refusal rather than an out-of-memory in a dev server.
  */
 const MAX_TEX_BYTES = 4_000_000
+
+/** How deep an `\input` inside an `\input` is followed. A thesis is three; a loop is caught before this by name. */
+const MAX_INCLUDE_DEPTH = 8
 
 /** One epic's paper, as little as `list_papers` needs to name it. */
 export interface PaperBrief {
@@ -803,44 +955,67 @@ export function readPaper(epic: string, project: string | null): Paper | null {
   const blocks: PlacedBlock[] = []
   const files: string[] = [MAIN]
 
-  for (const block of parsed.blocks) {
-    if (block.kind !== 'include') {
-      blocks.push({ ...block, file: MAIN })
-      continue
-    }
-    const relative = block.target.endsWith('.tex') ? block.target : `${block.target}.tex`
-    const child = confine(root, relative)
-    let chapter: ParsedDocument | null = null
-    if (child && existsSync(child)) {
-      try {
-        if (statSync(child).size <= MAX_TEX_BYTES) {
-          const bytes = readFileSync(child)
-          chapter = parseLatex(bytes.toString('utf8'), relative, macros)
-          hashes[relative] = hashOf(bytes)
-        }
-      } catch {
-        chapter = null
+  /*
+   * Folded in to any depth, not one level.
+   *
+   * It used to be one level: `main.tex` includes a chapter and the chapter's
+   * own `\input{chapters/tables/results}` stayed a block saying "include". That
+   * was survivable while this module only DREW a paper. It is not now that the
+   * page edits one: a file the paper is really made of, that this list does
+   * not name, is a file the editor cannot open, the write door refuses, and a
+   * compile error cannot be pressed through to. So the walk follows every
+   * `\input` it meets.
+   *
+   * Two fences on the walk itself. `seen` stops a file that includes itself,
+   * or two that include each other, from being read forever — TeX would stop
+   * that with an error and this must at least stop. `MAX_INCLUDE_DEPTH` is the
+   * bound for everything else. A target is resolved against the paper's ROOT
+   * and never against the file that names it, because that is what TeX does:
+   * `\input{chapters/b}` inside `chapters/a.tex` means `<root>/chapters/b.tex`.
+   */
+  const seen = new Set<string>([MAIN])
+  const fold = (from: readonly Block[], file: string, depth: number): void => {
+    for (const block of from) {
+      if (block.kind !== 'include') {
+        blocks.push({ ...block, file })
+        continue
       }
-    }
-    if (!chapter) {
-      blocks.push({
-        ...block,
-        kind: 'unknown',
-        raw: `\\include{${block.target}} — this file is named by the paper and is not on disk here.`,
-        file: MAIN,
-      } as PlacedBlock)
-      continue
-    }
-    files.push(relative)
-    for (const inner of chapter.blocks) {
+      const relative = block.target.endsWith('.tex') ? block.target : `${block.target}.tex`
+      const child = depth < MAX_INCLUDE_DEPTH && !seen.has(relative) ? confine(root, relative) : null
+      let chapter: ParsedDocument | null = null
+      if (child && existsSync(child)) {
+        try {
+          if (statSync(child).size <= MAX_TEX_BYTES) {
+            const bytes = readFileSync(child)
+            chapter = parseLatex(bytes.toString('utf8'), relative, macros)
+            hashes[relative] = hashOf(bytes)
+          }
+        } catch {
+          chapter = null
+        }
+      }
+      if (!chapter) {
+        blocks.push({
+          ...block,
+          kind: 'unknown',
+          raw: seen.has(relative)
+            ? `\\include{${block.target}} — this file is already part of the paper, so it is not read a second time.`
+            : `\\include{${block.target}} — this file is named by the paper and is not on disk here.`,
+          file,
+        } as PlacedBlock)
+        continue
+      }
+      seen.add(relative)
+      files.push(relative)
       /* A chapter file has no preamble of its own; when the parser reports one
          it is because the file opens with a comment run before any command, and
          folding that away would drop the provenance note the author wrote at
          the top of the chapter. Comments survive; a real preamble cannot occur
          here because `\begin{document}` cannot. */
-      blocks.push({ ...inner, file: relative })
+      fold(chapter.blocks, relative, depth + 1)
     }
   }
+  fold(parsed.blocks, MAIN, 0)
 
   /*
    * Every `\ref` and every `\cite` in the paper, rewritten from its placeholder
@@ -953,17 +1128,26 @@ export function hashesOf(epic: string, project: string | null): Record<string, s
   } catch {
     return null
   }
-  for (const target of includeTargets(source)) {
-    const relative = target.endsWith('.tex') ? target : `${target}.tex`
-    const child = confine(root, relative)
-    if (!child || !existsSync(child)) continue
-    try {
-      if (statSync(child).size > MAX_TEX_BYTES) continue
-      hashes[relative] = hashOf(readFileSync(child))
-    } catch {
-      continue
+  /* The same walk `readPaper` makes, to the same depth and behind the same
+     fences, so that the two cannot name different sets of files — the page
+     compares one against the other to learn that a file moved. */
+  const walk = (text: string, depth: number): void => {
+    for (const target of includeTargets(text)) {
+      const relative = target.endsWith('.tex') ? target : `${target}.tex`
+      if (depth >= MAX_INCLUDE_DEPTH || relative in hashes) continue
+      const child = confine(root, relative)
+      if (!child || !existsSync(child)) continue
+      try {
+        if (statSync(child).size > MAX_TEX_BYTES) continue
+        const bytes = readFileSync(child)
+        hashes[relative] = hashOf(bytes)
+        walk(bytes.toString('utf8'), depth + 1)
+      } catch {
+        continue
+      }
     }
   }
+  walk(source, 0)
   return hashes
 }
 
@@ -1182,12 +1366,18 @@ export type Written =
  * and this codebase has already lost a bug to characters and bytes being
  * confused for one another (`inBytes`, in the parser).
  *
- * ## And what may be written is not "anything"
+ * ## What may be written: text, and that is the whole rule now
  *
- * `whyNot` in `latex/edit.ts` holds that rule, along with the argument for
- * refusing LaTeX's special characters rather than escaping them. It is applied
- * here as well as in the browser, because the browser is one caller of three
- * and the other two were never asked to be polite.
+ * This used to refuse any replacement holding one of LaTeX's special
+ * characters, and any range that covered one. That fence belonged to the view
+ * this door served: prose drawn from the source, typed into in place, where a
+ * `%` written back as itself comments out the rest of a line and the reader
+ * could not see that it had. That view is gone. The page shows the `.tex`
+ * itself and a suggestion is shown as a diff of the `.tex` itself, so what is
+ * about to be written is exactly what the person is looking at — and a door
+ * that refused `\cite{…}` would be refusing the edit an author most often
+ * wants to accept. What is still refused is a NUL byte, which no `.tex` holds
+ * and which is how a binary gets written through a text door.
  *
  * ## Written by rename, so a failure leaves the old file standing
  *
@@ -1198,23 +1388,88 @@ export type Written =
  * mode is copied across, so a file somebody had made read-only for themselves
  * does not come back wearing this process's umask.
  *
- * ## And it looks at what it is about to overwrite
+ * ## Two writers, one way of writing
  *
- * `sourceRefuses` is the one check here that does not take the caller's word
- * for anything. Every edit this feature legitimately makes replaces the inside
- * of a literal run — which holds no LaTeX special character, because the parser
- * breaks a literal run at every one of them — or a run of whitespace. So a
- * range whose bytes contain a `\`, a `{`, a `%` or an `&` is not an edit this
- * page could honestly have composed, whatever it says about itself.
- *
- * That is what stops a bug in the browser, an agent that guessed, or a replayed
- * request with the numbers changed from deleting a command, a citation, an
- * escape or a comment. The page decides what to write from the pieces it holds;
- * this decides whether the file agrees.
+ * `writeRange` splices a range — it is what accepting a suggestion does — and
+ * `writeFile` replaces the whole text, which is what saving from the editor
+ * does. They share `opened`, which is every check that is about the FILE, and
+ * `put`, which is the rename. Neither can create, and neither can be aimed at a
+ * file the paper does not name.
  */
 export function writeRange(epic: string, edit: Edit, project: string | null): Written {
   const no = (why: string, stale = false): Written => ({ ok: false, why, stale })
+  const file = opened(epic, edit.file, edit.was, project)
+  if ('why' in file) return no(file.why, file.stale)
+  const { path, bytes } = file
 
+  const { from, to, text } = edit
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return no('That is not a byte range.')
+  if (from < 0 || to < from || to > bytes.length) return no('That range is not inside the file.')
+  if (!onBoundary(bytes, from) || !onBoundary(bytes, to)) {
+    return no('That range cuts a character in half, so it does not name a place in this file.')
+  }
+  if (typeof text !== 'string') return no('There is nothing to write there.')
+  if (text.includes('\0')) return no('That text holds a NUL byte, which a .tex file does not.')
+
+  const replacement = Buffer.from(text, 'utf8')
+  /* A no-op is refused rather than performed. Writing identical bytes moves the
+     file's mtime, wakes every watcher on it, and invalidates the hash every
+     other reader of this paper is holding, in order to change nothing. */
+  if (bytes.subarray(from, to).equals(replacement)) return no('That edit changes nothing.')
+
+  return put(path, Buffer.concat([bytes.subarray(0, from), replacement, bytes.subarray(to)]))
+}
+
+/**
+ * Replace the whole text of one file of one paper: what Save in the editor does.
+ *
+ * ## The whole file, guarded by what it was
+ *
+ * An editor holds a whole document, so it sends a whole document. The guard is
+ * the same one a range has: `was`, the hash of the file as the editor last
+ * read it. If the file on disk no longer hashes to that — the author saved from
+ * another editor, an agent rewrote a paragraph, `git checkout` changed branch —
+ * NOTHING is written and the answer says the file moved. A whole-file write is
+ * the one that would otherwise lose the most: it does not splice into somebody
+ * else's change, it erases it.
+ *
+ * What the page does with that refusal is its own business and it is a real
+ * choice — take the disk's version, or keep what was typed — so this returns
+ * `stale` and leaves the deciding to a person.
+ *
+ * ## An unchanged file is a success, not a refusal
+ *
+ * Saving text identical to what is on disk writes nothing and answers `ok`
+ * with the hash it already had. `writeRange` refuses a no-op because a range
+ * that changes nothing is a caller's mistake; a Save that changes nothing is a
+ * person pressing ⌘S out of habit, and an error for that would be noise.
+ */
+export function writeFile(epic: string, edit: { file: string; text: string; was: string }, project: string | null): Written {
+  const no = (why: string, stale = false): Written => ({ ok: false, why, stale })
+  const file = opened(epic, edit.file, edit.was, project)
+  if ('why' in file) return no(file.why, file.stale)
+  if (typeof edit.text !== 'string') return no('There is nothing to write there.')
+  if (edit.text.includes('\0')) return no('That text holds a NUL byte, which a .tex file does not.')
+  const next = Buffer.from(edit.text, 'utf8')
+  if (next.length > MAX_TEX_BYTES) return no('That is more than this program will write into one .tex file.')
+  if (next.equals(file.bytes)) return { ok: true, bytes: next.length, hash: edit.was }
+  return put(file.path, next)
+}
+
+/**
+ * Every check that is about the file rather than about what is being put in it.
+ *
+ * The epic is a slug; the file is one the PAPER names, not merely one on disk;
+ * it resolves inside the paper's root; it exists, is a file and is not
+ * enormous; and it still hashes to what the caller says it read.
+ */
+function opened(
+  epic: string,
+  named: string,
+  was: string,
+  project: string | null,
+): { path: string; bytes: Buffer } | { why: string; stale: boolean } {
+  const no = (why: string, stale = false) => ({ why, stale })
   if (!isEpic(epic)) return no('That is not an epic name.')
   const paper = readPaper(epic, project)
   if (!paper) return no('There is no paper for that epic in this project.')
@@ -1222,12 +1477,12 @@ export function writeRange(epic: string, edit: Edit, project: string | null): Wr
      filesystem would let a caller name any `.tex` under the epic's directory,
      so "correct the paper" would quietly become "write to whatever is lying
      around beside it". A file the paper does not include is not the paper. */
-  if (!paper.files.includes(edit.file)) {
-    return no(`This paper does not name a file called “${edit.file}”. It is made of: ${paper.files.join(', ')}`)
+  if (!paper.files.includes(named)) {
+    return no(`This paper does not name a file called “${named}”. It is made of: ${paper.files.join(', ')}`)
   }
   const root = paperRoot(epic, project)
   if (!root) return no('There is no paper for that epic in this project.')
-  const path = confine(root, edit.file)
+  const path = confine(root, named)
   if (!path) return no('That file is not inside this paper.')
 
   /* It never creates, and this is where that is enforced. `existsSync` alone
@@ -1246,39 +1501,17 @@ export function writeRange(epic: string, edit: Edit, project: string | null): Wr
     return no('That file could not be read.')
   }
 
-  if (typeof edit.was !== 'string' || edit.was.length === 0) {
+  if (typeof was !== 'string' || was.length === 0) {
     return no('An edit has to say which version of the file it was measured against.', true)
   }
-  if (hashOf(bytes) !== edit.was) {
-    return no(
-      `${edit.file} has changed since this page read it, so those byte offsets no longer describe it. Nothing was `
-        + 'written.',
-      true,
-    )
+  if (hashOf(bytes) !== was) {
+    return no(`${named} has changed on disk since this page read it. Nothing was written.`, true)
   }
+  return { path, bytes }
+}
 
-  const { from, to, text } = edit
-  if (!Number.isInteger(from) || !Number.isInteger(to)) return no('That is not a byte range.')
-  if (from < 0 || to < from || to > bytes.length) return no('That range is not inside the file.')
-  if (!onBoundary(bytes, from) || !onBoundary(bytes, to)) {
-    return no('That range cuts a character in half, so it does not name a place in this file.')
-  }
-  if (typeof text !== 'string') return no('There is nothing to write there.')
-  const refused = whyNot(text)
-  if (refused) return no(refused)
-  /* What is THERE, not only what is being put there. See the essay above: this
-     is the check that does not take the caller's word for anything. */
-  const covered = sourceRefuses(bytes.subarray(from, to).toString('utf8'))
-  if (covered) return no(covered)
-
-  const replacement = Buffer.from(text, 'utf8')
-  /* A no-op is refused rather than performed. Writing identical bytes moves the
-     file's mtime, wakes every watcher on it, and invalidates the hash every
-     other reader of this paper is holding, in order to change nothing. */
-  if (bytes.subarray(from, to).equals(replacement)) return no('That edit changes nothing.')
-
-  const next = Buffer.concat([bytes.subarray(0, from), replacement, bytes.subarray(to)])
-
+/** The bytes, to a temporary beside the file and renamed over it. Whole new file or whole old one, never part of either. */
+function put(path: string, next: Buffer): Written {
   /* Beside the file rather than under `/tmp`, because a rename is only atomic
      within one filesystem and a paper's folder may be on a different one. The
      name carries this process's pid and a random tail so that two writers
@@ -1296,8 +1529,7 @@ export function writeRange(epic: string, edit: Edit, project: string | null): Wr
       /* Nothing to do and nothing to say: the edit has already failed, and a
          leftover `.tmp` is not the thing the person needs to hear about. */
     }
-    return no(`That could not be written: ${(error as Error).message}`)
+    return { ok: false, why: `That could not be written: ${(error as Error).message}`, stale: false }
   }
-
   return { ok: true, bytes: next.length, hash: hashOf(next) }
 }

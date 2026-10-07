@@ -272,586 +272,111 @@
 }
 
 @layer components {
-  /* ---- The sheet ------------------------------------------------------- */
+  /* ---- The source editor ---------------------------------------------- */
 
   /*
-   * The sheet is A4, and its BOX is set in `reader/paginated.tsx` from the
-   * `PAGE` constants in `reader/pages.ts` — width, height, margins, body size
-   * and leading — because those same numbers decide where the pages break. Two
-   * copies of a page size is how a paginator ends up thinking forty lines fit a
-   * page that shows thirty-two. So this rule is only the sheet's LOOK.
+   * CodeMirror sizes itself from its content unless told otherwise, and this
+   * one lives in a pane with a fixed height: the pane scrolls, not the page.
+   * The type is small on purpose — a container is routinely 280 pixels wide and
+   * the editor wraps, so every character of width is a word that stays on its
+   * line.
    */
-  .sheet {
-    background: var(--paper);
-    color: var(--paper-foreground);
+  .source-editor,
+  .source-editor .cm-editor {
+    height: 100%;
+  }
+
+  .source-editor .cm-editor {
+    font-size: 0.78rem;
+    background: var(--background);
+  }
+
+  .source-editor .cm-scroller {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 1.5;
+  }
+
+  .source-editor .cm-gutters {
+    background: var(--background);
+    color: var(--muted-foreground);
+    border-right: 1px solid var(--border);
+  }
+
+  /* Twice, to outrank the rule CodeMirror injects after this stylesheet. */
+  .source-editor .cm-editor.cm-focused.cm-focused {
+    outline: none;
+  }
+
+  /* A range somebody else pointed at: a note's anchor, a question's. The same
+     amber the old reader marked a passage in, so it is the same sign. */
+  .cm-pointed {
+    background: color-mix(in oklch, var(--mark) 38%, transparent);
+    border-radius: 2px;
+  }
+
+  /* A line the engine complained about. A bar in the margin and a wash, not a
+     squiggle: the message names a line and nothing finer. */
+  .cm-problem-error {
+    background: color-mix(in oklch, var(--gone) 14%, transparent);
+    box-shadow: inset 3px 0 0 var(--gone);
+  }
+
+  .cm-problem-warning {
+    box-shadow: inset 3px 0 0 var(--mark);
+  }
+
+  /* ---- The compiled PDF ----------------------------------------------- */
+
+  /*
+   * The pages sit on a grey desk in both themes and are WHITE in both themes.
+   * A PDF is a picture of paper: inverting it for a dark canvas would show a
+   * figure's colours wrong, and the point of this pane is that it looks the
+   * way the thing will when it is printed.
+   */
+  .pdf-scroller {
+    background: color-mix(in oklch, var(--muted) 70%, var(--background));
+  }
+
+  .pdf-page {
     box-shadow:
       0 0 0 1px var(--paper-edge),
-      0 10px 30px -18px rgb(0 0 0 / 45%);
+      0 6px 18px -12px rgb(0 0 0 / 45%);
+    cursor: crosshair;
   }
 
-  /* `inherit`, never a size of its own: the sheet sets the body size and every
-     rule inside it is in `em` of that, so the whole page scales as one thing. */
-  .prose-reading {
-    font-family: var(--font-reading);
-    font-size: inherit;
-    font-variant-numeric: oldstyle-nums proportional-nums;
-  }
-
-  /*
-   * The passage somebody else is pointing at.
-   *
-   * ## Marked, not selected
-   *
-   * The obvious implementation is to put a real browser selection over the
-   * range, and it is the one thing this must never do. `use-selection.ts`
-   * reads `window.getSelection()` on mouse-up, and a selection this module
-   * applied to itself would be indistinguishable from one a person made: the
-   * container would compose a passage out of it and publish it back to the canvas
-   * that had just sent it. That is half of the loop, arranged for free, with
-   * nothing on screen looking wrong.
-   *
-   * So the mark is paint. It is a class on the spans whose source range
-   * overlaps, drawn from the copy-editor's amber pencil that this page already
-   * owns, and the browser's own selection is untouched — a reader can still
-   * drag across a marked passage and quote it, which is the thing they would
-   * most likely want to do next.
-   *
-   * ## Colour and an underline, because colour is a channel some readers lack
-   *
-   * The same rule the rest of this file follows: `--mark` at low alpha carries
-   * it for most people, and the underline carries it for everybody. Both are
-   * drawn behind the type rather than over it — a highlight that changed the
-   * text colour would be this container restyling somebody's paper to point at it.
-   *
-   * `color-mix` against `--paper` rather than a fixed alpha over white, so the
-   * wash sits on the sheet's own surface in both themes instead of turning grey
-   * on the dark one.
-   */
-  /*
-   * The block a passage landed in, marked as a whole.
-   *
-   * ## Because the range can name source this page does not draw
-   *
-   * A note lifted out of a `\todo{}` points at the bytes of the macro, and
-   * `segments.tsx` removes todo segments before anything is rendered — the
-   * author's annotations live in the notes container now, which is the whole reason
-   * that filter exists. A comment run is the same: `pages.ts` drops every
-   * `comment` block. So a perfectly good passage can name a place in the file
-   * with no span on the sheet to paint.
-   *
-   * Marking only the spans would leave those passages with nothing visible at
-   * all — the container would scroll, land, and appear to have done nothing, which
-   * is exactly the silence this change was made to end. So the BLOCK carries a
-   * mark too: a rule in the margin saying "the thing you pointed at is here",
-   * which is true whether or not any of it is drawn.
-   *
-   * Drawn in the margin rather than as a wash, so a paragraph that also has
-   * marked spans in it does not end up highlighted twice over.
-   */
-  .block-row[data-marked='1']::before {
-    content: '';
+  /* Where the selection in the source came out. A wash thin enough that the
+     words under it stay black. */
+  .pdf-mark {
     position: absolute;
-    inset-block: -0.15em;
-    left: -1.1em;
-    width: 0.18em;
-    border-radius: 1px;
-    background: var(--mark);
-  }
-
-  .passage-mark {
-    background-color: color-mix(in oklch, var(--mark) 26%, var(--paper));
-    box-shadow: 0 0 0 1px color-mix(in oklch, var(--mark) 35%, var(--paper));
-    border-radius: 2px;
-    text-decoration: underline;
-    text-decoration-color: color-mix(in oklch, var(--mark) 70%, var(--paper));
-    text-decoration-thickness: 0.08em;
-    text-underline-offset: 0.18em;
-  }
-
-  /*
-   * The paper with the pen out: which words may be typed into, and which not.
-   *
-   * Drawn only while editing — neither class is emitted otherwise — because a
-   * reader who has not asked to edit should be shown the paper and not a map of
-   * it.
-   *
-   * The distinction has to be visible BEFORE somebody tries, which is the whole
-   * argument for marking anything here at all. A citation looks exactly like
-   * the prose around it, so a reader whose cursor simply refuses to enter one
-   * learns that this page is broken rather than that this span is a rendering.
-   * The typeable text gets a hairline under it, the rest gets the cursor that
-   * means "not here", and the sentence explaining it arrives on the press.
-   *
-   * Both are drawn in the sheet's own units, like everything else on an A4
-   * page: a decoration in screen pixels would be four times as heavy at 220
-   * pixels as at 1100, which is where every other fixed-pixel measurement in
-   * this file went wrong.
-   */
-  .typeable {
-    text-decoration: underline;
-    text-decoration-style: dotted;
-    text-decoration-color: color-mix(in oklch, var(--pencil) 45%, transparent);
-    text-decoration-thickness: 0.05em;
-    text-underline-offset: 0.22em;
-  }
-
-  .typeable:focus {
-    outline: none;
-    background-color: color-mix(in oklch, var(--mark) 14%, var(--paper));
+    pointer-events: none;
+    background: rgb(70 110 255 / 26%);
+    outline: 1px solid rgb(70 110 255 / 45%);
     border-radius: 2px;
   }
 
-  .not-typeable {
-    cursor: not-allowed;
+  /* Somebody else's anchor — a note, a question — in the amber the source
+     marks it with. */
+  .pdf-mark-foreign {
+    background: rgb(255 190 40 / 38%);
+    outline-color: rgb(215 150 0 / 60%);
   }
 
-  /* ---- A cross-reference or a citation, resolved ------------------------ */
+  /* ---- A suggested change, as a diff of the source -------------------- */
 
-  /*
-   * A reference is a link to its block and a citation opens a card, and both
-   * say so with the pointer alone: the pencil colour they already wear is what
-   * marks them as not-prose, and an underline on every "Chapter 3" in a thesis
-   * that says it forty times would be a page of hairlines. The tooltip carries
-   * the words.
-   */
-  .ref-link,
-  .cite-open {
-    cursor: pointer;
-  }
-
-  /*
-   * A key nothing resolved: `§ch:nowhere`, `[ghost?]`.
-   *
-   * The text already says it, and this is the second channel — the amber
-   * pencil, which is the page's colour for "this wants the author", as a wavy
-   * line in the sheet's own units so it is the same weight at every width. It
-   * will come out of LaTeX as `??` or `[?]`, and the author should meet it here
-   * first.
-   */
-  [data-unresolved] {
-    text-decoration: underline;
-    text-decoration-style: wavy;
-    text-decoration-color: var(--mark);
-    text-decoration-thickness: 0.05em;
-    text-underline-offset: 0.18em;
-  }
-
-  /*
-   * The card behind a citation. Portalled, like `.proposal-card`, and so shaped
-   * by its own content rather than by a container query — the same argument,
-   * one card over. Chrome-sized in real pixels, because it is read at 220
-   * pixels where the citation it opened from is four pixels tall.
-   */
-  .cite-card {
-    box-shadow: 0 2px 10px oklch(0 0 0 / 18%);
-    padding: 0.4rem 0.55rem;
-    font-size: 0.72rem;
-    line-height: 1.4;
-    max-width: min(var(--radix-popover-content-available-width, 22rem), 22rem);
-    /* A long title has to wrap, and never past the card's edge. */
-    overflow-wrap: anywhere;
-  }
-
-  .cite-source + .cite-source {
-    margin-top: 0.35rem;
-    padding-top: 0.35rem;
-    border-top: 1px solid var(--border);
-  }
-
-  .cite-source-name {
-    display: block;
-    font-weight: 600;
-  }
-
-  a.cite-source-name {
-    color: var(--pencil);
-    text-decoration: underline;
-    text-decoration-thickness: 1px;
-    text-underline-offset: 2px;
-  }
-
-  .cite-source-detail {
-    display: block;
-    color: var(--muted-foreground);
-  }
-
-  /* ---- A change somebody has suggested ---------------------------------- */
-
-  /*
-   * Green for what arrives and red for what leaves, which is the one convention
-   * in this area that a reader already knows.
-   *
-   * ## A third and fourth hue, and why the page's own rule survives it
-   *
-   * Every other colour here is one of the copy-editor's two pencils, and the
-   * rule stated where they are defined is that colour is never the only channel
-   * — because some readers do not have it.
-   *
-   * Two more are admitted because added and removed are not a matter of
-   * emphasis, they are the two halves of a comparison, and red against green is
-   * the notation a person has already learned from every diff they have read.
-   * Inventing a house convention would be this module being consistent with
-   * itself at the cost of being legible.
-   *
-   * The pairing rule is kept, at no cost, because the ELEMENTS carry the
-   * meaning: what leaves is a `<del>` and is struck through, what arrives is an
-   * `<ins>` and is underlined. Turn the colour off and the change still reads.
-   * Red and green are precisely the pair the commonest colour blindness cannot
-   * separate, which is why the strike-through is not decoration.
-   *
-   * Both are `color-mix`ed toward the surface they sit on rather than used at
-   * full strength, so a wash of them behind body type stays readable — the same
-   * treatment `.passage-mark` gets.
-   */
-  .proposed-out {
-    background-color: color-mix(in oklch, var(--gone) 20%, var(--paper));
-    color: color-mix(in oklch, var(--gone) 65%, var(--paper-foreground));
-    text-decoration-line: line-through;
-    text-decoration-thickness: 0.07em;
-    border-radius: 2px;
-    padding-inline: 0.05em;
-  }
-
-  .proposed-in {
-    background-color: color-mix(in oklch, var(--arrived) 20%, var(--paper));
-    color: color-mix(in oklch, var(--arrived) 65%, var(--paper-foreground));
-    text-decoration-line: underline;
-    text-decoration-thickness: 0.07em;
-    text-underline-offset: 0.18em;
-    border-radius: 2px;
-    padding-inline: 0.05em;
-  }
-
-  /*
-   * A whole block that left, and a whole block that arrived, when the disk
-   * moved under the reading.
-   *
-   * The block-level counterparts of the two rules above, for `Departed` in
-   * `blocks.tsx`: the same two colours at the same wash, the rule through the
-   * text of what is gone and under the text of what is new, so a change made
-   * outside this page reads in exactly the language a change suggested
-   * through it does. A reworded paragraph gets neither of these — its
-   * difference is drawn inside it, word by word, with the two rules above.
-   *
-   * `text-decoration` set on the wrapper reaches every line of prose inside
-   * it, which is what makes a struck-through paragraph one gesture rather
-   * than a span per run. A figure or a code listing inside gets the wash and
-   * the rule on its caption, and the wash is what says it on a picture.
-   */
-  .changed-gone,
-  .changed-new {
-    display: block;
-    border-radius: 3px;
-    /* Out into the margin by the same amount the wash is padded, so the
-       coloured box sits behind the prose rather than shifting it. */
-    margin-inline: -0.25em;
-    padding-inline: 0.25em;
-  }
-
-  .changed-gone {
-    background-color: color-mix(in oklch, var(--gone) 12%, var(--paper));
-    color: color-mix(in oklch, var(--gone) 65%, var(--paper-foreground));
-    text-decoration-line: line-through;
-    text-decoration-thickness: 0.07em;
-  }
-
-  .changed-new {
-    background-color: color-mix(in oklch, var(--arrived) 12%, var(--paper));
-    color: color-mix(in oklch, var(--arrived) 65%, var(--paper-foreground));
-    text-decoration-line: underline;
-    text-decoration-thickness: 0.07em;
-    text-underline-offset: 0.18em;
-  }
-
-  /*
-   * The control that answers a suggestion: chrome, drawn in the column.
-   *
-   * ## It is inside the scroll column and outside the sheet, and both halves matter
-   *
-   * Outside the sheet, because the sheet is drawn at `transform: scale` and a
-   * card inside it would be scaled with it — the `--counter-scale` reciprocal
-   * this card used to multiply itself back up by is gone, and there is no
-   * reciprocal anywhere in this codebase now. The card is a child of the
-   * column, which is not transformed, so `0.7rem` here is 0.7rem on screen at
-   * every width.
-   *
-   * Inside the column, because the column is what scrolls. The card was a
-   * `position: fixed` popover portalled to `document.body` and moved by script
-   * on every scroll event, which is what a card that is drawn a frame behind
-   * the words it points at looks like. As an absolutely positioned child of
-   * the scroll container it is part of the scrolled content, the compositor
-   * moves it with the words, and no script runs while somebody scrolls. The
-   * column is `position: relative` for this, and its `overflow` clips the card
-   * when the words leave, which is what `hideWhenDetached` used to do.
-   *
-   * `left` and `top` are set inline by `ProposalControls`, in the column's own
-   * coordinates, from one layout pass — see `placeCards` in `proposed.tsx`.
-   * Until that pass has run the card has no position and is not drawn, so it
-   * still has a size to measure.
-   */
-  .proposal-card {
-    position: absolute;
-    /* Over the sheets, which are ordinary flow siblings, and under nothing. */
-    z-index: 10;
-    box-shadow: 0 2px 10px oklch(0 0 0 / 18%);
-    padding: 0.3rem 0.4rem;
-    /* Its own type size, in real pixels, because it is chrome and not the
-       document. */
-    font-size: 0.7rem;
-    line-height: 1.35;
-    /* Never so narrow that Accept and Reject cannot sit beside each other. */
-    min-width: 132px;
-    /* Never wider than the column it is in, and never wider than a sentence
-       wants to be. `100%` is the column, because the column is the containing
-       block — the same bound Floating UI used to measure and publish, read off
-       the layout instead. The second bound is the one that matters at 900
-       pixels, where the first would allow a card the width of the page. */
-    max-width: min(100%, 20rem);
-    width: max-content;
-    /* A drag over the paper must not pick the card's words up into a passage,
-       and a click on Accept must not start one. */
-    user-select: none;
-  }
-
-  .proposal-card:not([data-placed]) {
-    visibility: hidden;
-  }
-
-  /*
-   * The arrow: a rotated square in the card's own colour, on the edge facing
-   * the words, at `--arrow-left` — the horizontal centre of the changed span,
-   * which the layout pass measured. Drawn only while the card is beside its
-   * words; a card pushed away by another card has no `data-arrow`, because an
-   * arrow that no longer reaches its words would point at whatever is between.
-   */
-  .proposal-card[data-arrow]::after {
-    content: '';
-    position: absolute;
-    left: calc(var(--arrow-left, 0px) - 5px);
-    width: 10px;
-    height: 10px;
+  .proposal-diff {
     background: var(--card);
-    transform: rotate(45deg);
-    box-shadow: 1px 1px 1px oklch(0 0 0 / 10%);
-  }
-
-  .proposal-card[data-arrow][data-side='top']::after {
-    bottom: -5px;
-  }
-
-  .proposal-card[data-arrow][data-side='bottom']::after {
-    top: -5px;
-    box-shadow: -1px -1px 1px oklch(0 0 0 / 10%);
-  }
-
-  .proposal-why {
-    color: var(--muted-foreground);
-    /* The whole sentence, however many lines it takes. It used to be clamped to
-       two, because a card that grew to five lines would cover the paragraph
-       above the one it is about as well as the one below it. Only one card is
-       drawn now — the one the reader is nearest — so there is no second card
-       for a tall one to collide with, and the reason a reader is being asked to
-       approve something is not a thing to show them half of. */
-    /* A 240-character sentence with a path or a URL in it has to wrap somewhere,
-       and the one place it must not go is sideways past the edge of the card. */
     overflow-wrap: anywhere;
   }
 
-  /*
-   * The two answers and the count, on one line where there is room for one.
-   *
-   * `flex-wrap` and not a container query, and that is forced rather than
-   * chosen: the card is chrome inside the reading column, not inside
-   * `@container container`, so a `@sm/container:` rule in here would be a
-   * query with no container to ask and would never match at any width.
-   * Wrapping asks only the card's own content, which needs no ancestor.
-   *
-   * At 220 pixels the count drops under the buttons; at 900 it sits beside
-   * them, which is where the owner asked for it.
-   */
-  .proposal-answer {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.15rem 0.4rem;
-    margin-top: 0.25rem;
+  .diff-gone {
+    color: var(--gone);
+    background: color-mix(in oklch, var(--gone) 14%, transparent);
+    text-decoration: line-through;
   }
 
-  /*
-   * Where in the paper this one is. A readout, in the muted colour every other
-   * readout on this page uses, and `tabular-nums` so that "9 of 12" and
-   * "10 of 12" do not change width and shuffle the buttons beside them.
-   */
-  .proposal-count {
-    color: var(--muted-foreground);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  /* ---- The column the pages lie in ------------------------------------- */
-
-  /*
-   * The scroller, and the one number in this file that is about the PANE.
-   *
-   * A document reader scrolls, so something has to be the thing that scrolls,
-   * and it must be an element rather than the document: this page is framed,
-   * and a document that grew to thirty A4 pages would ask the host for a frame
-   * thirty pages tall — which either gets clamped, silently, or turns the
-   * CANVAS into the scrollbar for somebody else's paper.
-   *
-   * So the column is as tall as the container minus the chrome above and below it,
-   * and the page's own height then stays about what the container already is, which
-   * is what `resize` reports back. That is a fixed point rather than a loop.
-   *
-   * ## The height is no longer a subtraction, and the subtraction was a guess
-   *
-   * It used to be `max(12rem, calc(100dvh - 8rem))`: the container, minus eight rems
-   * of chrome estimated by counting the things above and below it. Every one of
-   * those was a number in this file that had to be right about markup in
-   * another one — and it was wrong the moment a strip was removed from the
-   * bottom, which is how eight rems came to reserve room for a caption that had
-   * moved into a tooltip.
-   *
-   * Now the page is a flex column the height of the frame and this is its
-   * growing child, so the browser does the subtraction with the real chrome. No
-   * number here has an opinion about how tall a heading is.
-   *
-   * `min-height: 0` is not tidiness. A flex item's `min-height` defaults to
-   * `auto`, which in a column resolves to the CONTENT's height, so without it
-   * every sheet stacked would override this element's height upward and the
-   * document would scroll instead of the column — measured at 23,383 pixels,
-   * inside a page 23,467 tall, with the pages scrolling in a 672-pixel box in
-   * the middle of it. Two scrolls, one of them of nothing.
-   *
-   * `flex-1` and `min-h-0` are also written on the element in `paginated.tsx`,
-   * which is a duplication with a reason: this class can be read on its own and
-   * says what the element IS, while a class list somebody edits in a hurry is
-   * where the load-bearing one would go missing.
-   */
-  .reading-column {
-    flex: 1 1 auto;
-    min-height: 0;
-    padding-block: 0.5rem;
-    /*
-     * No tint of its own.
-     *
-     * It carried a 4%% wash to lift the scrolling area off the page around it —
-     * a reasonable instinct when this was one box among several, and wrong now
-     * that it is nearly the whole container: it drew a second surface behind the
-     * sheet, so the paper sat on a slightly different colour from the container
-     * holding it, and the seam was visible at the edges. The sheet is already
-     * lifted, by its own background and its shadow. One lifted thing is a page
-     * on a desk; two is a page on a tray on a desk.
-     */
-    border-radius: var(--radius-md);
-    /* `contain: paint` so thirty absolutely-ordinary sheets do not each cost a
-       repaint of the ones above them while somebody scrolls. */
-    contain: paint;
-  }
-
-  /* ---- Gutter tags ----------------------------------------------------- */
-
-  /*
-   * The block's actual kind — structural truth, not decoration — revealed on
-   * hover so it never competes with reading. Excluded from selection, because
-   * letting a marker into a drag would put a stray `¶` into the passage the
-   * reader thinks they highlighted.
-   */
-  .gutter-mark {
-    user-select: none;
-    -webkit-user-select: none;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 9px;
-    letter-spacing: 0.08em;
-    color: var(--paper-muted);
-    opacity: 0;
-    transition: opacity 140ms ease;
-  }
-  .block-row:hover .gutter-mark,
-  .gutter-tag:focus-visible .gutter-mark {
-    opacity: 0.7;
-  }
-
-  /*
-   * Always drawn now. It sits inside the sheet's own left margin, which is a
-   * fixed fraction of a fixed A4 page rather than whatever the container had left
-   * over — so there is no longer a width at which it is silently absent. It is
-   * never moved inline: a `¶` in the reading flow is a character in the
-   * argument, which is exactly the confusion the tags exist to prevent.
-   */
-  .gutter-tag {
-    display: block;
-  }
-
-  /* ---- What the author wrote in the margin ----------------------------- */
-
-  /*
-   * There is no rule here any more, and the absence is the point.
-   *
-   * A `\todo{…}` was a pin and a card in a margin rail; then, when the rail
-   * went, an amber run in the flow — `.note-inline` — on the reasoning that the
-   * author's words should stay where the author put them. Annotation now has a
-   * module of its own that reads those very macros out of the source and
-   * anchors them to the bytes they sit at, so the words are not lost; they are
-   * beside the paper rather than inside it, which is where the user asked for
-   * them.
-   *
-   * The class is deleted rather than left unused. A stylesheet full of rules
-   * for things nothing draws is a stylesheet nobody can read to find out what
-   * the page looks like, and the next person to see `.note-inline` here would
-   * reasonably conclude that notes are still drawn inline.
-   */
-}
-
-/*
- * Nothing carries its air onto the top of a sheet.
- *
- * A heading's `mt-[2em]` is the space that separates a section from the
- * paragraph BEFORE it. When the packer puts that heading first on a page there
- * is no paragraph before it — there is a page break, which is a far larger
- * separator already — and the margin becomes dead space between the sheet's own
- * head margin and the first word on it.
- *
- * Measured on the thesis before this rule: thirty-three of its fifty-one sheets
- * began with a heading, and their first ink sat 106 to 117 pixels below the
- * sheet's edge against the 72 pixels of `PAGE.marginY` the page is supposed to
- * have. A sheet beginning with a paragraph sat at 84, because `my-[0.8em]` did
- * the same thing more quietly. So every sheet in the document carried between
- * 12 and 45 pixels of blank at its top that nothing had asked for — and the top
- * of a page is precisely where a reader reads unexplained space as the page
- * having been pushed down out of its container.
- *
- * It is unasked-for in the arithmetic as well: `pages.ts` charges a heading for
- * its air wherever it lands, so this margin was space the paginator had already
- * spent somewhere else.
- *
- * ## Why this rule is outside every layer
- *
- * The margins it overrides are Tailwind utilities (`mt-[2em]`, `my-[0.8em]`),
- * which live in the `utilities` layer, and `utilities` is declared after
- * `components` — so the same rule written in `@layer components` above loses on
- * layer order no matter how specific it is. That was tried first and measured:
- * the sheets still began at 106. An unlayered rule beats every layered one,
- * which is the honest way to say "this is the last word on the top of a sheet"
- * without `!important` on a dozen selectors.
- *
- * `> *` rather than a list of tags, because a block body is one of a dozen
- * elements and a list is a list somebody will forget to extend. The gutter tag
- * is excluded because it is absolutely positioned off a `top` rather than a
- * margin — naming it costs one clause and saves the next reader working out
- * whether it mattered.
- */
-.sheet > :first-child,
-.sheet > .block-row:first-child > *:not(.gutter-tag) {
-  margin-top: 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  .diff-arrived {
+    color: var(--arrived);
+    background: color-mix(in oklch, var(--arrived) 16%, transparent);
+    text-decoration: none;
   }
 }
