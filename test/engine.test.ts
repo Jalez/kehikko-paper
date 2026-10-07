@@ -103,6 +103,54 @@ describe('what an engine is told', () => {
 describe('what an engine said went wrong', () => {
   const resolve = (name: string) => (['main.tex', 'chapters/wire.tex'].find((file) => file === name || file === `${name}.tex`) ?? null)
 
+  test('what a tool tectonic ran said is read out of the frame around it, with what to do about biber', () => {
+    /* Tectonic 0.16.9 on a real biblatex thesis, with a newer biber installed. */
+    const output = [
+      'note: Running external tool biber ...',
+      'error: the external tool exited with an error code; its stdout was:',
+      '',
+      '===============================================================================',
+      'INFO - This is Biber 2.21',
+      "INFO - Logfile is 'main.blg'",
+      "INFO - Reading 'main.bcf'",
+      'ERROR - Error: Found biblatex control file version 3.8, expected version 3.11.',
+      'This means that your biber (2.21) and biblatex (3.17) versions are incompatible.',
+      'See compat matrix in biblatex or biber PDF documentation.',
+      'INFO - ERRORS: 1',
+      '===============================================================================',
+      'error: its stderr was:',
+      '',
+      '===============================================================================',
+      '===============================================================================',
+      'note: Writing `/tmp/out/main.log` (65.3 KiB)',
+      'error: the external tool exited with error code 2',
+    ].join('\n')
+    const problems = problemsFrom(output, '', resolve)
+    expect(problems.map((one) => one.message)).toEqual([
+      'Found biblatex control file version 3.8, expected version 3.11. This means that your biber (2.21) and biblatex (3.17) versions are incompatible. See compat matrix in biblatex or biber PDF documentation.',
+      'Nothing is wrong in the paper. The engine’s biblatex is 3.17 and the biber installed on this machine is 2.21; they have to be of the same release, which for biblatex 3.17 is biber 2.17. Install that biber and put it first on the PATH, or compile with a TeX Live install (latexmk), where the two come matched.',
+      'the external tool exited with error code 2',
+    ])
+    expect(problems.every((one) => one.severity === 'error')).toBe(true)
+  })
+
+  test('a tool that failed without saying ERROR is still quoted, and an ordinary error after it is still read', () => {
+    const output = [
+      'error: the external tool exited with an error code; its stdout was:',
+      '===============================================================================',
+      'something went wrong in a tool with no levels',
+      '===============================================================================',
+      'error: its stderr was:',
+      '===============================================================================',
+      '===============================================================================',
+      'error: main.tex:5: Undefined control sequence',
+    ].join('\n')
+    expect(problemsFrom(output, '', resolve)).toEqual([
+      { severity: 'error', file: null, line: null, message: 'something went wrong in a tool with no levels' },
+      { severity: 'error', file: 'main.tex', line: 5, message: 'Undefined control sequence' },
+    ])
+  })
+
   test('tectonic: file as the paper spelled it, line, message — and not its closing sentence', () => {
     const output = [
       'note: Running TeX ...',
