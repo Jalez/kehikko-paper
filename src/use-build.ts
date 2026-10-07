@@ -35,6 +35,19 @@ export function useBuild(epic: string | null) {
     }
   }, [epic])
 
+  /** Ask again where the build stands, without compiling: an engine may have just been installed. */
+  const refresh = useCallback(async (): Promise<void> => {
+    const epicNow = on.current
+    if (epicNow === null) return
+    const mine = asked.current
+    try {
+      const body = await json('/api/build', { epic: epicNow })
+      if (mine === asked.current && body.ok === true && body.build) setBuild(body.build as BuildStatus)
+    } catch {
+      /* The server went away. What is on screen stands. */
+    }
+  }, [])
+
   const compile = useCallback(async (): Promise<void> => {
     const epicNow = on.current
     if (epicNow === null) return
@@ -51,5 +64,5 @@ export function useBuild(epic: string | null) {
     }
   }, [])
 
-  return { build, compiling, compile }
+  return { build, compiling, compile, refresh }
 }

@@ -46,8 +46,8 @@ still reads every paper, because the section list other modules depend on — an
 anything.
 
 There is no read-only fallback view for a machine with no engine. Without one
-the source is still edited and saved, the PDF pane says how to install an
-engine, and that is all: a second, approximate rendering of the paper is the
+the source is still edited and saved, the PDF pane offers to install one (see
+"The managed compiler"), and that is all: a second, approximate rendering of the paper is the
 thing this version removed.
 
 ## Where the papers come from
@@ -114,11 +114,26 @@ with whichever it had first; that normalisation happens on its first save.
 
 ## The compiled PDF
 
-**An engine, found on this machine.** `compile/engine.ts` looks on `PATH` and
-where Homebrew and MacTeX install for `tectonic`, `latexmk`, `pdflatex`,
-`xelatex` and `lualatex`, and uses the first it finds, in that order. When
-there is none the PDF pane says so and says what to install
-(`brew install tectonic` is the smallest).
+**An engine, found on this machine.** `compile/engine.ts` looks for
+`tectonic`, `latexmk`, `pdflatex`, `xelatex` and `lualatex` on `PATH`, where
+Homebrew and MacTeX install (`/opt/homebrew/bin`, `/usr/local/bin`,
+`/Library/TeX/texbin`, `/usr/bin`), and where a TeX Live installs when nothing
+has put it on `PATH` — `/usr/local/texlive/<year>/bin/<platform>` and
+`/opt/texlive/<year>/bin/<platform>`, newest year first — because an app started
+from the Dock does not inherit a terminal's `PATH`. When there is none, the PDF
+pane offers to fetch one: see "The managed compiler" below.
+
+**Which one, when there are several.** In this order:
+
+1. The engine the paper names (next paragraph).
+2. The person's own Tectonic — unless the paper's bibliography is biber's
+   (`biblatex` without `backend=bibtex`) and there is a `latexmk`, which then
+   goes first: a TeX Live ships biber and biblatex as a matched pair, and a
+   Tectonic uses whichever biber the machine happens to have.
+3. `latexmk`, which is a TeX Live. Found, it is used ahead of anything this
+   module fetched.
+4. The Tectonic this module fetched.
+5. `pdflatex`, `xelatex`, `lualatex`, bare.
 
 **A paper can name its engine**, in the paper: `% !TEX program = xelatex` in
 the first lines of `main.tex` — the magic comment TeXShop, TeXstudio and VS
@@ -144,14 +159,91 @@ therefore take as long as downloading its packages does.
 
 **The bare engines** (`pdflatex`, `xelatex`, `lualatex`) are run twice and do
 not run BibTeX or biber; a bibliography wants `latexmk` or Tectonic. The TeX
-Live argument lists are pinned by tests and have **not** been run against real
-binaries: the machine this was written on has only Tectonic.
+Live argument lists — `latexmk`'s included — are pinned by tests and have
+**not** been run against real binaries: the machine this was written on has
+only Tectonic.
 
 **Class and style files beside `main.tex` are found**, as are files in
 subfolders that the paper names with their folder (`\input{chapters/a}`,
 `\usepackage{style/shout}`). A `.sty` in a subfolder named WITHOUT its folder
 is not found, because an extra search path is one of the things `--untrusted`
 turns off, and safe is the default worth keeping.
+
+### The managed compiler
+
+A person should not have to install a TeX distribution to see their PDF. When
+no engine is found, the PDF pane says what a compiler is and offers one button,
+**Install the compiler**, with what it will download, how much, from where and
+into which folder written under it. Nothing is downloaded until that button is
+pressed: opening a paper fetches nothing.
+
+**What is downloaded** — and it is all in `compile/toolchain.ts`, as literals:
+
+| Piece | Version | From | Size (macOS, Apple silicon) |
+| --- | --- | --- | --- |
+| Tectonic | 0.17.0 | `github.com/tectonic-typesetting/tectonic` releases | 21.7 MB |
+| biber | 2.17 | `downloads.sourceforge.net/project/biblatex-biber` | 89.4 MB |
+
+About 111 MB, against several gigabytes for a TeX Live. Tectonic is one file
+and fetches the LaTeX packages a paper uses the first time it compiles it, into
+its own cache. biber is the bibliography tool `biblatex` needs, and it has to be
+the release that matches the `biblatex` in Tectonic's bundle: that is 3.17, so
+biber 2.17. There are rows for macOS (Apple silicon and Intel), Linux x86-64,
+and Linux ARM64 (Tectonic only — the biber project published no 2.17 for it).
+Windows has rows and is not offered, because the rest of this module's engine
+code is POSIX.
+
+**The same button for the biber alone.** A machine that has Tectonic and a
+biber of another release — Homebrew's, say — fails a `biblatex` paper with
+biber's refusal, and one with no biber at all fails it with "No such file". The pane then offers to install biber 2.17, which Tectonic is
+given ahead of the machine's own, in place of advice to install it by hand.
+
+**How it is fetched** (`compile/install.ts`). Only the address in the table is
+asked, and a redirect is followed only to a host the row names
+(`release-assets.githubusercontent.com`; `*.dl.sourceforge.net`). The download
+must be exactly the pinned length and SHA-256, or it is deleted before anything
+is unpacked. Then the ONE file wanted is read out of the archive by this module
+— no `tar`, no shell, and no path from an archive is ever a path on disk — made
+executable, and renamed into place. One install at a time; Cancel keeps what
+arrived and the next press asks for the rest; the checksum is of the whole file
+either way. There is no "latest" anywhere: installing a different version is a
+change to the table.
+
+**Where the checksums came from.** Tectonic's are the SHA-256 digests GitHub
+reports for each release asset. biber's project publishes only SHA-1 (through
+SourceForge), so each archive was downloaded, its SHA-1 compared with the
+published one, and the SHA-256 computed from those bytes — which guards every
+later download against the file changing, and rests on that first download for
+the rest. `toolchain.ts` says so beside the table.
+
+**Where it is kept: `<tmpdir>/kehikot-paper-tools/`**, shared by every project
+(`tectonic-0.17.0/tectonic`, `biber-2.17/biber`), or wherever
+`KEHIKOT_PAPER_TOOLS_DIR` points. Not under any project's `.kehikot/` — a
+compiler is the machine's — and not under the home directory, which the
+workspace's storage rule keeps modules out of. The temporary directory is the
+one machine-level place that rule allows a module, and it is not the right
+one: the system may clear it (macOS removes what has not been used for a few
+days, Linux empties it on reboot), after which the button is back and the
+download is made again. The proper home is a machine-level directory the
+protocol hands a module; `toolsDir()` in `install.ts` is the one line that
+would change. The folder is created for the current user alone and nothing is
+run out of it unless it still is.
+
+**To remove it**, delete that folder — the pane shows its path, and
+`node -p "require('os').tmpdir()"` prints the first half. Tectonic's package
+cache is separate and its own (`~/Library/Caches/Tectonic` on a Mac,
+`~/.cache/Tectonic` on Linux); biber unpacks itself into a `par-…` folder in
+the temporary directory on first run.
+
+**Who can start a download.** A person pressing the button, and nothing else:
+`POST /api/toolchain/install` needs the page's ticket like every write here,
+takes no address, version or path — only which pieces — and there is no MCP
+tool for it.
+
+**One thing to expect.** A paper's first compile with a fresh Tectonic
+downloads its packages one by one, and for a long document that can outlast
+the three-minute limit on a compile (a 61-page thesis took 3 min 18 s here).
+What was fetched is kept, the page says so, and the next compile finishes.
 
 ### Where the build goes
 
@@ -379,6 +471,8 @@ never pushing. `git.ts` says what it refuses and why.
 | `POST /api/file` | save one file whole; 409 with the disk's text when it moved |
 | `GET /api/build`, `/api/pdf` | where the build stands; the last good PDF |
 | `POST /api/compile` | compile, superseding a compile in flight |
+| `GET /api/toolchain` | the compiler this module can fetch: pieces, sizes, hosts, folder, progress |
+| `POST /api/toolchain/install`, `/api/toolchain/cancel` | start fetching the missing pieces (answers at once); stop |
 | `GET /api/sync` | `file`+`line`[+`to`] → rectangles; `page`+`x`+`y` → file and line |
 | `GET /api/proposals`, `POST /api/proposal` | suggestions waiting; accept or reject one |
 | `GET /api/uncommitted`, `POST /api/save` | where the repository stands; commit |
@@ -400,6 +494,8 @@ compile/engine.ts    which engine and its arguments (pure)
 compile/log.ts       an engine's errors as file and line (pure)
 compile/synctex.ts   the SyncTeX reader, both directions, the page map (pure)
 compile/build.ts     the queue, the build folder, the spawn
+compile/toolchain.ts the compiler this module can fetch: pinned addresses, sizes, checksums (pure)
+compile/install.ts   fetching it: download, verify, extract one file, rename into place
 latex/               the parser, labels, bibliography, proposals, diff
 proposals.ts, git.ts suggestions in memory; commits
 src/                 the page: workspace.tsx, editor/, pdf/, the hooks

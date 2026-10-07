@@ -1,13 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
 import { MAIN, hashesOf, paperRoot, readPaper } from '../store.ts'
-import { HOW_TO_INSTALL, chooseEngine, envFor, findEngines, namedEngine, runsFor, wantsNetwork, type Engine, type EngineName } from './engine.ts'
-import { problemsFrom, tailOf, type Problem } from './log.ts'
+import { HOW_TO_INSTALL, chooseEngine, envFor, findEngines, namedEngine, needsBiber, pathFirst, runsFor, texLiveDirs, wantsNetwork, type Engine, type EngineName } from './engine.ts'
+import { canFetchBiber, managed } from './install.ts'
+import { biberAbsent, biberAdvice, biberMismatch, biberOffer, noBiber, problemsFrom, tailOf, type BiberMismatch, type Problem } from './log.ts'
+import { BIBER_VERSION, BUNDLE_BIBLATEX } from './toolchain.ts'
 import {
   forward,
   pageMap,
@@ -125,6 +127,13 @@ export interface BuildStatus {
     problems: Problem[]
     /** The end of what the engine printed. */
     tail: string
+    /**
+     * Set when the run failed because the biber on this machine is not the one
+     * the engine's biblatex wants, or because there is no biber on it at all.
+     * `fetchable` is whether this module can download the one that is wanted —
+     * the page offers that in place of advice.
+     */
+    biber?: (BiberMismatch & { fetchable: boolean }) | null
   } | null
   /** The last PDF that compiled. Stays through any number of failures. */
   pdf: {
@@ -174,9 +183,22 @@ function executable(path: string): boolean {
   }
 }
 
+function names(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return []
+  }
+}
+
+/** TeX Live folders that are not on PATH. Looked for on every ask, like the engines in them. */
+function texLive(): string[] {
+  return texLiveDirs(names)
+}
+
 /** The engines on this machine. Looked for on every ask: installing one should not need a restart. */
 export function engines(): Engine[] {
-  return findEngines(executable, process.env)
+  return findEngines(executable, process.env, { dirs: texLive(), tectonic: managed().tectonic })
 }
 
 function readMeta(dir: string): Meta | null {
@@ -203,7 +225,7 @@ export function buildStatus(epic: string, project: string | null): BuildStatus |
     /* `paperRoot` said there is a `main.tex`; if it went between the two
        calls the engine choice below is made as though it named none. */
   }
-  const chosen = chooseEngine(found, namedEngine(source))
+  const chosen = chooseEngine(found, namedEngine(source), needsBiber(source))
   const job = jobs.get(root)
   const meta = readMeta(buildDir(root))
   return {
@@ -270,7 +292,7 @@ async function once(
       return ''
     }
   })()
-  const chosen = chooseEngine(engines(), namedEngine(source))
+  const chosen = chooseEngine(engines(), namedEngine(source), needsBiber(source))
   if (!chosen.ok) return job.last
   const engine = chosen.engine
 
@@ -297,7 +319,11 @@ async function once(
   let output = ''
   let timedOut = false
   let code: number | null = null
+  let fetching = false
   const runs = runsFor(engine, MAIN, work)
+  /* Decided once per compile: which biber Tectonic finds, and that a TeX Live
+     engine finds its own siblings. See `pathFirst`. */
+  const env = envFor(process.env, pathFirst(engine, managed().biberDir), texLive())
   for (let i = 0; i < runs.length; i += 1) {
     const run = runs[i]!
     const left = TIMEOUT_MS - (Date.now() - started)
@@ -305,7 +331,8 @@ async function once(
       timedOut = true
       break
     }
-    const ran = await spawned(run.argv, root, left, job)
+    fetching = engine.name === 'tectonic' && !run.cachedOnly
+    const ran = await spawned(run.argv, root, left, job, env)
     if (superseded()) return job.last
     output = ran.output
     timedOut = ran.timedOut
@@ -335,13 +362,29 @@ async function once(
   } catch {
     /* No log is an ordinary outcome: the engine may not have got that far. */
   }
-  const problems = problemsFrom(output, log, resolve)
+  /* The one tool failure this module can do something about: biber of the
+     wrong release. Where the right one can be fetched, the sentence says so
+     and the page puts a button beside it. */
+  const absent = engine.name === 'tectonic' && code !== 0 && biberAbsent(output)
+  const mismatch: BiberMismatch | null =
+    engine.name !== 'tectonic' ? null : absent ? { have: null, biblatex: BUNDLE_BIBLATEX, need: BIBER_VERSION } : biberMismatch(output)
+  const fetchable = mismatch ? canFetchBiber(mismatch.need) : false
+  const problems = problemsFrom(output, log, resolve, fetchable ? biberOffer : biberAdvice)
+  /* Tectonic's own words for a missing biber are the operating system's "No
+     such file or directory", about nothing in particular. Said first. */
+  if (absent) problems.unshift({ severity: 'error', file: null, line: null, message: noBiber(BIBER_VERSION, fetchable) })
   if (timedOut) {
     problems.unshift({
       severity: 'error',
       file: null,
       line: null,
-      message: `${engine.name} was stopped after ${Math.round(TIMEOUT_MS / 1000)} seconds without finishing.`,
+      message:
+        `${engine.name} was stopped after ${Math.round(TIMEOUT_MS / 1000)} seconds without finishing.`
+        /* A first compile on a machine downloads the packages the paper uses,
+           one at a time, and a long paper's worth can outlast the limit. What
+           arrived is in Tectonic's cache, so the next press does not start
+           over — and a person told only "stopped" would not know to press. */
+        + (fetching ? ' It was fetching the LaTeX packages this paper uses, for the first time on this machine; what it fetched is kept, so compile again and it carries on from there.' : ''),
     })
   }
 
@@ -383,7 +426,16 @@ async function once(
     })
   }
 
-  return { ok, at: Date.now(), ms: Date.now() - started, engine: engine.name, timedOut, problems, tail: tailOf(output) }
+  return {
+    ok,
+    at: Date.now(),
+    ms: Date.now() - started,
+    engine: engine.name,
+    timedOut,
+    problems,
+    tail: tailOf(output),
+    biber: !ok && mismatch ? { ...mismatch, fetchable } : null,
+  }
 }
 
 function failed(engine: Engine, started: number, why: string): BuildStatus['last'] {
@@ -437,11 +489,12 @@ function spawned(
   cwd: string,
   timeoutMs: number,
   job: Job,
+  env: Record<string, string>,
 ): Promise<{ code: number | null; output: string; timedOut: boolean; error: string | null }> {
   return new Promise((done) => {
     let child: ChildProcess
     try {
-      child = spawn(argv[0]!, argv.slice(1), { cwd, env: envFor(process.env), shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      child = spawn(argv[0]!, argv.slice(1), { cwd, env, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (error) {
       done({ code: null, output: '', timedOut: false, error: (error as Error).message })
       return

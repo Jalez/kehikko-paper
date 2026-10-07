@@ -55,7 +55,12 @@ const MAX_MESSAGE = 400
  * @param log     the `.log` it left, or ''
  * @param resolve turns the name an engine used into one of the paper's files, or null
  */
-export function problemsFrom(output: string, log: string, resolve: (name: string) => string | null): Problem[] {
+export function problemsFrom(
+  output: string,
+  log: string,
+  resolve: (name: string) => string | null,
+  advise: (said: string) => string | null = biberAdvice,
+): Problem[] {
   const out: Problem[] = []
   const seen = new Set<string>()
   const add = (problem: Problem) => {
@@ -79,7 +84,7 @@ export function problemsFrom(output: string, log: string, resolve: (name: string
       if (RULE.test(line)) {
         if (!opened) opened = true
         else {
-          for (const problem of saidByTool(quoted)) add(problem)
+          for (const problem of saidByTool(quoted, advise)) add(problem)
           quoted = null
         }
         continue
@@ -120,7 +125,7 @@ export function problemsFrom(output: string, log: string, resolve: (name: string
   }
 
   /* Output that ended inside a tool's block — a killed run — still said it. */
-  if (quoted && opened) for (const problem of saidByTool(quoted)) add(problem)
+  if (quoted && opened) for (const problem of saidByTool(quoted, advise)) add(problem)
 
   /* The log, for what stderr did not carry: classic `!` errors when nothing
      above found one, and LaTeX's own warnings — an undefined reference or
@@ -169,7 +174,7 @@ const RULE = /^={20,}\s*$/
  * chatter. A block with no `ERROR - ` in it and something else is kept as one
  * message: a tool that failed without a level is still the reason.
  */
-function saidByTool(lines: readonly string[]): Problem[] {
+function saidByTool(lines: readonly string[], advise: (said: string) => string | null): Problem[] {
   const out: Problem[] = []
   let current: Problem | null = null
   const rest: string[] = []
@@ -190,7 +195,7 @@ function saidByTool(lines: readonly string[]): Problem[] {
   if (!out.some((one) => one.severity === 'error') && rest.length) {
     out.unshift({ severity: 'error', file: null, line: null, message: rest.slice(-6).join(' ') })
   }
-  const advice = biberAdvice(out.map((one) => one.message).join('\n'))
+  const advice = advise(out.map((one) => one.message).join('\n'))
   if (advice) out.push({ severity: 'error', file: null, line: null, message: advice })
   return out
 }
@@ -206,15 +211,64 @@ function saidByTool(lines: readonly string[]): Problem[] {
  * only thing a person can change, and that the paper is not at fault.
  */
 export function biberAdvice(said: string): string | null {
-  const versions = /biber \((\d+)\.(\d+)\) and biblatex \((\d+)\.(\d+)\) versions are incompatible/.exec(said)
-  if (!versions) return null
-  const biber = `${versions[1]}.${versions[2]}`
-  const biblatex = `${versions[3]}.${versions[4]}`
+  const found = biberMismatch(said)
+  if (!found) return null
   return (
-    `Nothing is wrong in the paper. The engine’s biblatex is ${biblatex} and the biber installed on this machine is ${biber}; ` +
-    `they have to be of the same release, which for biblatex ${biblatex} is biber 2.${versions[4]}. ` +
+    `Nothing is wrong in the paper. The engine’s biblatex is ${found.biblatex} and the biber installed on this machine is ${found.have}; ` +
+    `they have to be of the same release, which for biblatex ${found.biblatex} is biber ${found.need}. ` +
     `Install that biber and put it first on the PATH, or compile with a TeX Live install (latexmk), where the two come matched.`
   )
+}
+
+/**
+ * The same failure, where this module can fetch the biber that is needed:
+ * what is wrong, and that the button beside it is the way out. `build.ts`
+ * passes this to `problemsFrom` in place of `biberAdvice` when it can.
+ */
+export function biberOffer(said: string): string | null {
+  const found = biberMismatch(said)
+  if (!found) return null
+  return (
+    `Nothing is wrong in the paper. The engine’s biblatex is ${found.biblatex} and the biber installed on this machine is ${found.have}; ` +
+    `they have to be of the same release, which for biblatex ${found.biblatex} is biber ${found.need}. ` +
+    `Paper can download biber ${found.need} and use it for this: the button is beside this message.`
+  )
+}
+
+/**
+ * Tectonic went to run biber and there was none: its whole statement is
+ * "Running external tool biber ..." and then the operating system's "No such
+ * file or directory". Nothing in that names biber as what is missing, so this
+ * does.
+ */
+export function biberAbsent(output: string): boolean {
+  return /Running external tool biber \.\.\.[\s\S]*^error: No such file or directory \(os error 2\)/m.test(output)
+}
+
+/** What to say when there is no biber at all. `fetchable` is whether the page has a button for it. */
+export function noBiber(need: string, fetchable: boolean): string {
+  return (
+    `Nothing is wrong in the paper. Its bibliography is made by biber, and there is no biber on this machine. ` +
+    (fetchable
+      ? `Paper can download biber ${need}, the release that matches the engine’s biblatex: the button is beside this message.`
+      : `Install biber ${need}, the release that matches the engine’s biblatex, or compile with a TeX Live install (latexmk), which has its own.`)
+  )
+}
+
+export interface BiberMismatch {
+  /** The biber that ran, or null when there was none to run. */
+  have: string | null
+  /** The biblatex whose control file it refused. */
+  biblatex: string
+  /** The biber that biblatex goes with. */
+  need: string
+}
+
+/** Biber's own statement that it and the biblatex are of different releases, as the three versions in it. */
+export function biberMismatch(said: string): BiberMismatch | null {
+  const versions = /biber \((\d+)\.(\d+)\) and biblatex \((\d+)\.(\d+)\) versions are incompatible/.exec(said)
+  if (!versions) return null
+  return { have: `${versions[1]}.${versions[2]}`, biblatex: `${versions[3]}.${versions[4]}`, need: `2.${versions[4]}` }
 }
 
 function tidy(message: string): string {

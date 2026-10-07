@@ -6,10 +6,12 @@
  * The preview is the paper compiled the way LaTeX compiles it, so that a
  * figure, a table, a reference and somebody's own document class look the way
  * they will in the thing that gets submitted. That needs a real engine and this
- * module does not ship one: it finds what the machine has. On the machine this
- * was written on that is Tectonic and nothing else — no `latexmk`, no
- * `pdflatex` — and on the next one it will be TeX Live. So everything here is
- * written against "an engine": a name, a path, and an argument list.
+ * module does not ship one: it finds what the machine has — and, when the
+ * machine has none, can fetch a small one at a person's say-so (`toolchain.ts`
+ * says what, `install.ts` does it). On the machine this was written on that is
+ * Tectonic and nothing else — no `latexmk`, no `pdflatex` — and on the next
+ * one it will be TeX Live. So everything here is written against "an engine":
+ * a name, a path, and an argument list.
  *
  * ## Nothing here runs anything
  *
@@ -41,13 +43,15 @@
 
 export type EngineName = 'tectonic' | 'latexmk' | 'pdflatex' | 'xelatex' | 'lualatex'
 
-/** Preference order when the paper does not say. The ones that drive reruns and BibTeX themselves come first. */
+/** Every engine this module knows how to run. Which one a paper gets is `preferred`, below. */
 export const ENGINES: readonly EngineName[] = ['tectonic', 'latexmk', 'pdflatex', 'xelatex', 'lualatex']
 
 export interface Engine {
   name: EngineName
   /** Absolute. What is spawned. */
   path: string
+  /** A Tectonic this module fetched (`install.ts`), as opposed to one the person installed. */
+  managed?: true
 }
 
 /**
@@ -60,9 +64,9 @@ export interface Engine {
  */
 const WELL_KNOWN = ['/opt/homebrew/bin', '/usr/local/bin', '/Library/TeX/texbin', '/usr/bin']
 
-export function searchDirs(env: Record<string, string | undefined>): string[] {
+export function searchDirs(env: Record<string, string | undefined>, more: readonly string[] = []): string[] {
   const out: string[] = []
-  for (const dir of [...(env.PATH ?? '').split(':'), ...WELL_KNOWN]) {
+  for (const dir of [...(env.PATH ?? '').split(':'), ...WELL_KNOWN, ...more]) {
     /* Absolute only. A relative `PATH` entry means "the current directory",
        and the current directory of a compile is the PAPER's folder — which is
        how a file called `tectonic` in a cloned repository would get run. */
@@ -71,20 +75,107 @@ export function searchDirs(env: Record<string, string | undefined>): string[] {
   return out
 }
 
-/** Every engine this machine has, in preference order. `exists` is the only I/O and it is the caller's. */
-export function findEngines(exists: (path: string) => boolean, env: Record<string, string | undefined>): Engine[] {
-  const dirs = searchDirs(env)
-  const out: Engine[] = []
-  for (const name of ENGINES) {
-    for (const dir of dirs) {
-      const path = `${dir.replace(/\/+$/, '')}/${name}`
-      if (exists(path)) {
-        out.push({ name, path })
-        break
+/**
+ * Where a TeX Live keeps its programs when nothing has put them on `PATH`.
+ *
+ * TeX Live installs to `<root>/<year>/bin/<platform>/` and leaves adding that
+ * to `PATH` to the person — which a terminal's profile does and an app started
+ * from the Dock never sees. MacTeX also makes `/Library/TeX/texbin`, which is
+ * in `WELL_KNOWN`; this is for the installs that did not: `install-tl` on a
+ * Mac or on Linux (`/usr/local/texlive`, its default), and the `/opt/texlive`
+ * some distributions and containers use. A distribution's own packages put
+ * theirs in `/usr/bin`, which is already looked in.
+ *
+ * Newest year first. `list` is the only I/O — the names in a directory, or
+ * none — and it is the caller's.
+ */
+export const TEXLIVE_ROOTS: readonly string[] = ['/usr/local/texlive', '/opt/texlive']
+
+export function texLiveDirs(list: (dir: string) => readonly string[]): string[] {
+  const out: string[] = []
+  for (const root of TEXLIVE_ROOTS) {
+    const years = list(root)
+      .filter((name) => /^\d{4}(basic)?$/.test(name))
+      .sort()
+      .reverse()
+    for (const year of years) {
+      for (const platform of [...list(`${root}/${year}/bin`)].sort()) {
+        if (/^[A-Za-z0-9_.-]+$/.test(platform) && platform !== '.' && platform !== '..') out.push(`${root}/${year}/bin/${platform}`)
       }
     }
   }
   return out
+}
+
+export interface Elsewhere {
+  /** TeX Live folders that are not on `PATH`: `texLiveDirs`. Looked in last. */
+  dirs?: readonly string[]
+  /** The Tectonic this module fetched, when it has. Used only when the person has none of their own. */
+  tectonic?: string | null
+}
+
+/**
+ * Every engine this machine has. `exists` is the only I/O and it is the caller's.
+ *
+ * In the order of `ENGINES`, which is not the order they are preferred in:
+ * `preferred` decides that, because it depends on the paper.
+ */
+export function findEngines(exists: (path: string) => boolean, env: Record<string, string | undefined>, elsewhere: Elsewhere = {}): Engine[] {
+  const dirs = searchDirs(env, elsewhere.dirs ?? [])
+  const out: Engine[] = []
+  for (const name of ENGINES) {
+    let found = false
+    for (const dir of dirs) {
+      const path = `${dir.replace(/\/+$/, '')}/${name}`
+      if (exists(path)) {
+        out.push({ name, path })
+        found = true
+        break
+      }
+    }
+    /* The person's own Tectonic wins over the fetched one: it is the one they
+       chose, and its package cache is the one already filled. */
+    if (name === 'tectonic' && !found && elsewhere.tectonic && elsewhere.tectonic.startsWith('/') && exists(elsewhere.tectonic)) {
+      out.push({ name, path: elsewhere.tectonic, managed: true })
+    }
+  }
+  return out
+}
+
+/**
+ * Whether the paper's bibliography is made by biber.
+ *
+ * `biblatex` is, unless it is told `backend=bibtex` — biber is its default.
+ * It matters for the choice of engine because biber has to match the
+ * `biblatex` it is run for, and only a TeX Live ships the two as a pair.
+ * Read from `main.tex`, where a preamble is, with comments set aside.
+ */
+export function needsBiber(source: string): boolean {
+  const code = source.replace(/(^|[^\\])%.*$/gm, '$1')
+  const loaded = /\\(?:usepackage|RequirePackage)\s*(?:\[([^\]]*)\])?\s*\{[^}]*\bbiblatex\b[^}]*\}/.exec(code)
+  if (!loaded) return false
+  return !/backend\s*=\s*bibtex/.test(loaded[1] ?? '')
+}
+
+/**
+ * The engines found, in the order they are tried when the paper names none.
+ *
+ *  1. **The person's own Tectonic** — unless the paper needs biber and there is
+ *     a `latexmk`, which then goes first: a TeX Live's biber is the one its
+ *     biblatex was released with, and a Tectonic's is whichever biber happens
+ *     to be on the machine.
+ *  2. **`latexmk`**, which is a TeX Live. Found, it is used before anything
+ *     this module fetched: a person who installed a distribution meant it.
+ *  3. **The Tectonic this module fetched.**
+ *  4. **The bare engines**, which run no bibliography tool at all.
+ */
+export function preferred(found: readonly Engine[], biber = false): Engine[] {
+  const rank = (engine: Engine): number => {
+    if (engine.name === 'tectonic') return engine.managed ? 3 : biber ? 2 : 1
+    if (engine.name === 'latexmk') return biber ? 1 : 2
+    return 4 + ENGINES.indexOf(engine.name)
+  }
+  return [...found].sort((a, b) => rank(a) - rank(b))
 }
 
 /**
@@ -109,14 +200,20 @@ export function namedEngine(source: string): { name: EngineName } | { unknown: s
 
 export type Chosen = { ok: true; engine: Engine } | { ok: false; why: string }
 
-/** What to say, and do, about getting an engine. One sentence a person can act on. */
+/**
+ * What to say about getting an engine, where this module has none to fetch.
+ *
+ * Where it has — see `toolchain.ts` — the page offers a button instead and
+ * this is not what a person reads.
+ */
 export const HOW_TO_INSTALL =
   'No LaTeX engine is installed on this machine, so there is nothing to compile the paper with. The smallest one is '
   + 'Tectonic — `brew install tectonic` on a Mac, or see tectonic-typesetting.github.io — and it fetches the packages '
   + 'a paper uses the first time it needs them. A full TeX Live or MacTeX (latexmk, pdflatex, xelatex, lualatex) is '
   + 'found as well. The source can be edited and saved without one.'
 
-export function chooseEngine(found: readonly Engine[], named: ReturnType<typeof namedEngine>): Chosen {
+/** @param biber whether the paper's bibliography is biber's: `needsBiber`. It decides the order only when the paper names no engine. */
+export function chooseEngine(found: readonly Engine[], named: ReturnType<typeof namedEngine>, biber = false): Chosen {
   if (named && 'unknown' in named) {
     return {
       ok: false,
@@ -135,7 +232,7 @@ export function chooseEngine(found: readonly Engine[], named: ReturnType<typeof 
         + (found.length ? ` (installed: ${found.map((one) => one.name).join(', ')}).` : '.'),
     }
   }
-  const first = found[0]
+  const first = preferred(found, biber)[0]
   return first ? { ok: true, engine: first } : { ok: false, why: HOW_TO_INSTALL }
 }
 
@@ -200,7 +297,31 @@ export function wantsNetwork(output: string): boolean {
 }
 
 /**
+ * What goes at the FRONT of an engine's `PATH`, because the engine runs other
+ * programs by name and which one it finds is the difference between a
+ * bibliography and an error.
+ *
+ *  - **Tectonic** runs `biber` for a `biblatex` paper, and the biber has to be
+ *    the release that matches the biblatex in Tectonic's bundle. When this
+ *    module has fetched that one (`install.ts`), its folder — which holds that
+ *    one file and nothing else — goes first, ahead of whatever biber the
+ *    machine has.
+ *  - **Every TeX Live engine** gets its own folder first: `latexmk` runs
+ *    `pdflatex`, `biber` and `bibtex` by name, and they must be the ones it
+ *    was installed with — the folder may not be on `PATH` at all when the
+ *    engine was found by looking where TeX Live installs. The fetched biber is
+ *    NOT put ahead of it: a TeX Live's own already matches.
+ */
+export function pathFirst(engine: Engine, biberDir: string | null): string[] {
+  if (engine.name === 'tectonic') return biberDir ? [biberDir] : []
+  const at = engine.path.lastIndexOf('/')
+  return at > 0 ? [engine.path.slice(0, at)] : []
+}
+
+/**
  * The environment an engine is given: what it needs and nothing it does not.
+ *
+ * `first` is `pathFirst`; `more` is the TeX Live folders `texLiveDirs` found.
  *
  * Not the server's whole environment. A dev server's environment holds
  * whatever the shell that started it held — tokens, among other things — and
@@ -209,13 +330,15 @@ export function wantsNetwork(output: string): boolean {
  * settings say again, for an engine that reads them, what the flags already
  * said.
  */
-export function envFor(env: Record<string, string | undefined>): Record<string, string> {
+export function envFor(env: Record<string, string | undefined>, first: readonly string[] = [], more: readonly string[] = []): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const key of ['HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'XDG_CACHE_HOME', 'TEXMFHOME', 'TEXMFVAR', 'SOURCE_DATE_EPOCH']) {
+  for (const key of ['HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'XDG_CACHE_HOME', 'TECTONIC_CACHE_DIR', 'TEXMFHOME', 'TEXMFVAR', 'SOURCE_DATE_EPOCH']) {
     const value = env[key]
     if (typeof value === 'string' && value) out[key] = value
   }
-  out.PATH = searchDirs(env).join(':')
+  const path: string[] = []
+  for (const dir of [...first, ...searchDirs(env, more)]) if (dir.startsWith('/') && !path.includes(dir)) path.push(dir)
+  out.PATH = path.join(':')
   out.shell_escape = 'f'
   out.openout_any = 'p'
   out.openin_any = 'r'
