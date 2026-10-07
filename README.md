@@ -316,18 +316,38 @@ and to show only the pages of the parts a person picked — the next section.
 
 An epic can be divided into parts, and a person can point the whole canvas at
 some of them in the host's bar. A part can name the files of the paper it owns
-(protocol 0.32.0; they are typed in Journeys, on the part's row), each relative
-to the paper's folder with its extension: `chapters/design.tex`. That is the
-name this module already lists a file under, so a paper split the ordinary way
-— one `.tex` per part, pulled into `main.tex` with `\input` — can be read one
-part at a time.
+(protocol 0.32.0; Journeys makes a part for each chapter file `main.tex` pulls
+in, or they are ticked on the part's row), each relative to the paper's folder
+with its extension: `chapters/design.tex`. That is the name this module already
+lists a file under, so a paper split the ordinary way — one `.tex` per part,
+pulled into `main.tex` with `\input` — can be read one part at a time.
 
-With **nothing picked** the page is exactly what it was. With some picked
-(`reacts: ['parts']`; the rule is the protocol's `fileInFocus`, and
-`src/focus.ts` is what this module makes of it):
+**This page has no chapter picker of its own.** It used to have a dropdown of
+the paper's files, and under a focus that was a second, private place to choose
+a chapter that had already been ticked in the host's bar. It is gone. What is
+shown follows the ticks (`fileAfterTicks` and `tabsOf` in `src/focus.ts`):
 
-- **The file list and the section list** hold only the files a picked part
-  owns, and their sections.
+- **Nothing ticked** is the whole paper: every page of the PDF, and `main.tex`
+  in the editor. Every file is still one step away by the two ways that are
+  about the paper rather than about a list of its files — a press on the PDF
+  opens the file that printed that spot, at that line, and the section list is
+  grouped by file, with an entry for a file that has no heading (an abstract, a
+  file of tables). When either has taken the editor out of `main.tex`, a small
+  `← main.tex` beside the file's name goes back.
+- **One part ticked** opens that part's file in the editor, and the PDF shows
+  its pages.
+- **Several ticked** are tabs above the editor — of those parts' files and no
+  others — and the PDF shows the pages of all of them.
+
+**The line over the editor names the file an edit is saved to** — "Editing
+`chapters/3_methods.tex` · Saved" — because the editor now changes file when a
+tick changes, and nothing else on the page says which file is open.
+
+With some picked (`reacts: ['parts']`; the rule is the protocol's
+`fileInFocus`, and `src/focus.ts` is what this module makes of it):
+
+- **The tabs and the section list** hold only the files a picked part owns,
+  and their sections.
 - **The PDF** shows only the pages those files printed on, read off the page
   map. A page two files share is shown when either is picked. Every sheet
   carries its real number (`p. 7 of 20`) and each run left out is said where it
@@ -353,20 +373,23 @@ What the page says rather than standing short:
 
 Three decisions that are this module's own:
 
-- **The file somebody has open is never taken away by a change of focus.** It
-  stays open and editable, and is saved as it always is; it is listed as
-  outside the focus, and a line above the editor offers the first file that is
-  in it. It leaves the list when the person leaves it. Only a paper *opened*
-  under a focus starts on a file of the focus, since nothing is being edited
-  yet.
+- **A file with unsaved text in it is never taken away by a change of focus.**
+  The editor follows the ticks, except out from under somebody typing: a file
+  whose text has not reached the disk stays open and editable, and is saved as
+  it always is; it is the last tab, marked as outside, and a line above the
+  editor says so and offers the first file that is in the focus. It leaves when
+  the person leaves it. (Nothing typed is lost either way — every file's text
+  is kept and saved whichever is on screen.) A file that is already in the new
+  focus is left open too: ticking a second part must not move the reader.
 - **A pointer from another module still arrives.** A note or a slide pointing
   at a passage in a file outside the picked parts is opened and marked as
   before, the sentence about it says it is outside them, and the page it is on
   is drawn, labelled as outside, while the mark is there. A press on a shared
   sheet that lands in a file outside the focus works the same way.
-- **A change of focus re-reads nothing.** `context.parts` is carried beside the
-  paper, not into it: no `/api/paper`, no compile, and the editor is not
-  rebuilt.
+- **A change of focus re-reads nothing of the paper.** `context.parts` is
+  carried beside the paper, not into it: no `/api/paper` and no compile. The
+  one read is the source of the file the editor moves to, the first time it is
+  opened.
 
 Not narrowed, on purpose:
 

@@ -1,6 +1,6 @@
 {
   "name": "kehikko-paper",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "description": "The paper an epic is aimed at: its LaTeX source in an editor beside the PDF a real engine compiles it to. An app: a page, a store over a project's papers and an MCP door, which a host may frame but nothing here needs one.",

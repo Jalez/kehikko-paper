@@ -12,9 +12,9 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import { headline, inFocus, narrowed, notesOf, pagesShown, type Narrowed } from './focus.ts'
+import { MAIN_FILE, fileAfterTicks, headline, inFocus, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
-import { sectionAt, sectionsOf } from './lib/sections.ts'
+import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
 import { placeWord } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
@@ -56,20 +56,39 @@ import { useTheme } from './use-theme.ts'
  * ## Narrowed to the picked parts of the epic
  *
  * When a person has picked some of the epic's parts in the host's bar, this
- * screen shows only what those parts own: their files in the file list, the
- * sections of those files, and the pages those files printed. `src/focus.ts`
- * has the rule and the arithmetic; three decisions are this screen's.
+ * screen shows only what those parts own: their files, the sections of those
+ * files, and the pages those files printed. `src/focus.ts` has the rule and
+ * the arithmetic; four decisions are this screen's.
  *
- * **The file somebody has open is never taken away.** Picking a part while
- * `main.tex` is open — and `main.tex` is in no part, as a rule — would
- * otherwise swap the editor's file under a person who may be mid-sentence,
- * with a save pending. So the open file stays open, stays editable and is
- * saved as it always is; it is listed, marked as outside the focus, and a
- * line above the editor says so and offers the first file that IS in the
- * focus. It leaves the list when the person leaves it. The one time this
- * screen chooses a file for a focus is when a paper is OPENED under one:
- * nothing is being edited yet, and starting on a file that is outside what
- * was asked for would be the wrong first sight.
+ * **There is no chapter picker here.** This screen had a dropdown of the
+ * paper's files, and under a focus it listed the picked parts' own — so a
+ * person ticked a chapter in the host's bar and then chose it again here.
+ * That second choice was the complaint: "in the paper you are able to pick to
+ * show a specific chapter, but that's not what was promised". The dropdown
+ * is gone. What is shown follows the ticks, and `fileAfterTicks` is how:
+ * nothing ticked is the whole paper with `main.tex` in the editor; one part
+ * ticked opens that part's file; several ticked are tabs, of those files and
+ * no others.
+ *
+ * Every file is still reachable, by the two ways that are about the PAPER
+ * and not about a list of its files: a press on the PDF opens the file that
+ * printed that spot, at that line; and the section list is grouped by file,
+ * with an entry for a file that has no heading (`jumpsOf`). When either has
+ * taken the editor away from `main.tex` with nothing ticked, one small press
+ * beside the file's name goes back.
+ *
+ * **The line above the editor names the file an edit is saved to.** With no
+ * dropdown showing the open file there has to be something that does, and
+ * it has to be unmistakable, because the editor now changes file when a tick
+ * changes. "Editing chapters/3_methods.tex" stands directly over the text,
+ * with whether it is saved beside it, in both panes' narrow form.
+ *
+ * **A file with unsaved text in it is never taken away.** Ticking a part
+ * while a sentence in `main.tex` has not reached the disk would otherwise
+ * swap the editor's file under a person mid-sentence. So that file stays
+ * open, stays editable and is saved as it always is; a line above the editor
+ * says it is outside the picked parts and offers the first file that is in
+ * them; it is the last tab, marked. It leaves when the person leaves it.
  *
  * **A pointer from elsewhere still arrives.** A note, a question or a slide
  * may point at a passage in a file no picked part owns. It is opened and
@@ -169,6 +188,26 @@ export function Workspace({
     if (first && !focusRef.current!.files.includes('main.tex')) source.open(first)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paper.epic])
+
+  /* The editor follows the ticks in the host's bar — see `fileAfterTicks` for
+     the rule and for the one case it does not. Once per CHANGE of what is
+     ticked: the ref holds what was ticked when this last ran, so a re-render,
+     a re-read of the paper or a save never moves the editor, and neither does
+     opening a paper (that is the effect above). */
+  const ticks = ticksOf(parts)
+  const followed = useRef<{ epic: string; ticks: string } | null>(null)
+  const midEdit = source.state !== 'saved'
+  useEffect(() => {
+    const was = followed.current
+    followed.current = { epic: paper.epic, ticks }
+    if (!was || was.epic !== paper.epic || was.ticks === ticks) return
+    const next = fileAfterTicks(focusRef.current, file, midEdit)
+    if (next === null) return
+    setOnPassage(false)
+    notice(null)
+    source.open(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paper.epic, ticks])
 
   /* A suggestion is accepted against the file ON DISK. So the editor saves
      first, and the accept then splices into the text the person is looking at. */
@@ -644,6 +683,14 @@ export function Workspace({
   )
   const openOutside = focus !== null && isOutside(file)
   const firstInFocus = focus?.files[0] ?? null
+  /* The files to switch among: the picked parts' own, and nothing when
+     nothing is picked. One file is not a switch. See `tabsOf`. */
+  const tabs = useMemo(() => tabsOf(focus, file), [focus, file])
+  /* The section list, file by file, limited to what is shown. */
+  const jumps = useMemo(() => jumpsOf(listed, sections), [listed, sections])
+  /* The way back, drawn only where it is the way back: nothing is picked, and
+     a press on the PDF or a section has taken the editor into another file. */
+  const awayFromMain = focus === null && file !== MAIN_FILE && paper.files.includes(MAIN_FILE)
 
   const saved =
     source.state === 'saving' ? 'Saving…' : source.state === 'dirty' ? 'Unsaved' : source.state === 'failed' ? 'Not saved' : 'Saved'
@@ -660,30 +707,48 @@ export function Workspace({
   return (
     <div className="workspace flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-1 border-b px-1 pb-1 text-[0.72rem]">
-        {paper.files.length > 1 && (
-          <select
-            className="border-input bg-background w-0 max-w-[12rem] min-w-0 flex-1 basis-[5.5rem] rounded border px-1 py-0.5 font-mono"
-            value={file}
-            onChange={(event) => {
-              wandered()
-              source.open(event.target.value)
-            }}
-            aria-label="File"
-          >
-            {listed.map((one) => (
-              <option key={one} value={one}>
-                {focus && isOutside(one) ? `${one} — outside the focus` : one}
-              </option>
+        {/* The picked parts' files, as tabs — and only under a focus with more
+            than one file to be on. Not a list of the paper's files: what is in
+            this row is decided by the ticks in the host's bar, and this only
+            moves between them. It scrolls sideways rather than wrapping, so
+            seven chapters in a 300-pixel container are one row and not five. */}
+        {tabs.length > 1 && (
+          <div role="tablist" aria-label="Files of the picked parts" className="flex max-w-full min-w-0 flex-[1_1_100%] gap-1 overflow-x-auto" data-files>
+            {tabs.map((one) => (
+              <Button
+                key={one.file}
+                role="tab"
+                aria-selected={one.file === file}
+                variant={one.file === file ? 'outline' : 'ghost'}
+                size="container"
+                className={cn('shrink-0 font-mono', one.outside && 'italic')}
+                title={one.outside ? `${one.file} — outside ${outsideSaid}, and open` : one.file}
+                data-file={one.file}
+                onClick={() => {
+                  if (one.file === file) return
+                  wandered()
+                  source.open(one.file)
+                }}
+              >
+                {one.outside ? `${one.label} — outside` : one.label}
+              </Button>
             ))}
-          </select>
+          </div>
         )}
-        {sections.length > 0 && (
+        {(sections.length > 0 || listed.length > 1) && (
           <select
             className="border-input bg-background w-0 max-w-[12rem] min-w-0 flex-1 basis-[5.5rem] rounded border px-1 py-0.5"
             value=""
             onChange={(event) => {
-              const picked = sections[Number(event.target.value)]
-              if (picked) {
+              const value = event.target.value
+              /* "f:<file>" is the top of a file that has no heading to jump to. */
+              const top = value.startsWith('f:') ? value.slice(2) : null
+              const picked = top === null ? sections[Number(value)] : null
+              if (top !== null && listed.includes(top)) {
+                wandered()
+                go({ file: top, bytes: { from: 0, to: 0 }, focus: true })
+                setTab('source')
+              } else if (picked) {
                 wandered()
                 go({ file: picked.file, bytes: { from: picked.at, to: picked.at }, focus: true })
                 setTab('source')
@@ -692,20 +757,23 @@ export function Workspace({
             aria-label="Sections"
           >
             <option value="">{shown.section ?? 'Sections'}</option>
-            {sections.map((one, i) =>
-              /* By its place in the WHOLE list, which is what the handler
-                 above reads, so leaving some out renumbers nothing. */
-              listed.includes(one.file) ? (
-                <option key={i} value={i}>
-                  {`${'  '.repeat(Math.max(0, one.level - 1))}${one.title}`}
-                </option>
-              ) : null,
-            )}
+            {jumps.map((group) => (
+              <optgroup key={group.file} label={focus && isOutside(group.file) ? `${group.file} — outside the focus` : group.file}>
+                {group.sections.length === 0 ? (
+                  <option value={`f:${group.file}`}>(no headings) top of the file</option>
+                ) : (
+                  /* By its place in the WHOLE list, which is what the handler
+                     above reads, so leaving some out renumbers nothing. */
+                  group.sections.map(({ index, section }) => (
+                    <option key={index} value={index}>
+                      {`${'  '.repeat(Math.max(0, section.level - 1))}${section.title}`}
+                    </option>
+                  ))
+                )}
+              </optgroup>
+            ))}
           </select>
         )}
-        <span className={cn('text-muted-foreground', source.state === 'failed' && 'text-(--gone)')} aria-live="polite" data-save={source.state}>
-          {saved}
-        </span>
         <span className="flex-1" />
         <span className={cn('text-muted-foreground', failed && 'text-(--gone)')} data-build={compiling ? 'running' : failed ? 'failed' : build?.last ? 'ok' : 'idle'}>
           {engineSays}
@@ -766,6 +834,33 @@ export function Workspace({
 
       <div className="flex min-h-0 flex-1">
         <div className={cn('min-h-0 min-w-0 flex-1 flex-col @min-[720px]:flex @min-[720px]:border-r', tab === 'source' ? 'flex' : 'hidden')}>
+          {/* Which file this is, directly over its text: what an edit below is
+              saved to, and whether it has been. The only place the open file
+              is named, now that no dropdown names it — and the editor changes
+              file when a tick in the host's bar does, so it has to be here. */}
+          <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 border-b px-2 py-0.5 text-[0.72rem] leading-snug" data-editing={file}>
+            {awayFromMain && (
+              <Button
+                variant="outline"
+                size="container"
+                aria-label={`Back to ${MAIN_FILE}`}
+                title={`Back to ${MAIN_FILE}, the file the whole paper starts from`}
+                onClick={() => {
+                  wandered()
+                  source.open(MAIN_FILE)
+                }}
+              >
+                ← {MAIN_FILE}
+              </Button>
+            )}
+            <span className="min-w-0 [overflow-wrap:anywhere]">
+              <span className="text-muted-foreground">Editing </span>
+              <code className="text-foreground font-mono font-medium">{file}</code>
+            </span>
+            <span className={cn('text-muted-foreground', source.state === 'failed' && 'text-(--gone)')} aria-live="polite" data-save={source.state}>
+              {saved}
+            </span>
+          </div>
           <ProposalsPanel
             proposals={proposals}
             busy={busy}

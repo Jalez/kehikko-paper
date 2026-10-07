@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { partsSchema, type EpicPart } from 'kehikot-module-protocol'
 
 import type { PageSpan } from '../compile/synctex.ts'
-import { gapsBetween, headline, inFocus, narrowed, notesOf, pagesSaid, pagesShown, sameParts } from '../src/focus.ts'
+import { fileAfterTicks, gapsBetween, headline, inFocus, narrowed, notesOf, pagesSaid, pagesShown, sameParts, tabsOf, ticksOf } from '../src/focus.ts'
+import { jumpsOf, type SectionAt } from '../src/lib/sections.ts'
 
 /**
  * The paper narrowed to the picked parts of the epic: which files, which
@@ -181,9 +182,9 @@ describe('the ways a focus could leave the paper short without saying', () => {
     expect(focus.outsideFiles).toBe(4)
     expect(headline(focus)).toBe(
       'The focus is on “Steps only”, and that part owns no files of this paper, so none of the paper is in it: all 4 '
-        + 'files and 12 pages are outside the focus. Give the part its files in Journeys — open the journey’s parts, '
-        + 'press “files” on the part, and name each from the paper’s folder, like chapters/design.tex. Parts are picked '
-        + 'in the host’s bar.',
+        + 'files and 12 pages are outside the focus. Give the part its files in Journeys — open the journey’s parts '
+        + 'and press “files” on the part to tick them, or “make a part for each chapter file” to have one made for '
+        + 'every file main.tex pulls in. Parts are picked in the host’s bar.',
     )
   })
 
@@ -237,5 +238,101 @@ describe('whether the parts changed', () => {
     expect(sameParts(parts('the-design'), parts('the-method'))).toBe(false)
     expect(sameParts(parts(), [])).toBe(false)
     expect(sameParts([], [])).toBe(true)
+  })
+})
+
+describe('the editor follows the ticks', () => {
+  const on = (...picked: string[]) => narrowed(parts(...picked), paper, pdf)
+
+  test('nothing ticked rests on main.tex', () => {
+    expect(fileAfterTicks(null, 'chapters/design.tex', false)).toBe('main.tex')
+    /* Already there: nothing to do. */
+    expect(fileAfterTicks(null, 'main.tex', false)).toBeNull()
+  })
+
+  test('one part ticked opens that part’s file', () => {
+    expect(fileAfterTicks(on('the-design'), 'main.tex', false)).toBe('chapters/design.tex')
+    expect(fileAfterTicks(on('the-method'), 'chapters/design.tex', false)).toBe('chapters/method.tex')
+  })
+
+  test('several ticked open the first of their files, in the paper’s order', () => {
+    expect(fileAfterTicks(on('the-method', 'the-design'), 'main.tex', false)).toBe('chapters/design.tex')
+  })
+
+  test('a file that is in the new focus is left open', () => {
+    expect(fileAfterTicks(on('the-design', 'the-method'), 'chapters/method.tex', false)).toBeNull()
+  })
+
+  test('nothing moves out from under unsaved text, whatever was ticked', () => {
+    expect(fileAfterTicks(on('the-design'), 'main.tex', true)).toBeNull()
+    expect(fileAfterTicks(null, 'chapters/design.tex', true)).toBeNull()
+  })
+
+  test('a focus that owns no file has nowhere to go to', () => {
+    expect(fileAfterTicks(on('the-steps'), 'main.tex', false)).toBeNull()
+  })
+
+  test('what is followed is the ticks, and not the paper’s own list of files', () => {
+    expect(ticksOf(parts())).toBe('')
+    expect(ticksOf(parts('the-design'))).not.toBe(ticksOf(parts('the-method')))
+    expect(ticksOf(parts('the-design'))).toBe(ticksOf(parts('the-design')))
+    /* A part given another file is a different focus; a heading reworded is not. */
+    const more = parts('the-design').map((one) => (one.id === 'the-design' ? { ...one, files: [...(one.files ?? []), 'chapters/more.tex'] } : one))
+    expect(ticksOf(more)).not.toBe(ticksOf(parts('the-design')))
+    const reworded = parts('the-design').map((one) => (one.id === 'the-design' ? { ...one, heading: 'Design, reworded' } : one))
+    expect(ticksOf(reworded)).toBe(ticksOf(parts('the-design')))
+  })
+})
+
+describe('the files to switch among', () => {
+  const on = (...picked: string[]) => narrowed(parts(...picked), paper, pdf)
+
+  test('none when nothing is picked: the whole paper is not a row of its files', () => {
+    expect(tabsOf(null, 'main.tex')).toEqual([])
+    expect(tabsOf(null, 'chapters/design.tex')).toEqual([])
+  })
+
+  test('exactly the picked parts’ files, by their own names', () => {
+    expect(tabsOf(on('the-design', 'the-method'), 'chapters/design.tex')).toEqual([
+      { file: 'chapters/design.tex', label: 'design.tex', outside: false },
+      { file: 'chapters/method.tex', label: 'method.tex', outside: false },
+    ])
+    /* One file: a list of one, which the page draws no tabs for. */
+    expect(tabsOf(on('the-design'), 'chapters/design.tex')).toHaveLength(1)
+  })
+
+  test('and the open file when it is outside them — last, and marked', () => {
+    expect(tabsOf(on('the-design'), 'main.tex')).toEqual([
+      { file: 'chapters/design.tex', label: 'design.tex', outside: false },
+      { file: 'main.tex', label: 'main.tex', outside: true },
+    ])
+  })
+
+  test('two files of one name are told apart by their folders', () => {
+    const twice = { epic: EPIC, files: ['main.tex', 'a/intro.tex', 'b/intro.tex'] }
+    const both: EpicPart[] = [{ id: 'both', heading: 'Both', refs: [], picked: true, files: ['a/intro.tex', 'b/intro.tex'] }]
+    expect(tabsOf(narrowed(both, twice, null), 'a/intro.tex').map((one) => one.label)).toEqual(['a/intro.tex', 'b/intro.tex'])
+  })
+})
+
+describe('the section list, file by file', () => {
+  const at = (file: string, title: string, level = 1): SectionAt => ({ file, title, level, at: 0, end: 0, from: 0, to: 0 })
+  const sections = [at('main.tex', 'Abstract'), at('chapters/design.tex', 'Design'), at('chapters/design.tex', 'Seams', 2), at('chapters/method.tex', 'Method')]
+
+  test('groups every file shown, in the paper’s order, each section keeping its place in the whole list', () => {
+    expect(jumpsOf(['main.tex', 'chapters/design.tex', 'chapters/method.tex'], sections).map((one) => [one.file, one.sections.map((s) => s.index)])).toEqual([
+      ['main.tex', [0]],
+      ['chapters/design.tex', [1, 2]],
+      ['chapters/method.tex', [3]],
+    ])
+  })
+
+  test('a file with no heading still has its group, so it is not unreachable', () => {
+    const out = jumpsOf(['main.tex', 'annotations.tex', 'chapters/design.tex'], sections)
+    expect(out[1]).toEqual({ file: 'annotations.tex', sections: [] })
+  })
+
+  test('is limited to the files it is given: under a focus, the picked parts’ own', () => {
+    expect(jumpsOf(['chapters/method.tex'], sections)).toEqual([{ file: 'chapters/method.tex', sections: [{ index: 3, section: sections[3]! }] }])
   })
 })
