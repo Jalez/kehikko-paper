@@ -218,7 +218,78 @@ Where it is coarser, and why:
 
 The table also yields, per file of the paper, which pages it reached and with
 which lines (`pageMap`). The page uses it to say which page the caret is on,
-and it is what a later "show only the pages of these parts" will read.
+and to show only the pages of the parts a person picked — the next section.
+
+## Narrowed to the picked parts of the epic
+
+An epic can be divided into parts, and a person can point the whole canvas at
+some of them in the host's bar. A part can name the files of the paper it owns
+(protocol 0.32.0; they are typed in Journeys, on the part's row), each relative
+to the paper's folder with its extension: `chapters/design.tex`. That is the
+name this module already lists a file under, so a paper split the ordinary way
+— one `.tex` per part, pulled into `main.tex` with `\input` — can be read one
+part at a time.
+
+With **nothing picked** the page is exactly what it was. With some picked
+(`reacts: ['parts']`; the rule is the protocol's `fileInFocus`, and
+`src/focus.ts` is what this module makes of it):
+
+- **The file list and the section list** hold only the files a picked part
+  owns, and their sections.
+- **The PDF** shows only the pages those files printed on, read off the page
+  map. A page two files share is shown when either is picked. Every sheet
+  carries its real number (`p. 7 of 20`) and each run left out is said where it
+  would have been (`pp. 8–20 · outside the picked part`), because other
+  modules store page numbers and page 7 must stay page 7.
+- **A line above the paper**, for as long as it is narrowed: which parts, how
+  many files and pages are shown, how many are outside, and that parts are
+  picked in the host's bar. There is no "show everything" on this page; the
+  focus is lifted where it was set.
+
+Text written directly in `main.tex`, and any file no part names, belongs to the
+epic as a whole and is outside every focus — counted in that line, not dropped.
+
+What the page says rather than standing short:
+
+- **A picked part names a file the paper does not include** — a spelling, a
+  file not yet pulled in. Said by part and by name.
+- **A file in the focus printed no pages** — nothing in the page map for it.
+  Its source is shown, and that is said.
+- **The picked parts own no file at all.** None of the paper is in them, so the
+  line says exactly that, counts everything as outside, and says where a part
+  is given its files.
+
+Three decisions that are this module's own:
+
+- **The file somebody has open is never taken away by a change of focus.** It
+  stays open and editable, and is saved as it always is; it is listed as
+  outside the focus, and a line above the editor offers the first file that is
+  in it. It leaves the list when the person leaves it. Only a paper *opened*
+  under a focus starts on a file of the focus, since nothing is being edited
+  yet.
+- **A pointer from another module still arrives.** A note or a slide pointing
+  at a passage in a file outside the picked parts is opened and marked as
+  before, the sentence about it says it is outside them, and the page it is on
+  is drawn, labelled as outside, while the mark is there. A press on a shared
+  sheet that lands in a file outside the focus works the same way.
+- **A change of focus re-reads nothing.** `context.parts` is carried beside the
+  paper, not into it: no `/api/paper`, no compile, and the editor is not
+  rebuilt.
+
+Not narrowed, on purpose:
+
+- **Compilation.** The whole paper is always compiled from `main.tex`. A part
+  is a way of looking at the result.
+- **What this page publishes.** `passage.set` is the same in every field.
+- **The MCP door.** `list_papers`, `list_sections`, `read_paper` and
+  `read_source` answer about the whole paper whatever is picked. An agent has
+  no canvas and no focus; narrowing its reading by what a person happens to be
+  looking at would be a tool whose answer changes for a reason it cannot see.
+
+Not done yet: dimming the rest of a shared sheet to the picked file's lines; a
+one-step "split this paper into one file per part"; and a paper folder that is
+itself a symlink, whose files the protocol cannot place in a part (they are
+counted outside a focus rather than guessed into one).
 
 ## What other modules are told
 
@@ -332,4 +403,5 @@ compile/build.ts     the queue, the build folder, the spawn
 latex/               the parser, labels, bibliography, proposals, diff
 proposals.ts, git.ts suggestions in memory; commits
 src/                 the page: workspace.tsx, editor/, pdf/, the hooks
+src/focus.ts         the paper narrowed to the picked parts of the epic (pure)
 ```

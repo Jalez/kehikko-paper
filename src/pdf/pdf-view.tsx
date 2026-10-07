@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 
 import type { PageRect } from '../../compile/synctex.ts'
+import { gapsBetween, pagesSaid } from '../focus.ts'
 import { tighten, wordAt, type Run } from './words.ts'
 
 /**
@@ -34,6 +35,19 @@ import { tighten, wordAt, type Run } from './words.ts'
  * does not move. When there is no new `url` because a compile failed, nothing
  * here changes at all, which is the whole of "the last good PDF stays".
  *
+ * ## Only some of the pages, under a focus
+ *
+ * `pages` is the pages to draw, in the PDF's own numbers; absent or null is
+ * all of them, and this component is then exactly what it was. With a list,
+ * the others are not drawn, and three things are added so that a short PDF is
+ * never mistaken for the whole one: every sheet carries its REAL number
+ * (sheet 7 is "p. 7 of 20" with six sheets missing above it — other modules
+ * store these numbers), each run of sheets left out is said where it would
+ * have been, and a sheet named in `outside` — drawn because something is marked
+ * on it although no picked part printed it — says so on its label.
+ *
+ * Which pages those are is not decided here. See `src/focus.ts`.
+ *
  * ## Units
  *
  * Everything crossing this component's boundary is in PDF points from the
@@ -59,6 +73,12 @@ export interface PreviewProps {
   onPoint(point: { page: number; x: number; y: number; word: string | null }): void
   /** The page most in view changed. One-based. */
   onPage?(page: number): void
+  /** The pages to draw, ascending, in the PDF's own numbers. Absent or null draws every page, unlabelled, as always. */
+  pages?: readonly number[] | null
+  /** Those of `pages` no picked part printed on: drawn because a mark is on them, and labelled as outside. */
+  outside?: readonly number[]
+  /** What the pages left out are outside OF, for the line that stands where they would be: “the picked part”. */
+  outsideOf?: string
 }
 
 export type Preview = ComponentType<PreviewProps>
@@ -97,7 +117,7 @@ const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const GAP = 10
 const PAD = 8
 
-export function PdfView({ url, marks, reveal, onPoint, onPage }: PreviewProps) {
+export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, outside, outsideOf = 'the picked parts' }: PreviewProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<PdfDocument | null>(null)
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([])
@@ -218,7 +238,16 @@ export function PdfView({ url, marks, reveal, onPoint, onPage }: PreviewProps) {
     const node = scroller.current
     if (!first || !node || scale <= 0) return
     let top = PAD
-    for (let n = 1; n < first.page; n += 1) top += (sizes[n - 1]?.h ?? 0) * scale + GAP
+    if (pages === null) {
+      for (let n = 1; n < first.page; n += 1) top += (sizes[n - 1]?.h ?? 0) * scale + GAP
+    } else {
+      /* Under a focus the sheets above are not all there, and labels sit
+         between the ones that are: where a sheet is has to be MEASURED. A
+         sheet that is not drawn is nowhere to scroll to. */
+      const sheet = node.querySelector<HTMLElement>(`[data-page="${first.page}"]`)
+      if (!sheet) return
+      top = sheet.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop
+    }
     const y = top + first.y * scale
     /* Only when it is not already comfortably in view: a caret moving down a
        paragraph should not drag the page with every line. */
@@ -230,7 +259,8 @@ export function PdfView({ url, marks, reveal, onPoint, onPage }: PreviewProps) {
 
   const onScroll = useCallback(() => {
     const node = scroller.current
-    if (!node || !onPage || scale <= 0) return
+    /* Under a focus the sheets are not a plain stack, and nothing asks. */
+    if (!node || !onPage || scale <= 0 || pages !== null) return
     const middle = node.scrollTop + node.clientHeight / 2
     let top = PAD
     for (let n = 1; n <= sizes.length; n += 1) {
@@ -241,7 +271,7 @@ export function PdfView({ url, marks, reveal, onPoint, onPage }: PreviewProps) {
       }
       top += height
     }
-  }, [onPage, scale, sizes])
+  }, [onPage, scale, sizes, pages])
 
   const press = useCallback(
     async (page: number, event: React.MouseEvent<HTMLDivElement>) => {
@@ -259,6 +289,10 @@ export function PdfView({ url, marks, reveal, onPoint, onPage }: PreviewProps) {
     },
     [onPoint, scale, textOf],
   )
+
+  /* The runs of sheets a focus leaves out, said where they would have been. */
+  const gaps = useMemo(() => (pages === null ? null : gapsBetween(pages, sizes.length || null)), [pages, sizes.length])
+  const after = gaps?.get(sizes.length + 1) ?? null
 
   const step = (by: 1 | -1) => {
     const at = ZOOMS.indexOf(zoom)
@@ -283,22 +317,52 @@ export function PdfView({ url, marks, reveal, onPoint, onPage }: PreviewProps) {
       )}
       <div ref={scroller} className="pdf-scroller min-h-0 flex-1 overflow-auto" onScroll={onScroll} style={{ padding: PAD }}>
         {trouble && <p className="text-muted-foreground p-2 text-xs">{trouble}</p>}
+        {/* Under a focus the first thing in the pane is words — a sheet's
+            number, or the sheets left out above it — and the zoom control
+            sits over that corner. Room for it, so neither covers the other. */}
+        {doc && pages !== null && <div className="h-6" aria-hidden />}
         {doc
           && scale > 0
-          && sizes.map((size, i) => (
-            <PageCanvas
-              key={i}
-              doc={doc}
-              version={version}
-              number={i + 1}
-              width={size.w}
-              height={size.h}
-              scale={scale}
-              root={scroller}
-              marks={drawn.get(i + 1) ?? []}
-              onPress={press}
-            />
-          ))}
+          && sizes.map((size, i) => {
+            const number = i + 1
+            if (pages !== null && !pages.includes(number)) return null
+            const sheet = (
+              <PageCanvas
+                key={i}
+                doc={doc}
+                version={version}
+                number={number}
+                width={size.w}
+                height={size.h}
+                scale={scale}
+                root={scroller}
+                marks={drawn.get(number) ?? []}
+                onPress={press}
+              />
+            )
+            if (pages === null) return sheet
+            const before = gaps?.get(number)
+            const isOutside = outside?.includes(number) === true
+            return (
+              <div key={i} className="pdf-sheet">
+                {before && (
+                  <p className="pdf-gap" data-gap={`${before.from}-${before.to}`}>
+                    {pagesSaid(before)} · outside {outsideOf}
+                  </p>
+                )}
+                <p className={isOutside ? 'pdf-number pdf-number-outside' : 'pdf-number'} style={{ width: size.w * scale }} data-outside={isOutside ? '' : undefined}>
+                  p. {number} of {sizes.length}
+                  {isOutside && ` · outside ${outsideOf}, shown for what is marked on it`}
+                </p>
+                {sheet}
+              </div>
+            )
+          })}
+        {doc && scale > 0 && after && (
+          <p className="pdf-gap" data-gap={`${after.from}-${after.to}`}>
+            {pagesSaid(after)} · outside {outsideOf}
+          </p>
+        )}
       </div>
     </div>
   )

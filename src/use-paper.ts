@@ -1,4 +1,4 @@
-import type { Goto, Passage } from 'kehikot-module-protocol'
+import type { EpicPart, Goto, Passage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { connect, type Connection } from 'kehikot-module-protocol/client'
@@ -7,6 +7,7 @@ import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { json, post, standIn, standingIn } from './api.ts'
+import { sameParts } from './focus.ts'
 
 /**
  * Which paper this page is on, and the conversation with whatever framed it.
@@ -35,6 +36,18 @@ import { json, post, standIn, standingIn } from './api.ts'
  * canvas. Re-reading the paper on each would throw away an editor somebody is
  * typing in. So a context that names the epic and project already on screen
  * changes nothing here.
+ *
+ * ## The parts the canvas is pointed at ride past that, and re-read nothing
+ *
+ * `context.parts` is every part of the open epic, each saying whether a person
+ * picked it and which files of the paper are its own. It is read off EVERY
+ * context, before the question of whether the epic moved, because picking a
+ * part is exactly a context in which the epic did not move. And it is held as
+ * its own piece of state, apart from the paper: a change of focus is a change
+ * in what is SHOWN of a paper this page already has, so it redraws the lists
+ * and the pages and asks the server nothing — no `/api/paper`, no compile, and
+ * the editor is not rebuilt under somebody's hands. `src/focus.ts` has the
+ * rule; this only carries the list.
  */
 
 export type Sight =
@@ -55,6 +68,9 @@ export type GotoHandler = (goto: Goto, answer: (found: boolean, why?: string) =>
 export type StartFrom = { template: string } | { folder: string }
 
 const ID = 'kehikot.paper'
+
+/** One empty list, so that "no parts" is the same value every time it is said. */
+const NO_PARTS: readonly EpicPart[] = []
 
 /** How often the two polls ask. Slow enough to be nothing, fast enough that a suggestion appears while its author is still watching. */
 const POLL_MS = 4000
@@ -103,6 +119,8 @@ export function usePaper(framed: boolean) {
   const askAgain = useCallback(() => setNudge((n) => n + 1), [])
   /** The passage the canvas holds — this page's own, echoed, or somebody else's. */
   const [pointed, setPointed] = useState<Passage | null>(null)
+  /** The open epic's parts, as the host last said them. `[]` from a host that has none to say, and when nothing frames this page. */
+  const [parts, setParts] = useState<readonly EpicPart[]>(NO_PARTS)
 
   const host = useRef<Connection | null>(null)
   const goto = useRef<GotoHandler>(() => {})
@@ -154,7 +172,7 @@ export function usePaper(framed: boolean) {
 
   useEffect(() => {
     const arrived = (
-      context: { epic: string | null; projectPath?: string | null; theme?: string; passage?: Passage | null },
+      context: { epic: string | null; projectPath?: string | null; theme?: string; passage?: Passage | null; parts?: readonly EpicPart[] },
       greeting: boolean,
     ) => {
       const root = document.documentElement
@@ -163,6 +181,11 @@ export function usePaper(framed: boolean) {
         root.classList.toggle('light', context.theme === 'light')
       }
       setPointed((was) => (samePassage(was, context.passage ?? null) ? was : (context.passage ?? null)))
+      /* Compared by value: a host composes the list afresh for every context
+         it sends, and one that says what the last one said must not redraw a
+         PDF. Before the early return below, which is about the EPIC. */
+      const said = Array.isArray(context.parts) ? context.parts : NO_PARTS
+      setParts((was) => (sameParts(was, said) ? was : said))
 
       /* A greeting is a new conversation: whatever this page believed about
          where the canvas stood belonged to the last one. */
@@ -381,6 +404,7 @@ export function usePaper(framed: boolean) {
       resize,
       point,
       pointed,
+      parts,
       goto,
       start,
       setPaper,
@@ -395,7 +419,7 @@ export function usePaper(framed: boolean) {
       save,
       askAgain,
     }),
-    [sight, said, resize, point, pointed, start, setPaper, disk, proposals, answerOne, acceptAll, busy, saving, save, askAgain],
+    [sight, said, resize, point, pointed, parts, start, setPaper, disk, proposals, answerOne, acceptAll, busy, saving, save, askAgain],
   )
 }
 
