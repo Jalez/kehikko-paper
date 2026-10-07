@@ -199,6 +199,8 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   id: ID,
   name: 'Paper',
   version: VERSION,
+  /* Where a host files this module in its list, most fitting first. */
+  tags: ['writing', 'reading'],
   summary: 'The paper this epic is aimed at, read as prose: sections, figures and tables rather than markup.',
   /**
    * What an agent should do about this module being here.
