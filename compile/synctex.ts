@@ -316,10 +316,17 @@ export function forward(
     const before = table.leaves[run.first - 1]
     const start = before && before.box === boxIndex ? before.x + before.w : box.x
     const last = table.leaves[run.last]!
-    /* To the box's right edge when nothing follows in it: the last word of a
-       printed line has no glue after it, only the end of the line. */
+    /* To the box's right edge when nothing but the end of the line follows.
+       TeX discards the glue at a line break and a paragraph's last word has
+       none after it, so in both cases the run's last recorded leaf sits
+       BEFORE its last word, and what follows it in the box is only the
+       line's closing skip, out at the right edge. Stopping at the last leaf
+       there would cut the final word off every paragraph. On a short last
+       line this reaches past the text into white space; the page trims that
+       against the PDF's own words where it can. */
     const after = table.leaves[run.last + 1]
-    const end = after && after.box === boxIndex ? last.x + last.w : box.x + box.w
+    const more = after !== undefined && after.box === boxIndex && after.x < box.x + box.w - 2
+    const end = more ? last.x + last.w : box.x + box.w
     const left = Math.max(box.x, Math.min(start, end))
     const right = Math.min(box.x + box.w, Math.max(start, end))
     rects.push({ page: box.page, x: left, y: box.y - box.h, w: Math.max(right - left, 2), h: Math.max(box.h + box.d, 4) })

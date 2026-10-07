@@ -44,6 +44,21 @@ import { templateList } from './templates.ts'
  * path, a query and a body and returns a status and a document; `vite.config.ts`
  * adapts a node request to it in a dozen lines.
  *
+ * ## What writes, as of the source editor
+ *
+ * Five doors change something, and every one of them demands the ticket:
+ * `POST /api/paper` starts a paper where there is none; `POST /api/file` saves
+ * one file of it, whole, guarded by the hash it was read at; `POST
+ * /api/proposal` accepts or rejects a suggestion; `POST /api/save` commits;
+ * and `POST /api/compile` — in `later`, at the foot of this file — runs a
+ * LaTeX engine, which writes nothing into the project and is ticketed because
+ * it runs a program. `/api/edit`, which took a byte range typed into rendered
+ * prose, is gone with the view it served. The MCP door still has no tool that
+ * reaches any of them.
+ *
+ * The essay below was written when there were two, and it is kept because the
+ * conditions it lists are the ones all five still meet.
+ *
  * ## There are two write paths here now, and that is the headline
  *
  * This file used to open by saying there were none. The paragraph is kept

@@ -1,7 +1,7 @@
 import { MANIFEST_KIND, PROTOCOL, manifestSchema, type Manifest } from 'kehikot-module-protocol'
 
 export const ID = 'kehikot.paper'
-export const VERSION = '1.0.0'
+export const VERSION = '2.0.0'
 
 /**
  * The port this app would rather have, said once and beside the name it belongs
@@ -34,8 +34,8 @@ export const PREFERRED_PORT = 7870
  *
  * The manifest is the smallest half of this program and the only half a host
  * ever reads. Everything else here works with nothing on the other end — open
- * `http://127.0.0.1:7870/app?epic=…` in a browser and the whole reader is
- * there, the address saying what the canvas would. So read this as a
+ * `http://127.0.0.1:7870/app?project=…&epic=…` in a browser and the whole
+ * editor is there, the address saying what the canvas would. So read this as a
  * description of the
  * ENRICHMENT, and of an unusually thin one: all this file really asks for is a
  * tab. What arrives through it — which epic the canvas is on — is not something
@@ -129,8 +129,9 @@ export const PREFERRED_PORT = 7870
  *
  * ## The write needs no capability, and that is worth writing down
  *
- * A reader can now correct a sentence in the paper in place, and it is fair to
- * look here for the declaration that permits it. There is none, and there is no
+ * The page edits the paper's `.tex` and saves it, and runs a LaTeX engine on
+ * this machine to compile it. It is fair to look here for the declaration that
+ * permits either. There is none, and there is no
  * field it would go in.
  *
  * `CAPABILITIES` in the protocol is a list of things a module asks a HOST to do
@@ -201,7 +202,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   version: VERSION,
   /* Where a host files this module in its list, most fitting first. */
   tags: ['writing', 'reading'],
-  summary: 'The paper this epic is aimed at, read as prose: sections, figures and tables rather than markup.',
+  summary: 'The paper this epic is aimed at: its LaTeX source in an editor, and the PDF it compiles to beside it.',
   /**
    * What an agent should do about this module being here.
    *
@@ -214,13 +215,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     'true. Read the relevant sections before changing behaviour: if a sentence in it describes ' +
     'what the code does, your change can make that sentence false, and the paper is then part of ' +
     'the work rather than documentation of it. Cite by section when you say a change follows from ' +
-    'the paper, so a reader can check you. To change a sentence of PROSE, use propose_edit on this module\'s ' +
-    'MCP door: it draws the change into the paper in green and red where it happens and the person reading it ' +
-    'decides — nothing you can call writes to a .tex, so do not edit prose behind their back while they are ' +
-    'looking at it. Accepting one commits it to the paper\'s own repository. ' +
-    'For markup, a citation, a heading, a new section or the structure of the document, edit ' +
-    'the .tex on disk with the tools you already have; propose_edit refuses those. Never restate here what ' +
-    'the paper already says, because two copies of an argument drift.',
+    'the paper, so a reader can check you. To change the paper while somebody has it open, use ' +
+    'propose_edit on this module\'s MCP door: it shows the change as a diff of the .tex and the person ' +
+    'decides — nothing you can call there writes to a .tex, and it takes LaTeX markup as well as prose. ' +
+    'Accepting one commits it to the paper\'s own repository. For a new file or a restructuring, edit the ' +
+    '.tex on disk with the tools you already have. Never restate here what the paper already says, ' +
+    'because two copies of an argument drift.',
   entry: '/app',
   modes: [{ id: 'paper', label: 'Paper', scope: 'epic' }],
   mcp: {
@@ -231,7 +231,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
        about the disk. An `about` still promising a machine-wide list would have
        an agent call `list_papers` with no project and read the refusal as a
        fault in the module. */
-    about: 'The papers in a project: which epics have one, their sections, and the prose or the raw source of any section.',
+    about: 'The papers in a project: which epics have one, their sections, the prose or the raw source of any section, and suggesting a change to one.',
   },
   extensions: { emits: [], consumes: [] },
   declares: {

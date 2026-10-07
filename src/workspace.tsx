@@ -371,10 +371,12 @@ export function Workspace({
         : null
       out.push({ rects: foreignRects, source: whole, foreign: true })
     }
-    if (ownRects.length) out.push({ rects: ownRects, source: selecting ? text.slice(from, to) : null })
+    /* With only a caret, the line's own text is what the rectangles are for,
+       and tightening to it trims a paragraph's last line back to its words. */
+    if (ownRects.length) out.push({ rects: ownRects, source: selecting ? text.slice(from, to) : textOfLine(text, fromLine) })
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [foreign, foreignRects, ownRects, selecting, selecting ? text.slice(from, to) : ''])
+  }, [foreign, foreignRects, ownRects, selecting, selecting ? text.slice(from, to) : textOfLine(text, fromLine)])
 
   const showInPdf = () => {
     setTab('pdf')
