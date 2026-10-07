@@ -12,7 +12,8 @@
  * A PDF carries its text, and pdf.js hands it over as runs with positions. So
  * the last step is done by MATCHING: the word that was clicked is looked for in
  * the source line SyncTeX named, and the first and last words of a selection
- * are looked for in the printed lines SyncTeX named. When a match is found the
+ * are looked for in the printed lines SyncTeX named — all of them, since a
+ * source line is often printed over two. When a match is found the
  * answer is tightened to it; when it is not — maths, a macro that prints
  * something other than its argument, a word hyphenated across two lines, a
  * ligature the font maps oddly — the SyncTeX answer stands as it was. Nothing
@@ -127,36 +128,99 @@ export function printedWords(source: string): string[] {
 }
 
 /**
+ * How much of a margin a tightened end keeps, in characters of its run.
+ *
+ * A run is a string and a width, so a word's edges are found by PROPORTION
+ * along it — see `wordAt`. On a justified line in a proportional font that
+ * estimate is off by a character or two: measured on a real page, the start of
+ * "removing" was put 9 points — its "re" — to the right of where it is
+ * printed, and the mark began at "moving". A mark that reaches two characters
+ * into the neighbouring word reads as approximate; one that cuts the first
+ * letters off the selected word reads as wrong. So an end is pulled in to two
+ * characters SHORT of the estimate, and never past SyncTeX's own edge.
+ */
+const MARGIN = 2
+
+/**
  * Narrow SyncTeX's rectangles to the words that were selected.
  *
- * Only the two ENDS are moved: the first rectangle's left edge to the first
- * selected word, the last rectangle's right edge to the end of the last one.
- * Rectangles in between are whole printed lines of the selection and are
- * already right. An end whose word is not found in the runs under its
- * rectangle — it was hyphenated, or it is maths, or the selection starts in a
- * command — is left where SyncTeX put it.
+ * SyncTeX answers for whole source LINES: one rectangle per printed line those
+ * source lines reached. A selection inside a source line is narrower than
+ * that at both ends, and — since one source line is often printed over two —
+ * either end may be in ANY of the rectangles, not just the first or the last.
+ * Selecting `removing one means` in a source line that printed as
+ *
+ *     …that [have nothing to do with the sixth thing; removing one means deleting]
+ *     [code that] four other files reach into…
+ *
+ * has both of its ends in the first rectangle. Looking for the last word only
+ * under the last rectangle found nothing there and left the mark running to
+ * the end of `code that`; that was this function until it was reproduced from
+ * those very positions (`test/offsets.test.ts`).
+ *
+ * So: the first selected word is looked for from the first rectangle on, the
+ * last selected word from the last rectangle back. Rectangles before the one
+ * the selection starts in and after the one it ends in are DROPPED, the two
+ * ends are pulled in, and whatever lies between them is whole printed lines of
+ * the selection and already right.
+ *
+ * What it will not do:
+ *
+ *  - **Widen.** Every rectangle handed back lies inside one that was handed
+ *    in. An end is only ever moved inward, and only as far as `MARGIN` short
+ *    of the word.
+ *  - **Guess at an end it cannot find.** A word that was hyphenated, is maths,
+ *    or is inside a command is not among the runs, and that end stays where
+ *    SyncTeX put it.
+ *  - **Pick the nearer of two.** When the first word is printed more than once
+ *    under the rectangles the EARLIEST is taken, and for the last word the
+ *    LATEST, so a repeated word costs precision and never coverage.
+ *  - **Believe ends that cross.** A start found after the end means one of the
+ *    two matched some other occurrence; the SyncTeX answer is returned whole.
+ *
+ * Anything else a rectangle carries — its page — comes back with it.
  */
-export function tighten(rects: readonly Box[], runs: readonly Run[], source: string): Box[] {
+export function tighten<B extends Box>(rects: readonly B[], runs: readonly Run[], source: string): B[] {
   const out = rects.map((rect) => ({ ...rect }))
   const words = printedWords(source)
   if (!out.length || !words.length) return out
 
-  const first = out[0]!
-  const start = spanOf(runs, first, words[0]!, 'first')
-  if (start) {
-    const right = first.x + first.w
-    first.x = Math.max(first.x, start.from)
-    first.w = Math.max(right - first.x, 2)
+  let start: { index: number; span: Span } | null = null
+  for (let index = 0; index < out.length && !start; index += 1) {
+    const span = spanOf(runs, out[index]!, words[0]!, 'first')
+    if (span) start = { index, span }
   }
-  const last = out[out.length - 1]!
-  const end = spanOf(runs, last, words[words.length - 1]!, 'last')
-  if (end && end.to > last.x) last.w = Math.max(Math.min(last.x + last.w, end.to) - last.x, 2)
-  return out
+  let end: { index: number; span: Span } | null = null
+  for (let index = out.length - 1; index >= 0 && !end; index -= 1) {
+    const span = spanOf(runs, out[index]!, words[words.length - 1]!, 'last')
+    if (span) end = { index, span }
+  }
+  if (start && end && (end.index < start.index || (end.index === start.index && end.span.to <= start.span.from))) return out
+
+  if (end) {
+    const last = out[end.index]!
+    const right = Math.min(last.x + last.w, end.span.to + MARGIN * end.span.per)
+    if (right > last.x) last.w = Math.min(last.w, Math.max(right - last.x, 2))
+  }
+  if (start) {
+    const first = out[start.index]!
+    const right = first.x + first.w
+    first.x = Math.max(first.x, Math.min(start.span.from - MARGIN * start.span.per, right - 2))
+    first.w = right - first.x
+  }
+  return out.slice(start?.index ?? 0, (end?.index ?? out.length - 1) + 1)
 }
 
-/** Where `word` is drawn among the runs under `rect`: its left and right edges, by proportion along its run. */
-function spanOf(runs: readonly Run[], rect: Box, word: string, which: 'first' | 'last'): { from: number; to: number } | null {
-  let best: { from: number; to: number } | null = null
+/** A word as drawn: its left and right edges, and the width of one character of the run it is in. */
+interface Span {
+  from: number
+  to: number
+  per: number
+}
+
+/** Where `word` is drawn among the runs under `rect`, by proportion along its run. */
+function spanOf(runs: readonly Run[], rect: Box, word: string, which: 'first' | 'last'): Span | null {
+  let best: Span | null = null
   for (const run of runs) {
     if (run.w <= 0 || !run.text) continue
     const middle = run.y + run.h / 2
@@ -169,7 +233,7 @@ function spanOf(runs: readonly Run[], rect: Box, word: string, which: 'first' | 
       /* Only an occurrence inside what SyncTeX already allowed. The same word
          earlier on the printed line, from a different source line, is not it. */
       if (to < rect.x - per || from > rect.x + rect.w + per) continue
-      if (best === null || (which === 'first' ? from < best.from : to > best.to)) best = { from, to }
+      if (best === null || (which === 'first' ? from < best.from : to > best.to)) best = { from, to, per }
     }
   }
   return best

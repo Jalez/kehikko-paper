@@ -204,7 +204,7 @@ export function PdfView({ url, marks, reveal, onPoint, onPage }: PreviewProps) {
         const text = runs.current.get(page)
         /* Tightened only when the whole mark is on one page: the first word
            and the last are then both looked for among that page's words. */
-        if (mark.source && text && all.length === 1) rects = tighten(rects, text, mark.source).map((box, i) => ({ ...rects[i]!, ...box }))
+        if (mark.source && text && all.length === 1) rects = tighten(rects, text, mark.source)
         byPage.set(page, [...(byPage.get(page) ?? []), ...rects.map((rect) => ({ rect, foreign: mark.foreign === true }))])
       }
     }

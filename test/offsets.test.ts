@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { byteAt, eolOf, indexAt, lineAt, startOfLine, textOfLine, toDisk, toEditor } from '../src/lib/offsets.ts'
-import { placeWord, printedWords, tighten, wordAt, type Run } from '../src/pdf/words.ts'
+import { placeWord, printedWords, tighten, wordAt, type Box, type Run } from '../src/pdf/words.ts'
 
 /**
  * Bytes, characters and lines.
@@ -132,14 +132,14 @@ describe('tightening SyncTeX’s rectangles to the selected words', () => {
     { x: 100, y: 112, w: 400, h: 10 },
   ]
 
-  test('the first rectangle starts at the first word, the last ends at the last word', () => {
+  test('the first rectangle starts at the first word, the last ends at the last word, each with two characters to spare', () => {
     const [a, b] = tighten(rects, runs, 'sentence of this paragraph is here to be selected')
     const per = 400 / runs[0]!.text.length
-    expect(a!.x).toBeCloseTo(100 + runs[0]!.text.indexOf('sentence') * per, 3)
+    expect(a!.x).toBeCloseTo(100 + (runs[0]!.text.indexOf('sentence') - 2) * per, 3)
     expect(a!.x + a!.w).toBeCloseTo(500, 3)
     const per2 = 400 / runs[1]!.text.length
     expect(b!.x).toBe(100)
-    expect(b!.x + b!.w).toBeCloseTo(100 + (runs[1]!.text.indexOf('selected') + 'selected'.length) * per2, 3)
+    expect(b!.x + b!.w).toBeCloseTo(100 + (runs[1]!.text.indexOf('selected') + 'selected'.length + 2) * per2, 3)
   })
 
   test('an end whose word is not there — hyphenated, or maths — stays where SyncTeX put it', () => {
@@ -150,12 +150,101 @@ describe('tightening SyncTeX’s rectangles to the selected words', () => {
     expect(tighten([], runs, 'anything')).toEqual([])
   })
 
-  test('it never widens', () => {
-    for (const source of ['first so', 'highlighted', 'The second sentence', 'nothing matching']) {
-      tighten(rects, runs, source).forEach((box, i) => {
-        expect(box.x).toBeGreaterThanOrEqual(rects[i]!.x)
-        expect(box.x + box.w).toBeLessThanOrEqual(rects[i]!.x + rects[i]!.w + 1e-6)
-      })
+  /* Every rectangle handed back lies inside one that was handed in. By
+     containment and not by index, because a rectangle the selection does not
+     reach is dropped. */
+  const within = (out: readonly Box[], given: readonly Box[]) => {
+    for (const box of out) {
+      expect(given.some((rect) => box.y === rect.y && box.x >= rect.x - 1e-6 && box.x + box.w <= rect.x + rect.w + 1e-6)).toBe(true)
     }
+  }
+
+  test('it never widens', () => {
+    for (const source of ['first so', 'highlighted', 'The second sentence', 'nothing matching', 'so', 'first', 'selected, highlighted']) {
+      const out = tighten(rects, runs, source)
+      expect(out.length).toBeGreaterThan(0)
+      within(out, rects)
+    }
+    /* A margin is kept round a found word, and it stops at SyncTeX's edge. */
+    expect(tighten(rects, runs, 'first so')[0]!.x).toBe(100)
+    const narrow = [{ x: 100, y: 100, w: 1, h: 10 }]
+    within(tighten(narrow, runs, 'first'), narrow)
+  })
+
+  /**
+   * The report this was fixed for, from the positions a real compile gave.
+   *
+   * Source line 34 of a 20-page paper, `have nothing to do with the sixth
+   * thing; removing one means deleting code that`, set by Tectonic and read
+   * back through `syncForward` and pdf.js. It is printed over two lines, so
+   * SyncTeX answers with two rectangles — and a selection of three words in
+   * the middle of it starts AND ends under the first.
+   */
+  describe('a selection inside a source line that is printed over two lines', () => {
+    const page: Run[] = [
+      { x: 85.03938, y: 281.401102, w: 425.1926138880002, h: 10.909088, text: 'editing two files that have nothing to do with the sixth thing; removing one means deleting' },
+      { x: 85.03938, y: 294.950302, w: 425.2035229759999, h: 10.909088, text: 'code that four other files reach into. The alternative is that a mode is a program the owner' },
+      { x: 85.03938, y: 308.499502, w: 425.1926138880003, h: 10.909088, text: 'runs: a server on loopback that answers a manifest on a well-known path and serves a' },
+    ]
+    const answer = [
+      { page: 1, x: 187.27086353420768, y: 284.6190494143058, w: 322.9653782446684, h: 9.938165229996887 },
+      { page: 1, x: 85.03937869707349, y: 298.1682460305106, w: 50.076601781405685, h: 9.938165229996887 },
+    ]
+    const per = page[0]!.w / page[0]!.text.length
+    const edge = (word: string, end = false) => page[0]!.x + (page[0]!.text.indexOf(word) + (end ? word.length : 0)) * per
+
+    test('both ends are found under the first rectangle, and the second is dropped', () => {
+      const out = tighten(answer, page, 'removing one means')
+      expect(out).toHaveLength(1)
+      const [mark] = out
+      expect(mark!.page).toBe(1)
+      expect(mark!.y).toBe(answer[0]!.y)
+      /* It reaches the whole of both words… */
+      expect(mark!.x).toBeLessThanOrEqual(edge('removing'))
+      expect(mark!.x + mark!.w).toBeGreaterThanOrEqual(edge('means', true))
+      /* …with the margin a proportional estimate needs, and no more: not back
+         to `thing;`, and not on into `deleting code that f`. */
+      expect(mark!.x).toBeGreaterThanOrEqual(edge('thing;', true) - per)
+      expect(mark!.x + mark!.w).toBeLessThan(edge('deleting') + 2 * per)
+      within(out, answer)
+    })
+
+    test('a selection that starts under one rectangle and ends under the next keeps both', () => {
+      const out = tighten(answer, page, 'means deleting code')
+      expect(out).toHaveLength(2)
+      expect(out[0]!.x).toBeGreaterThan(edge('one'))
+      expect(out[0]!.x + out[0]!.w).toBeCloseTo(answer[0]!.x + answer[0]!.w, 6)
+      expect(out[1]!.x).toBe(answer[1]!.x)
+      expect(out[1]!.x + out[1]!.w).toBeLessThanOrEqual(answer[1]!.x + answer[1]!.w)
+      within(out, answer)
+    })
+
+    test('a selection wholly under the second rectangle drops the first', () => {
+      const out = tighten(answer, page, 'code that')
+      expect(out).toHaveLength(1)
+      expect(out[0]!.y).toBe(answer[1]!.y)
+      within(out, answer)
+    })
+
+    test('the whole source line is still marked whole', () => {
+      const out = tighten(answer, page, 'have nothing to do with the sixth thing; removing one means deleting code that')
+      expect(out).toHaveLength(2)
+      expect(out[0]!.x).toBeCloseTo(answer[0]!.x, 6)
+      expect(out[0]!.x + out[0]!.w).toBeCloseTo(answer[0]!.x + answer[0]!.w, 6)
+      expect(out[1]!.x).toBe(answer[1]!.x)
+      within(out, answer)
+    })
+
+    test('a repeated word costs precision, never coverage; ends that cross change nothing', () => {
+      /* `that` is printed once under each rectangle: as the FIRST word the
+         earlier is taken, as the LAST word the later. */
+      const from = tighten(answer, page, 'that have nothing')
+      expect(from).toHaveLength(1)
+      expect(from[0]!.x).toBeCloseTo(answer[0]!.x, 6)
+      const to = tighten(answer, page, 'deleting code that')
+      expect(to).toHaveLength(2)
+      /* `code … deleting` is not in that order on the page. */
+      expect(tighten(answer, page, 'code and then deleting')).toEqual(answer)
+    })
   })
 })
