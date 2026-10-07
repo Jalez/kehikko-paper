@@ -1,7 +1,7 @@
 import { MANIFEST_KIND, PROTOCOL, manifestSchema, type Manifest } from 'kehikot-module-protocol'
 
 export const ID = 'kehikot.paper'
-export const VERSION = '2.0.0'
+export const VERSION = '2.1.0'
 
 /**
  * The port this app would rather have, said once and beside the name it belongs
@@ -234,6 +234,22 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     about: 'The papers in a project: which epics have one, their sections, the prose or the raw source of any section, and suggesting a change to one.',
   },
   extensions: { emits: [], consumes: [] },
+  /**
+   * What this page MOVES for, in the protocol's own words for it.
+   *
+   * `parts`, because a person pointing the canvas at some of the epic's parts
+   * moves this page: only the files a picked part owns are listed, only the
+   * pages those files printed are drawn, and a line above the paper says
+   * which parts, how much is shown and how much is outside them. See
+   * `src/focus.ts`. With nothing picked the page is exactly what it was. It
+   * sets nothing: the picking is the host's own control.
+   *
+   * `passage`, because it always has: a passage another module points at is
+   * opened, scrolled to and marked here (`src/pointed.ts`). It was not
+   * declared, since this manifest had no `reacts` at all, which left it
+   * saying less than the program did; the word is added with the list.
+   */
+  reacts: ['passage', 'parts'],
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
     /* One entry, and see the essay above. What this app READS is handed to it

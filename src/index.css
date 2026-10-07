@@ -344,6 +344,55 @@
     cursor: crosshair;
   }
 
+  /* ---- Narrowed to the picked parts of the epic ----------------------- */
+
+  /* The line above the paper while it is narrowed. The pencil's blue, as a
+     bar and a wash: it is navigation — where you are looking — and not a
+     warning. It becomes the amber "this wants the author" only when the focus
+     shows NOTHING of the paper, which does want somebody. Never colour alone:
+     the sentence in it says everything the colour does. */
+  .paper-focus {
+    background: color-mix(in oklch, var(--pencil) 9%, transparent);
+    box-shadow: inset 3px 0 0 var(--pencil);
+  }
+
+  .paper-focus[data-focus='none'] {
+    background: color-mix(in oklch, var(--mark) 14%, transparent);
+    box-shadow: inset 3px 0 0 var(--mark);
+  }
+
+  /* ---- The PDF under a focus: which sheet this is, and what is left out --
+
+     Drawn only while the canvas is narrowed to some of the epic's parts. The
+     number is the sheet's REAL number, set against the desk and not on the
+     paper, so it can never be read as something the paper prints. A run of
+     sheets left out is a dashed rule with its numbers in it: the gap has to
+     look like a gap, or page 12 following page 7 reads as a broken PDF. */
+  .pdf-number {
+    margin: 0 auto 3px;
+    max-width: 100%;
+    font-size: 0.66rem;
+    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted-foreground);
+  }
+
+  .pdf-number-outside {
+    color: var(--foreground);
+  }
+
+  .pdf-gap {
+    margin: 0 0 10px;
+    padding: 3px 6px;
+    border: 1px dashed color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+    border-radius: 4px;
+    font-size: 0.66rem;
+    line-height: 1.3;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted-foreground);
+  }
+
   /* Where the selection in the source came out. A wash thin enough that the
      words under it stay black. */
   .pdf-mark {

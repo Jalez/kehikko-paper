@@ -59,6 +59,15 @@ describe('what this app claims about itself', () => {
     expect(MANIFEST.declares.uses).not.toContain('selection:set')
   })
 
+  test('it says it moves for the picked parts of the epic, and for a passage, and sets neither of them itself', () => {
+    /* `parts`: the page narrows to the files and pages of the parts a person
+       picked in the host's bar. `passage`: it always turned to one, and this
+       manifest had no `reacts` to say so. Neither is a capability — picking a
+       part is the host's own control, and reading a context needs no leave. */
+    expect(MANIFEST.reacts).toEqual(['passage', 'parts'])
+    expect(MANIFEST.declares.uses).toEqual(['passage:set'])
+  })
+
   test('the id is the one the registration file has to be named after', () => {
     expect(ID).toBe('kehikot.paper')
     expect(MANIFEST.id).toBe(ID)

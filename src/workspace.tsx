@@ -1,4 +1,4 @@
-import type { Passage as WirePassage } from 'kehikot-module-protocol'
+import type { EpicPart, Passage as WirePassage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button.tsx'
@@ -11,6 +11,7 @@ import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import type { Editor } from './editor/source-editor.tsx'
+import { headline, inFocus, narrowed, notesOf, pagesShown, type Narrowed } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
@@ -50,6 +51,35 @@ import { useTheme } from './use-theme.ts'
  * pixels there is ONE pane and two tabs, and navigation switches tab for you:
  * pressing the PDF lands in the source, "show in PDF" lands in the PDF. From
  * 720 up they sit side by side.
+ *
+ * ## Narrowed to the picked parts of the epic
+ *
+ * When a person has picked some of the epic's parts in the host's bar, this
+ * screen shows only what those parts own: their files in the file list, the
+ * sections of those files, and the pages those files printed. `src/focus.ts`
+ * has the rule and the arithmetic; three decisions are this screen's.
+ *
+ * **The file somebody has open is never taken away.** Picking a part while
+ * `main.tex` is open — and `main.tex` is in no part, as a rule — would
+ * otherwise swap the editor's file under a person who may be mid-sentence,
+ * with a save pending. So the open file stays open, stays editable and is
+ * saved as it always is; it is listed, marked as outside the focus, and a
+ * line above the editor says so and offers the first file that IS in the
+ * focus. It leaves the list when the person leaves it. The one time this
+ * screen chooses a file for a focus is when a paper is OPENED under one:
+ * nothing is being edited yet, and starting on a file that is outside what
+ * was asked for would be the wrong first sight.
+ *
+ * **A pointer from elsewhere still arrives.** A note, a question or a slide
+ * may point at a passage in a file no picked part owns. It is opened and
+ * marked exactly as before, the sentence about it says it is outside the
+ * picked parts, and the page it printed on is drawn, labelled as outside, for
+ * as long as the mark is there. The same goes for a press on a shared sheet
+ * that lands in a file outside the focus.
+ *
+ * **There is no "show everything" here.** The line above the paper says where
+ * the focus is set, and that is where it is lifted. A second switch on this
+ * page would be a second place to look for why a paper is short.
  *
  * ## The editor and the preview are passed in
  *
@@ -110,6 +140,34 @@ export function Workspace({
   )
   const source = useSource({ paper, disk: wire.disk, onLanded, saveDelay })
   const { file, doc } = source
+
+  /* ---- The parts the canvas is pointed at ------------------------------- */
+
+  const parts = wire.parts ?? NO_PARTS
+  const pdf = build?.pdf ?? null
+  const focus = useMemo(
+    () => narrowed(parts, paper, pdf),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [parts, paper.epic, paper.files, pdf?.id],
+  )
+  const focusRef = useRef(focus)
+  focusRef.current = focus
+  /** Whether a file is outside what is picked. Never, when nothing is. */
+  const isOutside = useCallback((name: string) => !inFocus(parts, paper, name), [parts, paper])
+  const outsideSaid = focus ? `the picked part${focus.parts.length === 1 ? '' : 's'}` : ''
+
+  /* A paper OPENED under a focus starts on a file that is in it. Once per
+     paper, and only then: after this the open file is the person's, and a
+     change of focus never moves it. Declared straight after `useSource` so
+     that it runs after that hook's own "a new paper starts on main.tex". */
+  const startedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (startedFor.current === paper.epic) return
+    startedFor.current = paper.epic
+    const first = focusRef.current?.files[0]
+    if (first && !focusRef.current!.files.includes('main.tex')) source.open(first)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paper.epic])
 
   /* A suggestion is accepted against the file ON DISK. So the editor saves
      first, and the accept then splices into the text the person is looking at. */
@@ -271,6 +329,9 @@ export function Workspace({
   /* ---- What the canvas says to this page -------------------------------- */
 
   const walkedFor = useRef<string | null>(null)
+  /* Read through a ref: a change of focus must not re-run the walk below. */
+  const outsideRef = useRef(isOutside)
+  outsideRef.current = isOutside
   useEffect(() => {
     const { own, answer } = received(paper, pointed, mine.current)
     if (!own) mine.current = null
@@ -294,7 +355,9 @@ export function Workspace({
     if (walkedFor.current !== stamp) {
       walkedFor.current = stamp
       go({ file: answer.file, bytes: { from: answer.from, to: answer.to }, foreign: true })
-      notice(answer.said)
+      /* Outside the picked parts is not a reason to refuse it — somebody
+         pressed a note and means that passage — but it is a thing to say. */
+      notice(outsideRef.current(answer.file) ? `${answer.said} ${outsidePassage(focusRef.current)}` : answer.said)
       setOnPassage(true)
     }
     /* Everything this page does next is a consequence of that passage and is
@@ -335,7 +398,10 @@ export function Workspace({
         if (!saysOf(block).toLowerCase().includes(needle)) continue
         go({ file: block.file, bytes: { from: block.srcStart, to: block.srcEnd }, focus: false })
         answer(true)
-        setSaid(`${message.ref ?? 'That reference'} is named in this paper, in ${block.file}.`)
+        setSaid(
+          `${message.ref ?? 'That reference'} is named in this paper, in ${block.file}.`
+            + (outsideRef.current(block.file) ? ` ${outsidePassage(focusRef.current)}` : ''),
+        )
         return
       }
       answer(false, `This paper does not name ${message.ref ?? 'that'}.`)
@@ -454,6 +520,14 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [foreign, foreignRects, ownRects, selecting, selecting ? text.slice(from, to) : textOfLine(text, fromLine)])
 
+  /* The pages drawn under a focus: the picked parts' own, and — flagged —
+     any a mark is on, so that nothing this page points at is ever on a sheet
+     that is not there. Null when nothing is picked: every page, as always. */
+  const sheets = useMemo(() => {
+    if (!focus || focus.pages === null) return null
+    return pagesShown(focus, marks.flatMap((mark) => mark.rects.map((rect) => rect.page)))
+  }, [focus, marks])
+
   const showInPdf = () => {
     setTab('pdf')
     if (!buildId) {
@@ -561,6 +635,15 @@ export function Workspace({
     [go, wandered],
   )
 
+  /* The files offered: all of them, or under a focus the picked parts' own —
+     and the one that is open, whatever it is, because it is open. */
+  const listed = useMemo(
+    () => (focus ? paper.files.filter((one) => one === file || !isOutside(one)) : paper.files),
+    [focus, paper.files, file, isOutside],
+  )
+  const openOutside = focus !== null && isOutside(file)
+  const firstInFocus = focus?.files[0] ?? null
+
   const saved =
     source.state === 'saving' ? 'Saving…' : source.state === 'dirty' ? 'Unsaved' : source.state === 'failed' ? 'Not saved' : 'Saved'
   const engineSays = !build
@@ -586,9 +669,9 @@ export function Workspace({
             }}
             aria-label="File"
           >
-            {paper.files.map((one) => (
+            {listed.map((one) => (
               <option key={one} value={one}>
-                {one}
+                {focus && isOutside(one) ? `${one} — outside the focus` : one}
               </option>
             ))}
           </select>
@@ -608,11 +691,15 @@ export function Workspace({
             aria-label="Sections"
           >
             <option value="">{shown.section ?? 'Sections'}</option>
-            {sections.map((one, i) => (
-              <option key={i} value={i}>
-                {`${'  '.repeat(Math.max(0, one.level - 1))}${one.title}`}
-              </option>
-            ))}
+            {sections.map((one, i) =>
+              /* By its place in the WHOLE list, which is what the handler
+                 above reads, so leaving some out renumbers nothing. */
+              listed.includes(one.file) ? (
+                <option key={i} value={i}>
+                  {`${'  '.repeat(Math.max(0, one.level - 1))}${one.title}`}
+                </option>
+              ) : null,
+            )}
           </select>
         )}
         <span className={cn('text-muted-foreground', source.state === 'failed' && 'text-(--gone)')} aria-live="polite" data-save={source.state}>
@@ -637,6 +724,17 @@ export function Workspace({
           </Button>
         )}
       </header>
+
+      {focus && (
+        <div role="status" className="paper-focus shrink-0 border-b px-2 py-1 text-[0.72rem] leading-snug" data-focus={focus.ownsNone ? 'none' : 'some'}>
+          <p>{headline(focus)}</p>
+          {notesOf(focus).map((note, i) => (
+            <p key={i} className="mt-0.5" data-focus-note>
+              {note}
+            </p>
+          ))}
+        </div>
+      )}
 
       {source.conflict && (
         <div role="alert" className="bg-muted/60 flex shrink-0 flex-wrap items-center gap-2 border-b px-2 py-1 text-[0.72rem]">
@@ -676,6 +774,25 @@ export function Workspace({
             onAcceptAll={() => void acceptAll()}
             onShow={showProposal}
           />
+          {openOutside && (
+            <div role="status" className="bg-muted/60 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-2 py-1 text-[0.72rem] leading-snug" data-outside-file={file}>
+              <span className="min-w-0 flex-[1_1_11rem]">
+                {file} is outside {outsideSaid}. It stays open, and is saved as usual, until you choose another file.
+              </span>
+              {firstInFocus && (
+                <Button
+                  variant="outline"
+                  size="container"
+                  onClick={() => {
+                    wandered()
+                    source.open(firstInFocus)
+                  }}
+                >
+                  Open {firstInFocus}
+                </Button>
+              )}
+            </div>
+          )}
           <div className="min-h-0 flex-1">
             {doc ? (
               <EditorPane
@@ -741,9 +858,22 @@ export function Workspace({
               <p className="text-muted-foreground">{build.how}</p>
             </div>
           )}
+          {pdfUrl && sheets && sheets.pages.length === 0 && (
+            <p className="text-muted-foreground shrink-0 border-b px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
+              {focus?.ownsNone
+                ? `No page of this paper is in ${outsideSaid}, because ${focus.parts.length === 1 ? 'it owns' : 'they own'} no files of it. The line above says how to give ${focus.parts.length === 1 ? 'it' : 'them'} some.`
+                : `No page of this PDF was printed by a file of ${outsideSaid}.`}
+            </p>
+          )}
           <div className="relative min-h-0 flex-1">
             {pdfUrl ? (
-              <PreviewPane url={pdfUrl} marks={marks} reveal={reveal} onPoint={onPoint} />
+              <PreviewPane
+                url={pdfUrl}
+                marks={marks}
+                reveal={reveal}
+                onPoint={onPoint}
+                {...(sheets ? { pages: sheets.pages, outside: sheets.outside, outsideOf: outsideSaid } : {})}
+              />
             ) : (
               build?.engine && (
                 <p className="text-muted-foreground p-3 text-xs">
@@ -768,6 +898,12 @@ export function Workspace({
 }
 
 const NONE: readonly Problem[] = []
+const NO_PARTS: readonly EpicPart[] = []
+
+/** Added to what is said about a place this page was sent to, when no picked part owns the file it is in. */
+function outsidePassage(focus: Narrowed | null): string {
+  return `It is outside the picked part${focus?.parts.length === 1 ? '' : 's'}, and is shown anyway.`
+}
 
 /**
  * The page and section the toolbar reads out.
