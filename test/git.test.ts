@@ -191,14 +191,11 @@ describe('a commit can never carry somebody else’s work', () => {
   test('Save commits the paper and leaves the rest of the repository alone', () => {
     writeFileSync(unrelated, 'still theirs\n')
     git('add', 'notes.md')
-    /* A correction typed in the reader, through the ordinary write path, which
-       does NOT commit — that is what Save is for. */
-    const at = SOURCE.indexOf('tpyo')
-    answer('POST', '/api/edit', new URLSearchParams({ epic: 'a-paper', project }), {
+    /* A save from the editor, through the ordinary write path, which does NOT
+       commit — that is what Save is for. */
+    answer('POST', '/api/file', new URLSearchParams({ epic: 'a-paper', project }), {
       file: 'main.tex',
-      from: at,
-      to: at + 4,
-      text: 'typo',
+      text: SOURCE.replace('tpyo', 'typo'),
       was: hashOfMain(),
       ticket: TICKET,
     })

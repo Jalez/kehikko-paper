@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { join, relative } from 'node:path'
 
 import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
-import { MAX_EDIT_BYTES, sourceRefuses, whyNot } from './latex/edit.ts'
+import { buildStatus, compile, readPdf, syncForward, syncReverse } from './compile/build.ts'
+import { MAX_EDIT_BYTES } from './latex/edit.ts'
 import { plainText, spanOf } from './latex/parse.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
@@ -21,8 +22,11 @@ import {
   readSource,
   startPaper,
   whereItWouldGo,
+  writeFile,
   writeRange,
+  type StartFrom,
 } from './store.ts'
+import { templateList } from './templates.ts'
 
 /**
  * Every door this app answers on that is not the page itself.
@@ -39,6 +43,21 @@ import {
  * holds the deciding without holding a socket. `answer()` takes a method, a
  * path, a query and a body and returns a status and a document; `vite.config.ts`
  * adapts a node request to it in a dozen lines.
+ *
+ * ## What writes, as of the source editor
+ *
+ * Five doors change something, and every one of them demands the ticket:
+ * `POST /api/paper` starts a paper where there is none; `POST /api/file` saves
+ * one file of it, whole, guarded by the hash it was read at; `POST
+ * /api/proposal` accepts or rejects a suggestion; `POST /api/save` commits;
+ * and `POST /api/compile` — in `later`, at the foot of this file — runs a
+ * LaTeX engine, which writes nothing into the project and is ticketed because
+ * it runs a program. `/api/edit`, which took a byte range typed into rendered
+ * prose, is gone with the view it served. The MCP door still has no tool that
+ * reaches any of them.
+ *
+ * The essay below was written when there were two, and it is kept because the
+ * conditions it lists are the ones all five still meet.
  *
  * ## There are two write paths here now, and that is the headline
  *
@@ -607,14 +626,13 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
    */
   propose_edit: {
     description:
-      'Suggest a change to one sentence of a paper, for the person reading it to accept or reject. This does NOT '
-      + 'edit the file: it puts the change in front of the reader, drawn into the prose in green and red where it '
-      + 'happens, with Accept and Reject beside it. Name the text to replace rather than a byte range, and give '
-      + 'enough of it to be unique in the file — the exact text, as read_source shows it, including the line break '
-      + 'if it wraps. Prose only, and this is checked against the text you quote rather than only the part that '
-      + 'differs: if find or replace contains any of \\ { } $ & # ^ _ ~ %, it is refused. So quote around a '
-      + 'citation or an escape rather than across one — "a 50" rather than "50\\% of" — and edit the .tex '
-      + 'directly to change markup, a citation, a heading or the structure of the document.',
+      'Suggest a change to a paper, for the person working on it to accept or reject. This does NOT edit the file: '
+      + 'it puts the change in front of them as a diff of the .tex — what is there in red, what you propose in '
+      + 'green, your reason beside it — with Accept and Reject, and the file is untouched until they accept. Name '
+      + 'the text to replace rather than a byte range, and give enough of it to be unique in the file: the exact '
+      + 'source, as read_source shows it, including the line break if it wraps. It is source, so LaTeX markup is '
+      + 'welcome on both sides — a citation, a label, a table row. Keep one suggestion to one change a person can '
+      + 'judge at a glance; several small ones are answered faster than one large one.',
     schema: {
       type: 'object',
       properties: {
@@ -655,14 +673,13 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const why = str(args.why, MAX_WHY)
       if (!why) return 'A suggestion has to say why, in a sentence. The reader sees it beside the change.'
 
-      /* The quoted window, not the narrowed range. See the essay above: the
-         narrowed range inside `\autocite{jones}` is the five letters `jones`,
-         which hold no special character and are still not a thing this page
-         could draw a change to. */
-      const covered = sourceRefuses(find)
-      if (covered) return covered
-      const refused = whyNot(replace)
-      if (refused) return refused
+      /* No fence on WHAT the text is, and there used to be one: anything
+         holding a LaTeX special character was refused, because a suggestion
+         was drawn into rendered prose and a change to `\autocite{jones}` had
+         nowhere to be drawn. It is drawn as a diff of the source now, so the
+         person sees exactly the bytes that would change. What remains is the
+         one thing no `.tex` holds. */
+      if (find.includes('\0') || replace.includes('\0')) return 'That text holds a NUL byte, which a .tex file does not.'
 
       const worked = propose(source, find, replace)
       if ('why' in worked) return worked.why
@@ -682,8 +699,8 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       })
       if (!filed.ok) return filed.why
       return (
-        `Filed as ${filed.proposal.id}. It is drawn into the paper where it happens, in green and red, and `
-        + 'nothing is written until the reader accepts it. Nothing on this door can accept it for them.'
+        `Filed as ${filed.proposal.id}. It is shown beside the source as a diff, in green and red, and `
+        + 'nothing is written until the person accepts it. Nothing on this door can accept it for them.'
       )
     },
   },
@@ -775,14 +792,14 @@ function mcp(rpc: Rpc): Reply {
       capabilities: { tools: {} },
       serverInfo: { name: ID, version: VERSION },
       instructions:
-        'The papers the epics in this workspace are aimed at: LaTeX on disk, read as prose. Three tools read and ' +
-        'one suggests. There is deliberately no tool that EDITS: propose_edit puts a change in front of the ' +
-        'person reading the paper, drawn into the prose where it happens, and the file is untouched until they ' +
-        'accept it — nothing on this door can accept it for them, and there is no argument that skips them. ' +
-        'Use it for prose a reader is looking at. For markup, structure, a new section or a citation, edit the ' +
-        '.tex directly with the tools you already have: a paper lives in a repository with a history, and ' +
-        'propose_edit refuses any range holding LaTeX markup anyway. It reads no tracker and holds no ' +
-        'credential, so nothing here can tell you whether the work a paper cites has landed.',
+        'The papers the epics in this workspace are aimed at: LaTeX on disk, edited as source beside its compiled ' +
+        'PDF. Four tools read, one lists what is waiting and one suggests. There is deliberately no tool that ' +
+        'EDITS: propose_edit puts a change in front of the person working on the paper as a diff of the .tex, and ' +
+        'the file is untouched until they accept it — nothing on this door can accept it for them, and there is ' +
+        'no argument that skips them. Use it for a change somebody should see before it lands; it takes markup as ' +
+        'well as prose. For a new file or a restructuring, edit the .tex directly with the tools you already ' +
+        'have: a paper lives in a repository with a history. It reads no tracker and holds no credential, so ' +
+        'nothing here can tell you whether the work a paper cites has landed.',
     })
   }
   /* A notification carries no id and is answered with nothing. */
@@ -930,46 +947,39 @@ export function answer(
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
     if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
-    const started = startPaper(epic, project)
+    /* At most one of the two, and a template wins if both are said: it is the
+       narrower thing to have meant. Neither is the plain article it always was. */
+    const template = str(body?.template, 40)
+    const folder = str(body?.folder, MAX_PROJECT)
+    const from: StartFrom | undefined = template ? { template } : folder ? { folder } : undefined
+    const started = startPaper(epic, project, from)
     if (!started.ok) return bad(started.why, 409)
     return ok({ ok: true, dir: started.dir, paper: readPaper(epic, project) })
   }
 
   /*
-   * Replace one byte range in one file of one paper: the door a reader's
-   * correction arrives through.
+   * Save one file of the paper, whole. What the editor's Save does.
    *
-   * ## Everything that decides anything is in `writeRange`
+   * ## This replaced `/api/edit`, and what that door was
    *
-   * This is a shape check and a ticket check and nothing else. Which file may
-   * be written, whether the range is inside it, whether the file has moved
-   * since the page read it, whether the text is markup — all of that is one
-   * function in `store.ts`, so that the browser, an agent and a test are
-   * refused by the same code rather than by three copies of a rule.
+   * `/api/edit` took a byte range and a few characters, from a page that let a
+   * reader type into rendered prose, and it refused anything with LaTeX markup
+   * in it on either side. Both the view and the fence are gone: the page edits
+   * the `.tex` itself, an editor holds a whole document, and so it sends one.
    *
-   * ## The answer carries the paper, re-read
+   * What did not go is everything that made that door safe. The ticket, on the
+   * body. The hash of the file as the page last read it, without which nothing
+   * is written — see `writeFile`, and note that a whole-file write is the one
+   * that would lose the MOST to a stale page, because it does not splice into
+   * somebody else's change, it erases it. And the rename.
    *
-   * Not a bare `ok`. Every offset the page is holding shifted the moment this
-   * wrote, and a page that had to ask for the paper in a second request would
-   * spend the gap between the two able to send a second edit against offsets it
-   * already knows are wrong. So the write and the re-read are one answer, and
-   * they cannot disagree about which paper they are describing. This module
-   * caches nothing, so the re-read is just another open of the file — the same
-   * property the head of `store.ts` argues for, used for the thing it was for.
+   * ## 409, with what is on disk now
    *
-   * ## The refusal carries the paper too, when it is a stale one
-   *
-   * `stale` means the page's copy is out of date, which is the one refusal it
-   * has to ACT on rather than report, and the thing it must do is exactly the
-   * re-read this door has already performed. Sending it on the refusal is what
-   * makes "your edit did not land, and here is what the file says now" one
-   * round trip instead of a race between two.
-   *
-   * A 409 for stale — the request arrived second, which is not malformed — and
-   * a 400 for everything else, which is the same distinction `POST /api/paper`
-   * draws about a folder that already exists.
+   * A stale save answers 409 and carries the file as it now is, so the page can
+   * put the choice in front of a person — take theirs, or keep mine — without a
+   * second request racing a third writer.
    */
-  if (path === '/api/edit' && method === 'POST') {
+  if (path === '/api/file' && method === 'POST') {
     if (!ticketed(body)) return bad(NO_TICKET, 403)
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
@@ -978,16 +988,13 @@ export function answer(
 
     const file = str(body?.file, MAX_PATH)
     if (!file) return bad('which file')
-    /* Numbers only. `str` would happily turn a number into a string here and
-       `Number('')` is 0, which is a byte offset — so a missing `from` would
-       become "the top of the file" rather than a refusal. */
-    const from = typeof body?.from === 'number' ? body.from : NaN
-    const to = typeof body?.to === 'number' ? body.to : NaN
-    const text = typeof body?.text === 'string' ? body.text.slice(0, MAX_TEXT) : null
+    /* Not through `str`, which trims: the last newline of a file is part of
+       the file, and a save that ate it would show as a change in every diff. */
+    const text = typeof body?.text === 'string' ? body.text : null
     if (text === null) return bad('there is nothing to write there')
     const was = str(body?.was, 200)
 
-    const written = writeRange(epic, { file, from, to, text, was }, project)
+    const written = writeFile(epic, { file, text, was }, project)
     if (!written.ok) {
       return {
         status: written.stale ? 409 : 400,
@@ -995,22 +1002,15 @@ export function answer(
           ok: false,
           error: written.why,
           stale: written.stale,
-          paper: written.stale ? readPaper(epic, project) : undefined,
+          ...(written.stale ? { source: readSource(epic, file, project), hash: hashesOf(epic, project)?.[file] ?? null } : {}),
         },
       }
     }
-    /* Every pending suggestion is now measured against a file that has moved,
-       and this is the arithmetic that moves them with it. It runs on THIS path
-       — a person typing a correction — as well as on the accept path, because a
-       typo fixed two paragraphs above a pending suggestion shifts its bytes
-       just as surely as accepting another suggestion would. See `rebaseAll`. */
-    const lost = rebaseAll(project, epic, { file, from, to, text }, written.hash)
-    return ok({
-      ok: true,
-      paper: readPaper(epic, project),
-      proposals: pendingFor(project, epic),
-      said: droppedBecause(lost),
-    })
+    /* Every pending suggestion was measured against the file as it was. They
+       are looked for again by their own words — see `settled` — and the ones
+       whose words this save rewrote are dropped, with a sentence saying so. */
+    const said = lostBecause(settled(project, epic))
+    return ok({ ok: true, hash: written.hash, paper: readPaper(epic, project), proposals: pendingFor(project, epic), said })
   }
 
   /*
@@ -1362,13 +1362,107 @@ export function answer(
     const file = str(query.get('file'), MAX_PATH) || 'main.tex'
     const source = readSource(epic, file, projectOf(str(query.get('project'), MAX_PROJECT)))
     if (source === null) return bad('that paper does not name a file by that name', 404)
-    return ok({ ok: true, epic, file, source })
+    return ok({ ok: true, epic, file, source, hash: hashesOf(epic, projectOf(str(query.get('project'), MAX_PROJECT)))?.[file] ?? null })
+  }
+
+  if (path === '/api/templates' && method === 'GET') return ok({ ok: true, templates: templateList() })
+
+  /*
+   * Where the build stands: which engine, whether one is running, what the
+   * last run said, and which PDF — if any — is the last that compiled.
+   *
+   * A read, so no ticket, and it compiles nothing. The page asks this when it
+   * opens so that the PDF from the last session is on screen before the first
+   * compile of this one has finished.
+   */
+  if (path === '/api/build' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const status = buildStatus(epic, projectOf(str(query.get('project'), MAX_PROJECT)))
+    if (!status) return bad('There is no paper for that epic in this project.', 404)
+    return ok({ ok: true, build: status })
+  }
+
+  /* The last PDF that compiled, as bytes. `build` on the address is only a
+     cache key for the browser; what is served is always the one that stands. */
+  if (path === '/api/pdf' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const pdf = readPdf(epic, projectOf(str(query.get('project'), MAX_PROJECT)))
+    if (!pdf) return bad('that paper has no compiled PDF yet', 404)
+    return { status: 200, body: null, binary: { bytes: pdf.bytes, type: 'application/pdf' } }
+  }
+
+  /*
+   * Between the source and the PDF, both ways, through SyncTeX.
+   *
+   * `file` and `line` (and `to`) ask where source lines came out; `page`, `x`
+   * and `y` — PDF points from the top-left of the page — ask which line a point
+   * came from. Answered from the last GOOD build, which is the PDF on screen,
+   * and the answer names that build so a page showing a newer one can tell.
+   */
+  if (path === '/api/sync' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    const number = (name: string) => {
+      const raw = query.get(name)
+      return raw === null || raw.trim() === '' ? NaN : Number(raw)
+    }
+    if (query.has('page')) {
+      const page = number('page')
+      const x = number('x')
+      const y = number('y')
+      if (!Number.isInteger(page) || page < 1 || !Number.isFinite(x) || !Number.isFinite(y)) return bad('that is not a point on a page')
+      const found = syncReverse(epic, project, page, x, y)
+      return ok({ ok: true, found })
+    }
+    const file = str(query.get('file'), MAX_PATH)
+    const line = number('line')
+    const to = query.has('to') ? number('to') : line
+    if (!file || !Number.isInteger(line) || line < 1 || !Number.isInteger(to) || to < 1) return bad('that is not a line of a file')
+    return ok({ ok: true, found: syncForward(epic, project, file, line, to) })
   }
 
   /* An unknown path under `/api/` is ours to refuse rather than Vite's to try
      and serve as a source file. Anything else is not ours at all. */
   if (path.startsWith('/api/')) return bad('not here', 404)
   return null
+}
+
+/**
+ * The doors that cannot answer at once.
+ *
+ * `answer` is synchronous, and that is worth keeping: every door in it reads a
+ * file or writes one and is done, and its tests call it and look at what came
+ * back. A compile is the one thing here that takes seconds and runs another
+ * program, so it has a door of its own shape rather than making every other
+ * door return a promise. `vite.config.ts` asks this first and `answer` second.
+ *
+ * ## `POST /api/compile`
+ *
+ * Ticketed, although it writes nothing into the project: it runs a program on
+ * this machine, and "something on this machine that guessed the port" should
+ * not be able to keep an engine busy. It resolves when the paper has settled —
+ * see `compile` in `compile/build.ts` for what a newer request does to an
+ * older one — and always with the build's status, whether or not a PDF came
+ * out, because a failed compile is an answer and not an error of this door.
+ */
+export function later(
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: Record<string, unknown> | null,
+): Promise<Reply> | null {
+  if (path !== '/api/compile' || method !== 'POST') return null
+  if (!ticketed(body)) return Promise.resolve(bad(NO_TICKET, 403))
+  const epic = str(query.get('epic'), MAX_SLUG)
+  if (!isEpic(epic)) return Promise.resolve(bad('that is not an epic name'))
+  const project = projectOf(str(query.get('project'), MAX_PROJECT))
+  if (project === null) return Promise.resolve({ status: 409, body: { ok: false, error: NOWHERE, project: null } })
+  return compile(epic, project).then((status) =>
+    status ? ok({ ok: true, build: status }) : bad('There is no paper for that epic in this project.', 404),
+  )
 }
 
 export { MANIFEST }

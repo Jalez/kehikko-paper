@@ -2,7 +2,6 @@ import { LIMITS, type Passage as WirePassage, type Section } from 'kehikot-modul
 import { useEffect, useRef } from 'react'
 
 import type { Paper } from '../store.ts'
-import type { Passage as Highlighted } from './use-selection.ts'
 
 /**
  * Where the reader is pointing, said out loud to the canvas.
@@ -52,11 +51,46 @@ import type { Passage as Highlighted } from './use-selection.ts'
  * compares this field for EQUALITY.
  */
 
-/** Which sheet the reader is on, and which file that sheet started in. */
+/**
+ * What is selected in the source editor: a file, a byte range, and the words.
+ *
+ * ## The words are SOURCE now, and that is a change worth a paragraph
+ *
+ * `text` is the selected `.tex` exactly as it is in the file — markup,
+ * line breaks and all. It used to be the rendered prose a reader dragged
+ * across, with macros expanded and whitespace collapsed, because that was what
+ * was on screen. The protocol's own words for `quoted` are "as the pointing
+ * module saw it", and what this module sees now is source.
+ *
+ * It is also the better quote for every consumer that checks one. Notes
+ * verifies an anchor by comparing the quote against the bytes of the file with
+ * only whitespace collapsed, so a rendered quote across `\emph{…}` or a
+ * citation never matched and the note read as adrift from the day it was
+ * written; a source quote matches exactly. Learning and Slides already store
+ * source. Nothing about the SHAPE moved: a path, a page, two byte offsets, a
+ * string, a section.
+ */
+export interface Highlighted {
+  /** Relative to `paper.dir`. */
+  file: string | null
+  srcStart: number
+  srcEnd: number
+  text: string
+}
+
+/** Where the caret is: which page of the compiled PDF, which file, under which heading. */
 export interface Sheet {
-  /** One-based, as the protocol counts pages and as the readout draws them. */
-  page: number
-  /** Relative to `paper.dir`, or null when the page holds nothing placed. */
+  /**
+   * One-based page of the COMPILED PDF that the caret's line came out on, or
+   * null when there is no build to say — no engine, or nothing compiled yet.
+   *
+   * This used to be a page of this module's own estimated pagination, always a
+   * number. A real page is the one a person can cite; `null` is in the
+   * protocol's shape for exactly "not known", and a consumer that filters by
+   * page then shows the whole document's notes rather than the wrong page's.
+   */
+  page: number | null
+  /** Relative to `paper.dir`, or null when no file is open. */
   file: string | null
   /**
    * The heading the top of this sheet is under, with its span in `file`.
@@ -128,7 +162,7 @@ export function passageFor(
    * is a loss it can see — an empty quote is visibly "there is nothing to check
    * against" — rather than a wrong answer it cannot.
    */
-  const quoted = highlighted.rendered.length <= LIMITS.QUOTE ? highlighted.rendered : ''
+  const quoted = highlighted.text.length <= LIMITS.QUOTE ? highlighted.text : ''
 
   return {
     path,

@@ -100,7 +100,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
    * unconfigured `cors()`, and a request arriving at it is a request from
    * something built against that program.
    */
-  test.each(['/api/edits', '/api/papers', '/api/source', '/api/figure', '/api/notice', '/api/work'])(
+  test.each(['/api/edits', '/api/edit', '/api/papers', '/api/source', '/api/figure', '/api/notice', '/api/work', '/api/pdf', '/api/build', '/api/sync'])(
     'POST %s is refused',
     (path) => {
       const reply = post(path, { anything: 'at all' })
@@ -116,7 +116,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
    * forget to ask for is a ticket that protects nothing while looking like it
    * does, and nothing else on the page would ever show it.
    */
-  test.each(['/api/paper', '/api/edit', '/api/proposal'])('POST %s without the ticket is 403', (path) => {
+  test.each(['/api/paper', '/api/file', '/api/proposal', '/api/save'])('POST %s without the ticket is 403', (path) => {
     const reply = answer('POST', path, new URLSearchParams(inProject(projectDir, 'epic=a-paper')), {
       file: 'main.tex',
       from: 0,
@@ -128,7 +128,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
   })
 
   test('a ticket from some other process is refused the same way', () => {
-    const reply = answer('POST', '/api/edit', new URLSearchParams(inProject(projectDir, 'epic=a-paper')), {
+    const reply = answer('POST', '/api/file', new URLSearchParams(inProject(projectDir, 'epic=a-paper')), {
       ticket: '00000000-0000-4000-8000-000000000000',
       file: 'main.tex',
       from: 0,

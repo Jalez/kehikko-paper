@@ -173,58 +173,45 @@ describe('answering one', () => {
   })
 })
 
-describe('what a proposal may not be about', () => {
+describe('a proposal may be about markup, because it is shown as source', () => {
   /*
-   * The two below are the reason `sourceRefuses` is applied to the whole quoted
-   * window here and not to the narrowed range, and they are worth reading
-   * together, because the first one PASSED when this file was first written.
+   * This block used to be called "what a proposal may not be about", and it
+   * pinned a refusal: anything holding a LaTeX special character, on either
+   * side, in the whole quoted window. The reason was that a suggestion was
+   * drawn into RENDERED prose, and a change inside `\autocite{jones}` had
+   * nowhere to be drawn — it would have sat in the pending list, invisible in
+   * the paper, waiting for somebody to approve a change they could not see.
    *
-   * `\autocite{jones}` becoming `\autocite{smith}` narrows to `jones` becoming
-   * `smith`. Neither string holds a LaTeX special, so the range was safe to
-   * write and the proposal was accepted — and it was undrawable, because those
-   * five characters render as part of `[jones]` and `renderedRange` will not
-   * pretend otherwise. It would have sat in the pending list, invisible in the
-   * paper, waiting for somebody to approve a change they could not see. That is
-   * the failure this whole feature exists to prevent, arrived at from the
-   * inside.
+   * A suggestion is a diff of the `.tex` now. The bytes that would change are
+   * exactly what is on screen, so the refusal has nothing left to protect, and
+   * what it cost — an agent could not suggest a citation — is the edit an
+   * author most often wants offered. What still protects the FILE is unchanged
+   * and is tested everywhere else in this file: nothing is written until a
+   * person accepts.
    */
-  test('a citation is refused, even though the letters inside it are not markup', () => {
-    expect(suggest('\\autocite{jones}', '\\autocite{smith}')).toContain('LaTeX markup')
-    expect(pending()).toHaveLength(0)
+  test('a citation can be suggested, and accepting writes it', () => {
+    const id = idOf(suggest('\\autocite{jones}', '\\autocite{smith}'))
+    expect(pending()).toHaveLength(1)
+    expect(onDisk()).toBe(SOURCE)
+    expect(decide(id, 'accept')?.status).toBe(200)
+    expect(onDisk()).toContain('\\autocite{smith}')
   })
 
-  test('a replacement holding markup is refused', () => {
-    expect(suggest('a 50', 'a 100%')).toContain('LaTeX markup')
-    expect(pending()).toHaveLength(0)
+  test('a replacement holding markup is filed, and the file is untouched until it is accepted', () => {
+    idOf(suggest('a 50', 'a \\textbf{100}'))
+    expect(pending()).toHaveLength(1)
+    expect(onDisk()).toBe(SOURCE)
   })
 
-  test('quoting across an escape is refused, and quoting beside it is not', () => {
-    /* The over-refusal the rule buys, and the one-line way round it. `50\%`
-       becoming `90\%` narrows to `5` becoming `9`, which this page could draw
-       perfectly well — and the rule refuses it anyway rather than growing an
-       exception. What the agent does instead is quote prose. */
-    expect(suggest('50\\% escape', '90\\% escape')).toContain('LaTeX markup')
-    const id = idOf(suggest('a 50', 'a 90'))
+  test('quoting across an escape works', () => {
+    const id = idOf(suggest('50\\% escape', '90\\% escape'))
     expect(decide(id, 'accept')?.status).toBe(200)
     expect(onDisk()).toContain('a 90\\% escape')
   })
 
-  test('text that appears twice is refused, and says how many', () => {
-    const said = suggest('the ', 'a ')
-    expect(said).toContain('times in this file')
+  test('a NUL byte is still refused', () => {
+    expect(suggest('tpyo', 'ty\0po')).toContain('NUL')
     expect(pending()).toHaveLength(0)
-  })
-
-  test('text that is not there is refused', () => {
-    expect(suggest('a sentence nobody wrote', 'x')).toContain('not in this file')
-  })
-
-  test('a proposal that changes nothing is refused', () => {
-    expect(suggest('tpyo', 'tpyo')).toContain('changes nothing')
-  })
-
-  test('a suggestion with no reason is refused', () => {
-    expect(suggest('tpyo', 'typo', '')).toContain('has to say why')
   })
 })
 
@@ -282,27 +269,40 @@ describe('two pending in one file', () => {
     expect(onDisk()).toBe(SOURCE.replace('tpyo', 'typo'))
   })
 
-  test('a typed correction moves pending suggestions too', () => {
+  test('a save from the editor moves pending suggestions too', () => {
     /* Not only the accept path. Somebody fixing a typo above a pending
-       suggestion has moved its bytes just as surely. */
+       suggestion and saving has moved its bytes just as surely; it is found
+       again by the words it quoted. */
     const id = idOf(suggest('prose after them', 'the prose after them'))
     const before = pending()[0]!
     const paper = answer('GET', '/api/paper', new URLSearchParams({ epic: 'a-paper', project }), null)
     const hash = (paper?.body as { paper: { hashes: Record<string, string> } }).paper.hashes['main.tex']
-    const at = Buffer.from(SOURCE, 'utf8').indexOf('tpyo')
-    const wrote = answer('POST', '/api/edit', new URLSearchParams({ epic: 'a-paper', project }), {
+    const wrote = answer('POST', '/api/file', new URLSearchParams({ epic: 'a-paper', project }), {
       file: 'main.tex',
-      from: at,
-      to: at + 4,
-      text: 'typographical',
+      text: SOURCE.replace('tpyo', 'typographical'),
       was: hash,
       ticket: TICKET,
     })
     expect(wrote?.status).toBe(200)
-    const after = pending()[0]!
+    const after = (wrote?.body as { proposals: { from: number }[] }).proposals[0]!
     expect(after.from - before.from).toBe('typographical'.length - 'tpyo'.length)
     expect(decide(id, 'accept')?.status).toBe(200)
     expect(onDisk()).toContain('and the prose after them that runs')
+  })
+
+  test('a save that rewrites the quoted words drops the suggestion and says so', () => {
+    idOf(suggest('prose after them', 'the prose after them'))
+    const paper = answer('GET', '/api/paper', new URLSearchParams({ epic: 'a-paper', project }), null)
+    const hash = (paper?.body as { paper: { hashes: Record<string, string> } }).paper.hashes['main.tex']
+    const wrote = answer('POST', '/api/file', new URLSearchParams({ epic: 'a-paper', project }), {
+      file: 'main.tex',
+      text: SOURCE.replace('prose after them', 'words that follow'),
+      was: hash,
+      ticket: TICKET,
+    })
+    const body = wrote?.body as { proposals: unknown[]; said: string }
+    expect(body.proposals).toHaveLength(0)
+    expect(body.said).toContain('dropped')
   })
 })
 
