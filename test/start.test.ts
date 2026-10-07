@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { parseLatex } from '../latex/parse.ts'
-import { hashesOf, readPaper, startPaper } from '../store.ts'
+import { hashesOf, listPapers, readPaper, startPaper } from '../store.ts'
 import { TEMPLATES, templateById, templateList, titleFor } from '../templates.ts'
 
 /**
@@ -167,5 +167,126 @@ describe('files that include files', () => {
     expect(paper.files).toEqual(['main.tex', 'a.tex', 'b.tex'])
     expect(paper.outline.map((one) => one.text)).toEqual(['A', 'B'])
     expect(Object.keys(hashesOf('loop', project)!).sort()).toEqual(['a.tex', 'b.tex', 'main.tex'])
+  })
+
+  /**
+   * The list, the read and the hashes are one walk.
+   *
+   * `listPapers` used to count the `\include`s written in `main.tex`: 2 for
+   * the paper below, which the reader opens 3 files of — and it counted a
+   * target that is not on disk, which the reader does not.
+   */
+  test('the list counts the files the read opens: nested, missing, repeated and conditional alike', () => {
+    write('deep', {
+      'main.tex': '\\documentclass{article}\\begin{document}\n\\input{chapters/a}\n\\end{document}\n',
+      'chapters/a.tex': '\\section{A}\n\\input{chapters/tables/t}\n',
+      'chapters/tables/t.tex': '\\subsection{T}\n',
+    })
+    write('holes', {
+      'main.tex':
+        '\\documentclass{article}\\begin{document}\n\\input{a}\n\\input{not-there}\n\\input{a}\n\\input{../deep/main}\n'
+        + '\\IfFileExists{b}{\\input{b}}{}\n\\IfFileExists{c}{\\input{c}}{}\n\\end{document}\n',
+      'a.tex': '\\section{A}\n',
+      'b.tex': '\\section{B}\n\\input{d}\n',
+      'd.tex': 'Under B.\n',
+    })
+    write('alone', { 'main.tex': '\\documentclass{article}\\begin{document}\nOne file.\n\\end{document}\n' })
+
+    const listed = new Map(listPapers(project).map((one) => [one.epic, one.files]))
+    for (const epic of ['deep', 'holes', 'alone']) {
+      const paper = readPaper(epic, project)!
+      expect(listed.get(epic)).toBe(paper.files.length)
+      expect(Object.keys(hashesOf(epic, project)!).sort()).toEqual([...paper.files].sort())
+      expect(Object.keys(paper.hashes).sort()).toEqual([...paper.files].sort())
+    }
+    expect(listed.get('deep')).toBe(3)
+    expect(readPaper('holes', project)!.files).toEqual(['main.tex', 'a.tex', 'b.tex', 'd.tex'])
+    expect(listed.get('alone')).toBe(1)
+  })
+})
+
+/**
+ * `\IfFileExists{f}{\input{f}}{…}`: a part of the paper that is there once a
+ * script has produced its file. The engine compiles it; before this the walk
+ * read the whole line as prose and the file was in no list.
+ */
+describe('a file pulled in only inside \\IfFileExists', () => {
+  const write = (epic: string, files: Record<string, string>) => {
+    for (const [path, text] of Object.entries(files)) {
+      const at = join(paperDir(epic), path)
+      mkdirSync(join(at, '..'), { recursive: true })
+      writeFileSync(at, text)
+    }
+  }
+  const says = (epic: string) =>
+    readPaper(epic, project)!.blocks.map((b) => ('segments' in b ? b.segments.map((s) => s.text).join('') : 'raw' in b ? b.raw : '')).join('\n')
+
+  const MAIN = [
+    '\\documentclass{article}',
+    '\\begin{document}',
+    '\\section{Before}',
+    'Some prose.',
+    '\\IfFileExists{generated/recode.tex}{\\section{Stability} \\input{generated/recode}}{\\section{Not yet}',
+    'It has not been generated.}',
+    '\\section{After}',
+    '\\end{document}',
+    '',
+  ].join('\n')
+
+  test('the true branch is followed when the file exists: its file, its sections and its text', () => {
+    write('cond', { 'main.tex': MAIN, 'generated/recode.tex': '\\subsection{Agreement}\nKappa was high.\n\\input{generated/deeper}\n', 'generated/deeper.tex': 'Deeper still.\n' })
+    const paper = readPaper('cond', project)!
+    expect(paper.files).toEqual(['main.tex', 'generated/recode.tex', 'generated/deeper.tex'])
+    expect(paper.outline.map((one) => one.text)).toEqual(['Before', 'Stability', 'Agreement', 'After'])
+    expect(says('cond')).toContain('Kappa was high.')
+    expect(says('cond')).toContain('Deeper still.')
+    expect(says('cond')).not.toContain('It has not been generated.')
+    /* The blocks of the branch are blocks of the file the branch is written
+       in, at their own offsets in it. */
+    const heading = paper.blocks.find((b) => b.kind === 'heading' && b.file === 'main.tex' && b.srcStart === Buffer.byteLength(MAIN.slice(0, MAIN.indexOf('\\section{Stability}'))))
+    expect(heading).toBeDefined()
+    expect(Object.keys(hashesOf('cond', project)!).sort()).toEqual([...paper.files].sort())
+    expect(listPapers(project).find((one) => one.epic === 'cond')?.files).toBe(3)
+  })
+
+  test('the false branch is read when it does not, and the file is not part of the paper', () => {
+    write('cond', { 'main.tex': MAIN })
+    const paper = readPaper('cond', project)!
+    expect(paper.files).toEqual(['main.tex'])
+    expect(paper.outline.map((one) => one.text)).toEqual(['Before', 'Not yet', 'After'])
+    expect(says('cond')).toContain('It has not been generated.')
+    expect(says('cond')).not.toContain('recode')
+  })
+
+  test('the name is tried as written and with .tex, and a file outside the paper does not exist', () => {
+    writeFileSync(join(root, 'outside.tex'), '\\section{Not the paper}\n')
+    write('cond', {
+      'main.tex':
+        '\\documentclass{article}\\begin{document}\n\\IfFileExists{parts/a}{\\input{parts/a}}{}\n'
+        + '\\IfFileExists{../../../../outside.tex}{\\section{Reached out}\\input{../../../../outside}}{\\section{Stayed in}}\n\\end{document}\n',
+      'parts/a.tex': '\\section{A}\n',
+    })
+    const paper = readPaper('cond', project)!
+    expect(paper.files).toEqual(['main.tex', 'parts/a.tex'])
+    expect(paper.outline.map((one) => one.text)).toEqual(['A', 'Stayed in'])
+  })
+
+  test('directly after prose with no blank line between, and when it is malformed', () => {
+    write('cond', {
+      'main.tex': '\\documentclass{article}\\begin{document}\nProse right above.\n\\IfFileExists{a}{\\input{a}}{}\n\n\\IfFileExists{a}{only one branch}\n\\end{document}\n',
+      'a.tex': '\\section{A}\n',
+    })
+    const paper = readPaper('cond', project)!
+    expect(paper.files).toEqual(['main.tex', 'a.tex'])
+    expect(says('cond')).toContain('only one branch')
+  })
+
+  test('the parser alone, with nobody to ask, takes the false branch', () => {
+    const blocks = parseLatex('\\IfFileExists{a}{\\input{a}}{\\section{No}}\n', 'x.tex').blocks
+    expect(blocks.map((b) => b.kind)).toEqual(['structure', 'heading'])
+    const asked: string[] = []
+    const yes = parseLatex('\\IfFileExists{ a }{\\input{a}}{\\section{No}}\n', 'x.tex', undefined, (f) => (asked.push(f), true)).blocks
+    expect(yes.map((b) => b.kind)).toEqual(['structure', 'include'])
+    expect(asked).toEqual(['a'])
   })
 })

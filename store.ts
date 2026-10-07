@@ -802,23 +802,19 @@ function hashOf(bytes: Uint8Array): string {
 export function listPapers(project: string | null): PaperBrief[] {
   const out: PaperBrief[] = []
   for (const root of roots(project)) {
-    const main = confine(root.dir, MAIN)
-    if (!main || !existsSync(main)) continue
-    let source: string
-    let bytes: number
-    try {
-      bytes = statSync(main).size
-      if (bytes > MAX_TEX_BYTES) continue
-      source = readFileSync(main, 'utf8')
-    } catch {
-      /* One unreadable paper must not make the other ten unreachable. */
-      continue
-    }
+    /* One unreadable paper must not make the other ten unreachable: `walk`
+       answers null for it and the list goes on. */
+    const walked = walk(root.dir)
+    if (!walked) continue
     out.push({
       epic: root.epic,
-      title: braced(source, 'title'),
-      files: 1 + includeTargets(source).length,
-      bytes,
+      title: braced(walked.source, 'title'),
+      /* The files `readPaper` would open, counted by the walk `readPaper`
+         makes. This used to be one plus the `\include`s written in `main.tex`
+         — a count of names rather than of files — and it said 2 for a paper
+         whose chapter `\input`s a table, which the reader opens 3 files of. */
+      files: walked.files.length,
+      bytes: walked.bytes,
     })
   }
   return out
@@ -888,45 +884,93 @@ function braced(source: string, command: string): string | null {
   return null
 }
 
-/** Every `\include{…}` / `\input{…}` target in a source, in the order written. */
-function includeTargets(source: string): string[] {
-  const out: string[] = []
-  for (const block of parseLatex(source, MAIN).blocks) {
-    if (block.kind === 'include') out.push(block.target)
-  }
-  return out
+/** A paper's files, opened and folded into reading order: what `walk` found. */
+interface Walked {
+  /** `main.tex`, decoded. */
+  source: string
+  /** The size of `main.tex` on disk. */
+  bytes: number
+  /** Every block in reading order, each with the file it came out of. Refs and citations not yet resolved. */
+  blocks: PlacedBlock[]
+  /** Every file that was opened, in the order it was reached. `main.tex` first. */
+  files: string[]
+  /** What each of those files was when it was opened. The same keys as `files`. */
+  hashes: Record<string, string>
 }
 
 /**
- * One paper, opened and parsed, with its chapters folded into reading order.
+ * The one walk of a paper's includes.
  *
- * ## Why `\include` is expanded here and not in the browser
+ * ## One, because it was three
  *
- * The page could be handed the main file and told to fetch each chapter. It is
- * not, for the reason every opinion in these apps is reached on this side: an
- * order assembled in two places is two orders, and this one disagreeing means a
- * reader is shown the argument's steps in the wrong sequence with nothing on
- * screen saying so. The document order is a fact about the source; it is
- * decided where the source is.
+ * `readPaper` followed every `\input` to any depth. `hashesOf` spelled the
+ * same recursion a second time, with a parse that had not been handed the
+ * paper's macros. `listPapers` did not recurse at all: it counted the
+ * `\include`s WRITTEN in `main.tex`, so a paper whose chapter `\input`s a
+ * table was "2 files" in the list and three in the reader — and a missing
+ * target was counted where the reader counts none. Three spellings of "which
+ * files is this paper made of" are three chances to disagree, and the page
+ * compares two of them against each other every few seconds to learn that a
+ * file moved. So there is this function, and all three call it.
  *
- * One level deep, deliberately. LaTeX's own `\include` cannot nest — it is
- * `\input` that can — and a paper that reached for arbitrary depth would be a
- * paper this reader could be made to walk in a cycle. A target that is itself
- * missing becomes an `unknown` block saying which file was not there, which is
- * a sentence a reader can act on; silently skipping it would present a paper
- * with a hole in it as a complete one.
+ * ## The walk
+ *
+ * `main.tex`, then every `\include`, `\input` and `\subfile` the parser
+ * reports as a block, folded in where it stands, to any depth.
+ *
+ * It used to be one level: `main.tex` includes a chapter and the chapter's
+ * own `\input{chapters/tables/results}` stayed a block saying "include". That
+ * was survivable while this module only DREW a paper. It is not now that the
+ * page edits one: a file the paper is really made of, that this list does not
+ * name, is a file the editor cannot open, the write door refuses, and a
+ * compile error cannot be pressed through to.
+ *
+ * Two fences on the walk itself. `seen` stops a file that includes itself, or
+ * two that include each other, from being read forever — TeX would stop that
+ * with an error and this must at least stop. `MAX_INCLUDE_DEPTH` is the bound
+ * for everything else. A target is resolved against the paper's ROOT and
+ * never against the file that names it, because that is what TeX does:
+ * `\input{chapters/b}` inside `chapters/a.tex` means `<root>/chapters/b.tex`.
+ * And every path goes through `confine`, so nothing outside the paper's
+ * folder is opened whatever the source says.
+ *
+ * ## `\IfFileExists`
+ *
+ * `\IfFileExists{f}{\input{f}}{}` is how a paper pulls in a part that a script
+ * may or may not have produced yet. The parser resolves it — see
+ * `parseBlocks` — and asks here whether `f` exists, since it reads no disk.
+ * It is answered with the same fence as an include: a target outside the
+ * root does not exist as far as this paper is concerned. LaTeX looks for the
+ * name as written and then with `.tex` added, and so does this. The true
+ * branch is read only when the file is there; otherwise the false branch is,
+ * which is what the engine compiles.
+ *
+ * ## The macros come out of `main.tex` and are handed to every file
+ *
+ * They have to be, and the reason is a one-line bug that looks like a
+ * rendering problem: `\gh`, `\mr` and `\work` are defined in the preamble of
+ * the main file and used almost exclusively inside `chapters/*.tex`, which
+ * have no preamble of their own. A chapter parsed on its own terms finds no
+ * definitions, falls back to "drop the wrapper, keep the argument", and
+ * renders every reference in the paper as a naked number — `111` where the
+ * PDF says `gh#111`. See the essay on `Macro` in the parser.
+ *
+ * `null` when `main.tex` is not there, is over the size bound or cannot be
+ * read. A chapter whose bytes cannot be read is not a file of the paper: it
+ * is absent from `files` and `hashes` alike and its include stays a block
+ * saying which file was not there — a sentence a reader can act on, where
+ * silently skipping it would present a paper with a hole in it as complete.
  */
-export function readPaper(epic: string, project: string | null): Paper | null {
-  if (!isEpic(epic)) return null
-  const root = paperRoot(epic, project)
-  if (!root) return null
+function walk(root: string): Walked | null {
   const main = confine(root, MAIN)
   if (!main || !existsSync(main)) return null
 
   let source: string
+  let size: number
   const hashes: Record<string, string> = {}
   try {
-    if (statSync(main).size > MAX_TEX_BYTES) return null
+    size = statSync(main).size
+    if (size > MAX_TEX_BYTES) return null
     /* The bytes, hashed, and only then decoded. Reading the string and encoding
        it again to hash it would be a hash of what this program made of the file
        rather than of the file, and the two differ for anything that is not
@@ -939,40 +983,19 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     return null
   }
 
-  /*
-   * The macros come out of `main.tex` and are handed to every chapter.
-   *
-   * They have to be, and the reason is a one-line bug that looks like a
-   * rendering problem: `\gh`, `\mr` and `\work` are defined in the preamble
-   * of the main file and used almost exclusively inside `chapters/*.tex`, which
-   * have no preamble of their own. A chapter parsed on its own terms finds no
-   * definitions, falls back to "drop the wrapper, keep the argument", and
-   * renders every reference in the paper as a naked number — `111` where the
-   * PDF says `gh#111`. See the essay on `Macro` in the parser.
-   */
+  const exists = (target: string): boolean => {
+    for (const name of target.endsWith('.tex') ? [target] : [target, `${target}.tex`]) {
+      const path = confine(root, name)
+      if (path && existsSync(path)) return true
+    }
+    return false
+  }
+
   const macros: ReadonlyMap<string, Macro> = findMacros(source)
-  const parsed = parseLatex(source, MAIN, macros)
+  const parsed = parseLatex(source, MAIN, macros, exists)
   const blocks: PlacedBlock[] = []
   const files: string[] = [MAIN]
 
-  /*
-   * Folded in to any depth, not one level.
-   *
-   * It used to be one level: `main.tex` includes a chapter and the chapter's
-   * own `\input{chapters/tables/results}` stayed a block saying "include". That
-   * was survivable while this module only DREW a paper. It is not now that the
-   * page edits one: a file the paper is really made of, that this list does
-   * not name, is a file the editor cannot open, the write door refuses, and a
-   * compile error cannot be pressed through to. So the walk follows every
-   * `\input` it meets.
-   *
-   * Two fences on the walk itself. `seen` stops a file that includes itself,
-   * or two that include each other, from being read forever — TeX would stop
-   * that with an error and this must at least stop. `MAX_INCLUDE_DEPTH` is the
-   * bound for everything else. A target is resolved against the paper's ROOT
-   * and never against the file that names it, because that is what TeX does:
-   * `\input{chapters/b}` inside `chapters/a.tex` means `<root>/chapters/b.tex`.
-   */
   const seen = new Set<string>([MAIN])
   const fold = (from: readonly Block[], file: string, depth: number): void => {
     for (const block of from) {
@@ -987,7 +1010,7 @@ export function readPaper(epic: string, project: string | null): Paper | null {
         try {
           if (statSync(child).size <= MAX_TEX_BYTES) {
             const bytes = readFileSync(child)
-            chapter = parseLatex(bytes.toString('utf8'), relative, macros)
+            chapter = parseLatex(bytes.toString('utf8'), relative, macros, exists)
             hashes[relative] = hashOf(bytes)
           }
         } catch {
@@ -1016,6 +1039,32 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     }
   }
   fold(parsed.blocks, MAIN, 0)
+
+  return { source, bytes: size, blocks, files, hashes }
+}
+
+/**
+ * One paper, opened and parsed, with its chapters folded into reading order.
+ *
+ * ## Why `\include` is expanded here and not in the browser
+ *
+ * The page could be handed the main file and told to fetch each chapter. It is
+ * not, for the reason every opinion in these apps is reached on this side: an
+ * order assembled in two places is two orders, and this one disagreeing means a
+ * reader is shown the argument's steps in the wrong sequence with nothing on
+ * screen saying so. The document order is a fact about the source; it is
+ * decided where the source is.
+ *
+ * Which files those are, and in what order, is `walk`'s to say — the one
+ * walk of the includes, which `hashesOf` and `listPapers` make too.
+ */
+export function readPaper(epic: string, project: string | null): Paper | null {
+  if (!isEpic(epic)) return null
+  const root = paperRoot(epic, project)
+  if (!root) return null
+  const walked = walk(root)
+  if (!walked) return null
+  const { source, blocks, files, hashes } = walked
 
   /*
    * Every `\ref` and every `\cite` in the paper, rewritten from its placeholder
@@ -1089,23 +1138,19 @@ export function readPaper(epic: string, project: string | null): Paper | null {
  *
  * ## Why this exists beside `readPaper`, which already answers it
  *
- * `readPaper` hands out `hashes` and could be called for them. It also parses
- * every chapter, builds the label index and opens the bibliography, which is
- * the right price for a paper somebody is about to read and the wrong price
- * for a question asked every four seconds by every open page: "has anything I
- * am showing moved on disk?" That question is answered by the bytes alone.
- * So this reads the bytes, hashes them, and parses only `main.tex` — the one
- * file that has to be parsed to know which other files the paper is made of.
+ * `readPaper` hands out `hashes` and could be called for them. It also builds
+ * the label index, opens the bibliography and resolves every reference, which
+ * is the right price for a paper somebody is about to read and the wrong
+ * price for a question asked every four seconds by every open page: "has
+ * anything I am showing moved on disk?" So this stops after the walk.
  *
  * ## The same keys, by construction
  *
  * The page compares this answer against `Paper.hashes` file by file, so the
  * two have to agree about which files a paper has: a file present in one and
- * absent from the other would read as a change that never happened. The loop
- * below is the same walk `readPaper` makes — `main.tex`, then each `\include`
- * target that resolves inside the root, exists and is under the size bound —
- * with the parse of the chapter left out. A chapter whose bytes cannot be
- * read is absent here as it is there.
+ * absent from the other would read as a change that never happened. They
+ * agree because both are `walk`'s answer — this used to be a second spelling
+ * of the same recursion, kept in step by a comment.
  *
  * `null` when there is no paper at all, which the page reads as "every file I
  * hold has gone" only after it has failed to fetch the paper again; it is not
@@ -1115,40 +1160,7 @@ export function hashesOf(epic: string, project: string | null): Record<string, s
   if (!isEpic(epic)) return null
   const root = paperRoot(epic, project)
   if (!root) return null
-  const main = confine(root, MAIN)
-  if (!main || !existsSync(main)) return null
-
-  const hashes: Record<string, string> = {}
-  let source: string
-  try {
-    if (statSync(main).size > MAX_TEX_BYTES) return null
-    const bytes = readFileSync(main)
-    hashes[MAIN] = hashOf(bytes)
-    source = bytes.toString('utf8')
-  } catch {
-    return null
-  }
-  /* The same walk `readPaper` makes, to the same depth and behind the same
-     fences, so that the two cannot name different sets of files — the page
-     compares one against the other to learn that a file moved. */
-  const walk = (text: string, depth: number): void => {
-    for (const target of includeTargets(text)) {
-      const relative = target.endsWith('.tex') ? target : `${target}.tex`
-      if (depth >= MAX_INCLUDE_DEPTH || relative in hashes) continue
-      const child = confine(root, relative)
-      if (!child || !existsSync(child)) continue
-      try {
-        if (statSync(child).size > MAX_TEX_BYTES) continue
-        const bytes = readFileSync(child)
-        hashes[relative] = hashOf(bytes)
-        walk(bytes.toString('utf8'), depth + 1)
-      } catch {
-        continue
-      }
-    }
-  }
-  walk(source, 0)
-  return hashes
+  return walk(root)?.hashes ?? null
 }
 
 /**
