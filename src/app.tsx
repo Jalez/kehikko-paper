@@ -22,7 +22,18 @@ import { Workspace } from './workspace.tsx'
 
 const FRAMED = typeof window !== 'undefined' && window.parent !== window
 
-export function App({ editor = SourceEditor, preview = PdfView }: { editor?: Editor; preview?: Preview }) {
+export function App({
+  editor = SourceEditor,
+  preview = PdfView,
+  saveDelay,
+  settle,
+}: {
+  editor?: Editor
+  preview?: Preview
+  /** Passed through to the workspace; a test shortens both. */
+  saveDelay?: number
+  settle?: number
+}) {
   const wire = usePaper(FRAMED)
   const { sight, said, resize } = wire
 
@@ -42,7 +53,7 @@ export function App({ editor = SourceEditor, preview = PdfView }: { editor?: Edi
     <div className="flex h-dvh min-h-0 flex-col px-2 pt-2 pb-1">
       {!FRAMED && <h1 className="mb-1 shrink-0 text-base font-semibold tracking-tight">Paper</h1>}
       {sight.at === 'reading' ? (
-        <Workspace paper={sight.paper} wire={wire} editor={editor} preview={preview} />
+        <Workspace paper={sight.paper} wire={wire} editor={editor} preview={preview} saveDelay={saveDelay} settle={settle} />
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           <Screen sight={sight} onStart={wire.start} />

@@ -230,9 +230,7 @@ export async function compile(epic: string, project: string | null): Promise<Bui
   const job = jobFor(root)
   job.generation += 1
   const mine = job.generation
-  /* By the handle of the child this process started. Never a name, never a
-     pattern: the person's own editor may be running the same engine. */
-  job.child?.kill('SIGKILL')
+  stop(job.child)
 
   const run = job.tail.then(async () => {
     if (mine !== job.generation) return
@@ -401,7 +399,33 @@ function failed(engine: Engine, started: number, why: string): BuildStatus['last
 }
 
 /**
+ * Stop an engine this process started, and everything it started.
+ *
+ * By pid, and only ever the pid of a child spawned HERE: never a name and never
+ * a pattern, because the person's own editor may be running the same engine on
+ * the same paper. The NEGATIVE pid is the whole process group, which is why
+ * `spawned` starts each engine as the leader of a group of its own —
+ * `latexmk` runs `pdflatex` runs `bibtex`, and killing only the first leaves
+ * the other two writing into a build folder the next compile has already
+ * emptied.
+ */
+function stop(child: ChildProcess | null): void {
+  if (!child || child.pid === undefined || child.exitCode !== null) return
+  try {
+    process.kill(-child.pid, 'SIGKILL')
+  } catch {
+    /* No such group: it finished between the check and the kill, or the
+       platform gave it none. The child alone, then. */
+    child.kill('SIGKILL')
+  }
+}
+
+/**
  * Run one argument list to its end, or to the timeout.
+ *
+ * `detached` makes the engine the leader of its own process group so that
+ * `stop` can end all of it; it is still this process's child, still piped, and
+ * is not unref'd — the server waits for it like any other.
  *
  * `shell: false` is the default and is written anyway, because it is the line
  * a reviewer looks for. `stdin` is closed: an engine that stops to ask a
@@ -417,7 +441,7 @@ function spawned(
   return new Promise((done) => {
     let child: ChildProcess
     try {
-      child = spawn(argv[0]!, argv.slice(1), { cwd, env: envFor(process.env), shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+      child = spawn(argv[0]!, argv.slice(1), { cwd, env: envFor(process.env), shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (error) {
       done({ code: null, output: '', timedOut: false, error: (error as Error).message })
       return
@@ -437,7 +461,7 @@ function spawned(
     child.stderr?.on('data', keep)
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGKILL')
+      stop(child)
     }, timeoutMs)
     const finish = (code: number | null, error: string | null) => {
       if (settled) return
@@ -528,7 +552,7 @@ export function syncReverse(
 
 /** For tests: forget every job. The folders in the temp directory are left; a test makes its own paper and so its own hash. */
 export function forgetBuilds(): void {
-  for (const job of jobs.values()) job.child?.kill('SIGKILL')
+  for (const job of jobs.values()) stop(job.child)
   jobs.clear()
 }
 
