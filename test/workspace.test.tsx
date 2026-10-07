@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { Passage } from 'kehikot-module-protocol'
 import { createHash } from 'node:crypto'
+import { useMemo, useState } from 'react'
 
 import { parseLatex } from '../latex/parse.ts'
 import { standIn } from '../src/api.ts'
 import { App } from '../src/app.tsx'
 import type { EditorProps } from '../src/editor/source-editor.tsx'
 import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
+import { usePaper } from '../src/use-paper.ts'
+import { placeShown, Workspace } from '../src/workspace.tsx'
 
 /**
  * The page's logic, with a textarea where CodeMirror goes and a stub where
@@ -44,6 +48,10 @@ let engine: string | null
 let built: string | null
 let lastPreview: PreviewProps | null
 let lastEditor: EditorProps | null
+/** Which page the fake SyncTeX says a line came out on. The page MAP says 2 for every line. */
+let rectPage: number
+/** Whether the fake SyncTeX has a record under a press on the PDF. */
+let recorded: boolean
 const fetchWas = globalThis.fetch
 
 const paperNow = () => {
@@ -93,8 +101,8 @@ function serve(method: string, path: string, query: URLSearchParams, body: Recor
     return [200, { ok: true, proposals, paper: paperNow(), said: body?.decision === 'accept' ? 'Committed.' : '' }]
   }
   if (path === '/api/sync') {
-    if (query.has('page')) return [200, { ok: true, found: { build: built, file: 'main.tex', line: 6 } }]
-    return [200, { ok: true, found: { build: built, exact: true, line: Number(query.get('line')), rects: [{ page: 2, x: 10, y: 20, w: 30, h: 8 }] } }]
+    if (query.has('page')) return [200, { ok: true, found: recorded ? { build: built, file: 'main.tex', line: 6 } : null }]
+    return [200, { ok: true, found: { build: built, exact: true, line: Number(query.get('line')), rects: [{ page: rectPage, x: 10, y: 20, w: 30, h: 8 }] } }]
   }
   return [404, { ok: false, error: `no ${method} ${path} in this test` }]
 }
@@ -128,6 +136,8 @@ beforeEach(() => {
   built = null
   lastPreview = null
   lastEditor = null
+  rectPage = 2
+  recorded = true
   ;(window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(`http://127.0.0.1:7870/app?project=${encodeURIComponent(PROJECT)}&epic=a-paper`)
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), 'http://127.0.0.1:7870')
@@ -312,5 +322,115 @@ describe('a suggested change', () => {
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
     const order = calls.filter((one) => one.method === 'POST' && (one.path === '/api/file' || one.path === '/api/proposal')).map((one) => one.path)
     expect(order).toEqual(['/api/file', '/api/proposal'])
+  })
+})
+
+/**
+ * A passage somebody else pointed at, and what this page reads out about it.
+ *
+ * The canvas is a host's to speak for, so the workspace is rendered here with
+ * everything `usePaper` gives it and `pointed` supplied by the test: that one
+ * field is the whole of what arrives.
+ */
+describe('a passage another module pointed at', () => {
+  let pointAt: (passage: Passage | null) => void = () => {}
+
+  function Framed() {
+    const wire = usePaper(false)
+    const [pointed, setPointed] = useState<Passage | null>(null)
+    pointAt = setPointed
+    const all = useMemo(() => ({ ...wire, pointed }), [wire, pointed])
+    if (wire.sight.at !== 'reading') return null
+    return (
+      <>
+        <Workspace paper={wire.sight.paper} wire={all} editor={Textarea} preview={Stub} saveDelay={15} settle={5} />
+        <p data-testid="said">{wire.said}</p>
+      </>
+    )
+  }
+
+  const fin = Buffer.from(MAIN).indexOf('Fin')
+  const there: Passage = { path: `${DIR}/main.tex`, page: 3, from: fin, to: fin + 3, quoted: 'Fin', section: null }
+  const toolbar = () => document.querySelector('[data-build]')!.textContent ?? ''
+  const section = () => (screen.getByLabelText('Sections') as HTMLSelectElement).options[0]!.textContent
+  const said = () => screen.getByTestId('said').textContent
+
+  const pointed = async () => {
+    built = 'kept'
+    render(<Framed />)
+    await screen.findByLabelText('LaTeX source')
+    /* The caret is at the top of the file: before any heading, on a line the
+       page map puts on page 2. */
+    await waitFor(() => expect(toolbar()).toContain('p. 2/3'))
+    expect(section()).toBe('Sections')
+    /* The passage is under “End”, and SyncTeX draws it on page 3. */
+    rectPage = 3
+    act(() => pointAt(there))
+    const at = MAIN.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 3}`))
+    await waitFor(() => expect(said()).toContain('Something pointed at main.tex'))
+  }
+
+  test('the toolbar reads out the passage’s page and section, not the caret’s old place', async () => {
+    await pointed()
+    await waitFor(() => expect(toolbar()).toContain('p. 3/3'))
+    expect(section()).toBe('End')
+    /* The caret itself was left alone: the passage is marked, not selected. */
+    expect(lastEditor!.jump?.keep).toBe(true)
+  })
+
+  test('picking another section is the person moving on: the toolbar is the caret’s again and the sentence is gone', async () => {
+    await pointed()
+    fireEvent.change(screen.getByLabelText('Sections'), { target: { value: '0' } })
+    await waitFor(() => expect(said()).toBe(''))
+    expect(section()).toBe('Sections')
+    expect(toolbar()).toContain('p. 2/3')
+  })
+
+  test('so is moving the caret, and a selection the editor merely repeats is not', async () => {
+    await pointed()
+    await waitFor(() => expect(toolbar()).toContain('p. 3/3'))
+    act(() => lastEditor!.onSelect({ from: 0, to: 0 }))
+    expect(said()).toContain('Something pointed at')
+    expect(section()).toBe('End')
+    const intro = MAIN.indexOf('A claim')
+    act(() => lastEditor!.onSelect({ from: intro, to: intro }))
+    await waitFor(() => expect(said()).toBe(''))
+    expect(section()).toBe('Intro')
+  })
+
+  test('a press on the PDF moves on too', async () => {
+    await pointed()
+    lastPreview!.onPoint({ page: 2, x: 1, y: 1, word: null })
+    await waitFor(() => expect(said()).toBe(''))
+  })
+
+  test('the sentence goes when the canvas lets go, and one about a file elsewhere is taken down the same way', async () => {
+    await pointed()
+    act(() => pointAt({ ...there, path: '/elsewhere/notes.md' }))
+    await waitFor(() => expect(said()).toContain('not part of the paper open here'))
+    expect(toolbar()).toContain('p. 2/3')
+    act(() => pointAt(null))
+    await waitFor(() => expect(said()).toBe(''))
+  })
+
+  test('what else has been said since is not taken down with it', async () => {
+    await pointed()
+    /* A press where SyncTeX has no record says so, in the same one line. */
+    recorded = false
+    lastPreview!.onPoint({ page: 2, x: 1, y: 1, word: null })
+    await waitFor(() => expect(said()).toContain('Nothing in this paper’s own files is recorded'))
+    fireEvent.change(screen.getByLabelText('Sections'), { target: { value: '0' } })
+    await waitFor(() => expect(section()).toBe('Sections'))
+    expect(said()).toContain('Nothing in this paper’s own files is recorded')
+  })
+
+  test('placeShown: the passage wins outright while it is shown', () => {
+    const caret = { page: 11, section: 'Introduction' }
+    expect(placeShown(caret, null)).toEqual(caret)
+    expect(placeShown(caret, { section: 'Results', marked: 12, mapped: 13 })).toEqual({ page: 12, section: 'Results' })
+    expect(placeShown(caret, { section: 'Results', marked: null, mapped: 13 })).toEqual({ page: 13, section: 'Results' })
+    /* Not known is not the caret's: nothing is shown rather than the old place. */
+    expect(placeShown(caret, { section: null, marked: null, mapped: null })).toEqual({ page: null, section: null })
   })
 })

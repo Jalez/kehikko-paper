@@ -75,6 +75,17 @@ includes itself read once. A target is resolved against the paper's folder, as
 TeX does. An `\input` in the middle of a paragraph is not seen by the parser;
 put it on its own line.
 
+`\IfFileExists{f}{…}{…}` at the start of a line is resolved the way the engine
+resolves it: the true branch is read when `f` (or `f.tex`) is in the paper's
+folder, the false branch when it is not. So a part pulled in with
+`\IfFileExists{generated/t}{\input{generated/t}}{}` is a file of the paper
+exactly when it is on disk.
+
+There is one walk of the includes (`walk` in `store.ts`), and the file list,
+the section list, `read_paper`, the hashes the page polls and the count
+`list_papers` reports all come from it, so none of them can name a different
+set of files from another.
+
 ## The editor
 
 CodeMirror 6, through `@uiw/react-codemirror` — the same editor, wrapper and
@@ -171,8 +182,13 @@ was read on. It does not record glyphs and it has no columns. So:
 - **PDF to source** is exact to the source line under the click.
 - **Finer than a line** is done by matching against the PDF's own text
   (`src/pdf/words.ts`): the clicked word is looked for on the named line and
-  selected, and the first and last words of a selection pull the ends of its
-  rectangles in. When no match is found the line-level answer stands.
+  selected, and the first and last words of a selection are looked for under
+  ALL of its rectangles — a source line is often printed over two — so that
+  the rectangles it does not reach are dropped and the two it ends in are
+  pulled in. A word's position in a run of PDF text is an estimate by
+  proportion, good to a character or two, so a pulled-in end keeps two
+  characters of margin rather than risk cutting into the word. When no match
+  is found the line-level answer stands, and nothing is ever widened past it.
 
 Measured on a 20-page paper (661 prose lines, 1,177 words clicked), with
 Tectonic: every source line's rectangles were on the printed lines holding its
@@ -229,6 +245,12 @@ since the anchor is in bytes of the very file the editor holds — and shown in
 the PDF through SyncTeX. A section with no range goes to its heading. After
 adopting somebody else's passage this page says nothing until a person touches
 it, so it cannot answer its own echo (`shouldPublish`, with tests).
+
+The caret is left where it was — the passage is marked, not selected — so
+while that passage is what this page is showing, the toolbar reads out the
+PASSAGE's page and section rather than the caret's. That, and the sentence
+saying something pointed here, last until the person goes somewhere of their
+own accord: places the caret, picks a file or a section, presses the PDF.
 
 ## A change an agent suggests
 

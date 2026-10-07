@@ -141,6 +141,41 @@ export function Workspace({
   /** Somebody else's anchor, in bytes of a file of this paper. */
   const [foreign, setForeign] = useState<{ file: string; from: number; to: number; quoted: string } | null>(null)
   const [adopted, setAdopted] = useState(false)
+  /**
+   * Whether what is on screen is still the passage somebody pointed at.
+   *
+   * Not the same question as `adopted`, which is about SPEAKING and is lifted
+   * by any gesture at all, a wheel included. This one is about what the
+   * toolbar reads out and whether the sentence about being pointed here is
+   * still true, and it ends only when the person goes somewhere else: places
+   * the caret, picks a file or a section, presses the PDF.
+   *
+   * It exists because walking to a foreign passage deliberately leaves the
+   * caret alone — the passage is MARKED, the selection stays the person's —
+   * so everything derived from the caret went on describing the place the
+   * person had been. Paper opened a passage on page 12 and the toolbar said
+   * "p. 11/20" and named the file's first section.
+   */
+  const [onPassage, setOnPassage] = useState(false)
+  /* The sentence this page said about being pointed somewhere, while it is
+     the one on screen. Kept so that it can be taken down again without
+     taking down whatever else has been said since — a save's answer, a
+     commit's — which share the one line. */
+  const noticed = useRef<string | null>(null)
+  const notice = useCallback(
+    (words: string | null) => {
+      const was = noticed.current
+      noticed.current = words
+      if (words !== null) setSaid(words)
+      else if (was !== null) setSaid((now) => (now === was ? '' : now))
+    },
+    [setSaid],
+  )
+  /** The person went somewhere of their own accord: the passage is no longer what this page is showing. */
+  const wandered = useCallback(() => {
+    setOnPassage(false)
+    notice(null)
+  }, [notice])
 
   useLayoutEffect(() => {
     setSelection({ from: 0, to: 0 })
@@ -198,6 +233,19 @@ export function Workspace({
   const map = build?.pdf?.map ?? null
   const page = useMemo(() => (map ? pageOfLine(map, file, fromLine) : null), [map, file, fromLine])
 
+  /* A caret that MOVED is the person going somewhere. Compared with what is
+     held, because the editor also reports a selection when the disk's text
+     replaces its own, and that is nobody navigating. */
+  const held = useRef(selection)
+  held.current = selection
+  const onSelect = useCallback(
+    (next: { from: number; to: number }) => {
+      if (held.current.from !== next.from || held.current.to !== next.to) wandered()
+      setSelection(next)
+    },
+    [wandered],
+  )
+
   /* ---- What this page says to the canvas -------------------------------- */
 
   const sheet = useMemo<Sheet>(
@@ -232,7 +280,11 @@ export function Workspace({
       walkedFor.current = null
       setForeign(null)
       setAdopted(false)
-      if (answer.at === 'elsewhere') setSaid(answer.said)
+      setOnPassage(false)
+      /* And the sentence about the last passage goes with it — the person
+         selected something of their own, or the canvas let go — unless there
+         is a new one to say. */
+      notice(answer.at === 'elsewhere' ? answer.said : null)
       return
     }
     setForeign({ file: answer.file, from: answer.from, to: answer.to, quoted: pointed?.quoted ?? '' })
@@ -242,12 +294,13 @@ export function Workspace({
     if (walkedFor.current !== stamp) {
       walkedFor.current = stamp
       go({ file: answer.file, bytes: { from: answer.from, to: answer.to }, foreign: true })
-      setSaid(answer.said)
+      notice(answer.said)
+      setOnPassage(true)
     }
     /* Everything this page does next is a consequence of that passage and is
        not news: quiet, until a person touches something. See `shouldPublish`. */
     setAdopted(true)
-  }, [paper, pointed, go, setSaid])
+  }, [paper, pointed, go, notice])
 
   useEffect(() => {
     if (!adopted) return
@@ -361,6 +414,29 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask])
 
+  /* ---- What the toolbar reads out ---------------------------------------- */
+
+  /* The caret's page and section — unless this page is showing a passage it
+     was pointed at, and then THAT passage's: see `onPassage`. The page is the
+     one its mark is drawn on when SyncTeX has answered, and the one the page
+     map gives its first line until then. */
+  const showing = onPassage ? foreign : null
+  const shown = useMemo(
+    () =>
+      placeShown(
+        { page, section: here?.title ?? null },
+        showing && {
+          section: sectionAt(sections, showing.file, showing.from)?.title ?? null,
+          marked: foreignRects[0]?.page ?? null,
+          mapped:
+            map && foreignText !== undefined && foreignDoc
+              ? pageOfLine(map, showing.file, lineAt(foreignText, indexAt(foreignText, showing.from, foreignDoc.eol)))
+              : null,
+        },
+      ),
+    [page, here, showing, sections, foreignRects, map, foreignText, foreignDoc],
+  )
+
   const marks = useMemo<PdfMark[]>(() => {
     const out: PdfMark[] = []
     /* The foreign mark first: `reveal` scrolls to the first mark, and what
@@ -401,12 +477,13 @@ export function Workspace({
             setSaid('Nothing in this paper’s own files is recorded at that spot — it was set by the class or a package.')
             return
           }
+          wandered()
           go({ file: found.file, line: found.line, word: at.word, select: true, focus: true })
           setTab('source')
         })
         .catch(() => {})
     },
-    [paper.epic, go, setSaid],
+    [paper.epic, go, setSaid, wandered],
   )
 
   /* ---- The engine's complaints ------------------------------------------ */
@@ -477,10 +554,11 @@ export function Workspace({
 
   const showProposal = useCallback(
     (proposal: Proposal) => {
+      wandered()
       go({ file: proposal.file, bytes: { from: proposal.from, to: proposal.to }, select: true, focus: true })
       setTab('source')
     },
-    [go],
+    [go, wandered],
   )
 
   const saved =
@@ -502,7 +580,10 @@ export function Workspace({
           <select
             className="border-input bg-background w-0 max-w-[12rem] min-w-0 flex-1 basis-[5.5rem] rounded border px-1 py-0.5 font-mono"
             value={file}
-            onChange={(event) => source.open(event.target.value)}
+            onChange={(event) => {
+              wandered()
+              source.open(event.target.value)
+            }}
             aria-label="File"
           >
             {paper.files.map((one) => (
@@ -519,13 +600,14 @@ export function Workspace({
             onChange={(event) => {
               const picked = sections[Number(event.target.value)]
               if (picked) {
+                wandered()
                 go({ file: picked.file, bytes: { from: picked.at, to: picked.at }, focus: true })
                 setTab('source')
               }
             }}
             aria-label="Sections"
           >
-            <option value="">{here ? here.title : 'Sections'}</option>
+            <option value="">{shown.section ?? 'Sections'}</option>
             {sections.map((one, i) => (
               <option key={i} value={i}>
                 {`${'  '.repeat(Math.max(0, one.level - 1))}${one.title}`}
@@ -539,7 +621,7 @@ export function Workspace({
         <span className="flex-1" />
         <span className={cn('text-muted-foreground', failed && 'text-(--gone)')} data-build={compiling ? 'running' : failed ? 'failed' : build?.last ? 'ok' : 'idle'}>
           {engineSays}
-          {page !== null && build?.pdf?.pages ? ` · p. ${page}/${build.pdf.pages}` : ''}
+          {shown.page !== null && build?.pdf?.pages ? ` · p. ${shown.page}/${build.pdf.pages}` : ''}
         </span>
         {build?.engine && (
           <Button variant="outline" size="container" disabled={compiling} onClick={() => void source.flush().then(() => compile())}>
@@ -600,7 +682,7 @@ export function Workspace({
                 key={`${paper.epic}\0${file}`}
                 value={doc.text}
                 onChange={source.edit}
-                onSelect={setSelection}
+                onSelect={onSelect}
                 onSave={() => void source.flush()}
                 jump={jump}
                 mark={
@@ -634,6 +716,7 @@ export function Workspace({
                         className="mr-1.5 font-mono underline underline-offset-2"
                         data-problem={`${one.file}:${one.line}`}
                         onClick={() => {
+                          wandered()
                           go({ file: one.file!, line: one.line!, focus: true })
                           setTab('source')
                         }}
@@ -685,6 +768,28 @@ export function Workspace({
 }
 
 const NONE: readonly Problem[] = []
+
+/**
+ * The page and section the toolbar reads out.
+ *
+ * `caret` is where the person's caret is. `passage` is the passage this page
+ * was pointed at and is still showing, or null when there is none or the
+ * person has since gone somewhere else. While there is one it wins outright —
+ * its section even when that is "none", since naming the caret's section over
+ * somebody else's passage is the wrong answer this exists to stop.
+ *
+ * Its page is the one its mark is drawn on (`marked`, from SyncTeX), then the
+ * one the page map gives its first line (`mapped`) while SyncTeX has not
+ * answered, and null — nothing shown — rather than the caret's page when
+ * neither is known.
+ */
+export function placeShown(
+  caret: { page: number | null; section: string | null },
+  passage: { section: string | null; marked: number | null; mapped: number | null } | null,
+): { page: number | null; section: string | null } {
+  if (!passage) return caret
+  return { page: passage.marked ?? passage.mapped, section: passage.section }
+}
 
 function sameHashes(a: Record<string, string>, b: Record<string, string>): boolean {
   const keys = Object.keys(a)
