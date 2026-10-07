@@ -16,6 +16,19 @@
  *    rather than guessed, because a guess that opens the wrong chapter at line
  *    12 is worse than a message that says only "line 12".
  *
+ * ## A fourth: what a tool Tectonic ran said
+ *
+ * Tectonic runs `biber` itself for a `biblatex` paper, and when that fails it
+ * prints three `error:` lines that are only a frame — "the external tool
+ * exited with an error code; its stdout was:", "its stderr was:", "the
+ * external tool exited with error code 2" — with the tool's own words between
+ * rules of `=` signs, on lines that begin with nothing this reader knew. So a
+ * person was shown the frame and none of the picture: "exited with error code
+ * 2", and not biber's plain statement that it and the bundled `biblatex` are
+ * of different releases. The lines between the rules are read here: biber's
+ * `ERROR - ` lines become errors, with the sentences that follow them, and a
+ * block that has no such line is kept whole, since something in it is why.
+ *
  * ## What is NOT reported
  *
  * `Overfull \hbox` and `Underfull \hbox`. A real paper has dozens, none of them
@@ -54,8 +67,37 @@ export function problemsFrom(output: string, log: string, resolve: (name: string
     out.push({ ...problem, message })
   }
 
+  /* Inside what a tool Tectonic ran printed: null when not, else the lines so
+     far. `opened` is whether the first rule of `=` has been passed. */
+  let quoted: string[] | null = null
+  let opened = false
+
   for (const raw of output.split('\n')) {
     const line = raw.trimEnd()
+
+    if (quoted) {
+      if (RULE.test(line)) {
+        if (!opened) opened = true
+        else {
+          for (const problem of saidByTool(quoted)) add(problem)
+          quoted = null
+        }
+        continue
+      }
+      /* A frame with no rule after it is not a frame; read the line as usual. */
+      if (opened) {
+        quoted.push(line)
+        continue
+      }
+      if (line) quoted = null
+      else continue
+    }
+
+    if (FRAME.test(line)) {
+      quoted = []
+      opened = false
+      continue
+    }
 
     /* Tectonic: `error: file:12: message` / `warning: file:12: message`. */
     const tectonic = /^(error|warning):\s+(.*)$/.exec(line)
@@ -76,6 +118,9 @@ export function problemsFrom(output: string, log: string, resolve: (name: string
     const placed = /^(\.{0,2}\/?[^\s:]+\.(?:tex|cls|sty|bib|bbl|ltx)):(\d+):\s*(.*)$/.exec(line)
     if (placed) add({ severity: 'error', file: resolve(placed[1]!), line: Number(placed[2]), message: placed[3]! })
   }
+
+  /* Output that ended inside a tool's block — a killed run — still said it. */
+  if (quoted && opened) for (const problem of saidByTool(quoted)) add(problem)
 
   /* The log, for what stderr did not carry: classic `!` errors when nothing
      above found one, and LaTeX's own warnings — an undefined reference or
@@ -109,6 +154,67 @@ export function problemsFrom(output: string, log: string, resolve: (name: string
 
   /* Errors first: they are why there is no new PDF. */
   return [...out.filter((one) => one.severity === 'error'), ...out.filter((one) => one.severity === 'warning')]
+}
+
+/** The two `error:` lines Tectonic puts around a tool's output. They say nothing themselves. */
+const FRAME = /^error:\s+(?:the external tool exited with an error code; )?its (?:stdout|stderr) was:\s*$/
+const RULE = /^={20,}\s*$/
+
+/**
+ * What a tool said, out of the lines Tectonic quoted.
+ *
+ * Biber prefixes every line with its level. An `ERROR - ` line is the error,
+ * and the unprefixed lines after it are the rest of the same sentence — biber
+ * wraps its explanation onto them — so they are joined to it. `INFO - ` is
+ * chatter. A block with no `ERROR - ` in it and something else is kept as one
+ * message: a tool that failed without a level is still the reason.
+ */
+function saidByTool(lines: readonly string[]): Problem[] {
+  const out: Problem[] = []
+  let current: Problem | null = null
+  const rest: string[] = []
+  for (const line of lines) {
+    const levelled = /^(ERROR|WARN|INFO|DEBUG)\s+-\s+(.*)$/.exec(line)
+    if (levelled) {
+      current = null
+      if (levelled[1] === 'ERROR' || levelled[1] === 'WARN') {
+        current = { severity: levelled[1] === 'ERROR' ? 'error' : 'warning', file: null, line: null, message: levelled[2]!.replace(/^Error:\s*/, '') }
+        out.push(current)
+      }
+      continue
+    }
+    if (!line.trim()) continue
+    if (current) current.message += ` ${line.trim()}`
+    else rest.push(line.trim())
+  }
+  if (!out.some((one) => one.severity === 'error') && rest.length) {
+    out.unshift({ severity: 'error', file: null, line: null, message: rest.slice(-6).join(' ') })
+  }
+  const advice = biberAdvice(out.map((one) => one.message).join('\n'))
+  if (advice) out.push({ severity: 'error', file: null, line: null, message: advice })
+  return out
+}
+
+/**
+ * What to do about the one tool failure worth a sentence of its own.
+ *
+ * Biber and `biblatex` must be of the same release — biber 2.N goes with
+ * biblatex 3.N — and nothing keeps them so: the `biblatex` is whichever one
+ * the engine's bundle carries, and the biber is whichever one is on this
+ * machine. Biber's own message names both versions and says to consult a
+ * compatibility matrix; this says which biber to get, because that is the
+ * only thing a person can change, and that the paper is not at fault.
+ */
+export function biberAdvice(said: string): string | null {
+  const versions = /biber \((\d+)\.(\d+)\) and biblatex \((\d+)\.(\d+)\) versions are incompatible/.exec(said)
+  if (!versions) return null
+  const biber = `${versions[1]}.${versions[2]}`
+  const biblatex = `${versions[3]}.${versions[4]}`
+  return (
+    `Nothing is wrong in the paper. The engine’s biblatex is ${biblatex} and the biber installed on this machine is ${biber}; ` +
+    `they have to be of the same release, which for biblatex ${biblatex} is biber 2.${versions[4]}. ` +
+    `Install that biber and put it first on the PATH, or compile with a TeX Live install (latexmk), where the two come matched.`
+  )
 }
 
 function tidy(message: string): string {
