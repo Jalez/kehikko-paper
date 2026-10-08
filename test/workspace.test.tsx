@@ -340,6 +340,63 @@ describe('a suggested change', () => {
 })
 
 /**
+ * A change nobody on this page made: where it is, shown without being asked.
+ *
+ * The polls are woken the way a returning tab wakes them, so a suggestion or a
+ * save "arrives" here exactly as it does while somebody watches.
+ */
+describe('a change that arrives', () => {
+  const at = MAIN.indexOf('tpyo')
+  const suggestion = () => ({ id: 'p1', file: 'main.tex', from: at, to: at + 4, text: 'typo', was_text: 'tpyo', was: hashOf(MAIN), why: 'A misspelling.', by: 'an agent', at: 1, asked: { find: 'tpyo', replace: 'typo' } })
+  const wake = () => act(() => void document.dispatchEvent(new Event('visibilitychange')))
+  const source = () => screen.getByLabelText('LaTeX source')
+
+  test('a suggestion already waiting when the paper is opened takes nobody anywhere', async () => {
+    proposals = [suggestion()]
+    await open()
+    await screen.findByText('A misspelling.')
+    expect(source().getAttribute('data-mark')).toBe('')
+    expect(source().getAttribute('data-jump')).toBe('')
+  })
+
+  test('one that arrives is marked and gone to, the tab is left alone, and the Source tab counts it', async () => {
+    built = 'kept'
+    await open()
+    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    proposals = [suggestion()]
+    wake()
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 4}`))
+    expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`)
+    expect(screen.getByRole('tab', { name: 'PDF' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'Source · 1' })).toBeDefined()
+    expect(await screen.findByText(/A change was suggested in main\.tex/)).toBeDefined()
+    /* On the page too, in the colour of a passage somebody else chose. */
+    await waitFor(() => expect(lastPreview!.marks.some((mark) => mark.foreign)).toBe(true))
+    /* Rejected: there is nothing left to point at. */
+    fireEvent.click(screen.getByRole('tab', { name: 'Source · 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(''))
+  })
+
+  test('somebody typing is not scrolled away: the mark is made and the editor stays', async () => {
+    const editor = await open()
+    editor.focus()
+    proposals = [suggestion()]
+    wake()
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 4}`))
+    expect(source().getAttribute('data-jump')).toBe('')
+  })
+
+  test('text that lands from the disk is marked where it changed', async () => {
+    await open()
+    disk['main.tex'] = MAIN.replace('tpyo', 'mistake')
+    wake()
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 'mistake'.length}`))
+    expect(await screen.findByText(/main\.tex changed on disk/)).toBeDefined()
+  })
+})
+
+/**
  * A passage somebody else pointed at, and what this page reads out about it.
  *
  * The canvas is a host's to speak for, so the workspace is rendered here with

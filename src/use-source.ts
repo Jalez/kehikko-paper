@@ -94,6 +94,8 @@ export function useSource({
   const [saving, setSaving] = useState(false)
   /** Bumped whenever the disk's text replaced the editor's, so the page knows to compile again. */
   const [taken, setTaken] = useState(0)
+  /** What the last text taken from the disk changed: a file and a range of its NEW text, in characters. */
+  const [changed, setChanged] = useState<Changed | null>(null)
 
   const epicRef = useRef(epic)
   const landed = useRef(onLanded)
@@ -244,6 +246,7 @@ export function useSource({
           if (!held || got.hash === held.hash) return
           if (held.text === held.saved) {
             docs.current.set(name, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
+            setChanged((was) => changedBy(name, held.text, got.text, was))
             setTaken((n) => n + 1)
             redraw()
             return
@@ -260,7 +263,9 @@ export function useSource({
   const takeTheirs = useCallback(() => {
     const at = conflictRef.current
     if (!at) return
+    const mine = docs.current.get(at.file)?.text
     docs.current.set(at.file, { text: at.theirs, saved: at.theirs, hash: at.hash, eol: at.eol })
+    if (mine !== undefined) setChanged((was) => changedBy(at.file, mine, at.theirs, was))
     setConflict(null)
     setTaken((n) => n + 1)
     redraw()
@@ -287,8 +292,34 @@ export function useSource({
   const state: SaveState = saving ? 'saving' : failure || conflict ? 'failed' : dirty ? 'dirty' : 'saved'
 
   return useMemo(
-    () => ({ file, open: setFile, doc, edit, flush, state, failure, conflict, takeTheirs, keepMine, taken, docs: docs.current }),
+    () => ({ file, open: setFile, doc, edit, flush, state, failure, conflict, takeTheirs, keepMine, taken, changed, docs: docs.current }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [file, doc, doc?.text, doc?.hash, edit, flush, state, failure, conflict, takeTheirs, keepMine, taken],
+    [file, doc, doc?.text, doc?.hash, edit, flush, state, failure, conflict, takeTheirs, keepMine, taken, changed],
   )
+}
+
+/** A stretch of a file's text that the disk replaced. `n` counts them, so the same range twice is still news. */
+export interface Changed {
+  file: string
+  from: number
+  to: number
+  n: number
+}
+
+/**
+ * Where two texts differ, as a range of the NEW one.
+ *
+ * What they share at the front and at the back is set aside and the rest is
+ * the change: one edit comes back as itself, several as the stretch from the
+ * first to the last. Empty when something was only taken out. That is enough
+ * to take a person to it, which is all this is for.
+ */
+export function changedBy(file: string, old: string, next: string, was: Changed | null): Changed | null {
+  if (old === next) return was
+  const most = Math.min(old.length, next.length)
+  let front = 0
+  while (front < most && old.charCodeAt(front) === next.charCodeAt(front)) front += 1
+  let back = 0
+  while (back < most - front && old.charCodeAt(old.length - 1 - back) === next.charCodeAt(next.length - 1 - back)) back += 1
+  return { file, from: front, to: next.length - back, n: (was?.n ?? 0) + 1 }
 }

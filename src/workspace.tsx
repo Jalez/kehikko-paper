@@ -16,7 +16,7 @@ import { headline, inFocus, narrowed, notesOf, pagesShown, type Narrowed } from 
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
-import { placeWord } from './pdf/words.ts'
+import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
 import { ProposalsPanel } from './proposals-panel.tsx'
 import { autoApproveKey, autoApproveWas, rememberAutoApprove } from './remembered.ts'
@@ -201,7 +201,20 @@ export function Workspace({
   const [jump, setJump] = useState<{ from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean } | null>(null)
   const [going, setGoing] = useState<Going | null>(null)
   /** Somebody else's anchor, in bytes of a file of this paper. */
-  const [foreign, setForeign] = useState<{ file: string; from: number; to: number; quoted: string } | null>(null)
+  const [theirs, setForeign] = useState<{ file: string; from: number; to: number; quoted: string } | null>(null)
+  /**
+   * A change this page is drawing attention to: a suggestion that arrived, or
+   * text that landed from the disk. In bytes of a file, like `theirs`.
+   *
+   * It is marked exactly as a passage somebody pointed at is — in the source
+   * without touching the selection, on the PDF in the other colour — because
+   * it IS that: a place somebody else chose. What the canvas points at
+   * outranks it, and going anywhere of one's own accord takes it down.
+   */
+  const [noted, setNoted] = useState<{ file: string; from: number; to: number; proposal?: string } | null>(null)
+  const notedRef = useRef(noted)
+  notedRef.current = noted
+  const foreign = theirs ?? noted
   const [adopted, setAdopted] = useState(false)
   /**
    * Whether what is on screen is still the passage somebody pointed at.
@@ -236,6 +249,7 @@ export function Workspace({
   /** The person went somewhere of their own accord: the passage is no longer what this page is showing. */
   const wandered = useCallback(() => {
     setOnPassage(false)
+    setNoted(null)
     notice(null)
   }, [notice])
 
@@ -355,6 +369,9 @@ export function Workspace({
       walkedFor.current = null
       setForeign(null)
       setAdopted(false)
+      /* A change being shown is not the canvas's passage, and the paper being
+         re-read after it landed is no reason to stop showing it. */
+      if (notedRef.current && answer.at !== 'elsewhere') return
       setOnPassage(false)
       /* And the sentence about the last passage goes with it — the person
          selected something of their own, or the canvas let go — unless there
@@ -523,7 +540,7 @@ export function Workspace({
        somebody pointed at outranks where the caret happens to be. */
     if (foreign && foreignRects.length) {
       const whole = foreignText !== undefined && foreignDoc
-        ? foreignText.slice(indexAt(foreignText, foreign.from, foreignDoc.eol), indexAt(foreignText, foreign.to, foreignDoc.eol))
+        ? wholeWords(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol), indexAt(foreignText, foreign.to, foreignDoc.eol))
         : null
       out.push({ rects: foreignRects, source: whole, foreign: true })
     }
@@ -643,6 +660,74 @@ export function Workspace({
       }
     })()
   }, [auto, proposals, answerOne])
+
+  /**
+   * Draw attention to a change: mark it, and go to it unless the person is typing.
+   *
+   * The tab is never changed. With the PDF in front the change is marked on
+   * the page and the Source tab says how many suggestions are waiting; with
+   * the source in front the editor is scrolled to it and the selection is left
+   * alone. A person in the middle of a sentence is not scrolled away from it:
+   * the mark is made, the line at the bottom says so, and the editor stays.
+   */
+  const editorBox = useRef<HTMLDivElement>(null)
+  const attend = useCallback(
+    (at: { file: string; from: number; to: number; proposal?: string }, words: string) => {
+      setNoted(at)
+      const typing = editorBox.current !== null && editorBox.current.contains(document.activeElement)
+      if (typing) {
+        notice(words)
+        return
+      }
+      go({ file: at.file, bytes: { from: at.from, to: at.to }, foreign: true })
+      setOnPassage(true)
+      notice(outsideRef.current(at.file) ? `${words} ${outsidePassage(focusRef.current)}` : words)
+    },
+    [go, notice],
+  )
+
+  /* A suggestion that ARRIVES is shown. Those already waiting when the paper
+     was opened are not: nobody asked to be taken anywhere by opening it. And
+     under Auto nothing waits — it is accepted, and what lands is shown. */
+  const known = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    /* Until the list has been heard once, what is in it is not an arrival. */
+    if (!wire.proposalsHeard) return
+    const was = known.current
+    known.current = new Set(proposals.map((one) => one.id))
+    const waiting = notedRef.current?.proposal
+    if (waiting && !known.current.has(waiting)) setNoted((now) => (now?.proposal === waiting ? null : now))
+    if (was === null || auto) return
+    const fresh = proposals.filter((one) => !was.has(one.id))
+    const first = fresh[0]
+    if (!first) return
+    attend(
+      { file: first.file, from: first.from, to: first.to, proposal: first.id },
+      `${fresh.length === 1 ? 'A change was suggested' : `${fresh.length} changes were suggested`} in ${first.file}. `
+        + 'What it would replace is marked; accept or reject it above the source.',
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposals, wire.proposalsHeard])
+  /* Another paper: what was waiting in the last one is not news in this one. */
+  useLayoutEffect(() => {
+    known.current = null
+    setNoted(null)
+  }, [paper.epic])
+
+  /* Text that landed from the disk — a suggestion accepted, another editor's
+     save — is shown too: where it changed, marked, and on the PDF once the
+     compile that follows has caught up. */
+  const landedChange = source.changed
+  useEffect(() => {
+    if (!landedChange) return
+    const held = source.docs.get(landedChange.file)
+    if (!held) return
+    attend(
+      { file: landedChange.file, from: byteAt(held.text, landedChange.from, held.eol), to: byteAt(held.text, landedChange.to, held.eol) },
+      `${landedChange.file} changed on disk. What changed is marked.`,
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [landedChange?.n])
 
   const showProposal = useCallback(
     (proposal: Proposal) => {
@@ -776,7 +861,7 @@ export function Workspace({
       <div role="tablist" className="flex shrink-0 gap-1 border-b px-1 py-1 @min-[720px]:hidden">
         {(['source', 'pdf'] as const).map((one) => (
           <Button key={one} role="tab" aria-selected={tab === one} variant={tab === one ? 'outline' : 'ghost'} size="container" onClick={() => setTab(one)}>
-            {one === 'source' ? 'Source' : failed ? 'PDF ·!' : 'PDF'}
+            {one === 'source' ? (tab === 'pdf' && proposals.length ? `Source · ${proposals.length}` : 'Source') : failed ? 'PDF ·!' : 'PDF'}
           </Button>
         ))}
       </div>
@@ -811,7 +896,7 @@ export function Workspace({
               )}
             </div>
           )}
-          <div className="min-h-0 flex-1">
+          <div ref={editorBox} className="min-h-0 flex-1">
             {doc ? (
               <EditorPane
                 key={`${paper.epic}\0${file}`}

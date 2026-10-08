@@ -254,6 +254,8 @@ export function usePaper(framed: boolean) {
   }, [])
 
   const [proposals, setProposals] = useState<Proposal[]>([])
+  /** The paper the list of suggestions has been HEARD for: before that an empty list is not "none waiting". */
+  const [heardFor, setHeardFor] = useState<string | null>(null)
   const epicOnScreen = sight.at === 'reading' ? sight.paper.epic : null
 
   useEffect(() => {
@@ -267,7 +269,10 @@ export function usePaper(framed: boolean) {
       void json('/api/proposals', { epic: epicOnScreen })
         .then((body) => {
           if (stopped) return
-          if (Array.isArray(body.proposals)) setProposals(body.proposals as Proposal[])
+          if (Array.isArray(body.proposals)) {
+            setProposals(body.proposals as Proposal[])
+            setHeardFor(epicOnScreen)
+          }
           if (typeof body.said === 'string' && body.said) setSaid(body.said)
         })
         .catch(() => {
@@ -409,6 +414,7 @@ export function usePaper(framed: boolean) {
       start,
       setPaper,
       setProposals,
+      proposalsHeard: heardFor !== null && heardFor === epicOnScreen,
       disk,
       proposals,
       answerOne,
@@ -419,7 +425,7 @@ export function usePaper(framed: boolean) {
       save,
       askAgain,
     }),
-    [sight, said, resize, point, pointed, parts, start, setPaper, disk, proposals, answerOne, acceptAll, busy, saving, save, askAgain],
+    [sight, said, resize, point, pointed, parts, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain],
   )
 }
 
