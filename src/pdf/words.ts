@@ -215,10 +215,13 @@ const MARGIN = 2
  *
  * Anything else a rectangle carries — its page — comes back with it.
  */
-export function tighten<B extends Box>(rects: readonly B[], runs: readonly Run[], source: string): B[] {
+export function tighten<B extends Box>(rects: readonly B[], runs: readonly Run[], source: string, part: Part = 'whole'): B[] {
   const out = rects.map((rect) => ({ ...rect }))
   const words = printedWords(source)
-  if (!out.length || !words.length) return out
+  if (!out.length) return out
+  if (out.some((rect) => on(runs, rect).some(measured))) return byMeasure(out, runs, source, words, part)
+  /* Unmeasured, the old rule: and it only knows a mark that is all on one page. */
+  if (!words.length || part !== 'whole') return out
 
   let start: { index: number; span: Span } | null = null
   for (let index = 0; index < out.length && !start; index += 1) {
@@ -231,8 +234,6 @@ export function tighten<B extends Box>(rects: readonly B[], runs: readonly Run[]
     if (span) end = { index, span }
   }
   if (start && end && (end.index < start.index || (end.index === start.index && end.span.to <= start.span.from))) return out
-  if (start && end && start.span.exact && end.span.exact) return exactly(out, runs, start, end, source, words)
-
   if (end) {
     const last = out[end.index]!
     const right = Math.min(last.x + last.w, end.span.to + MARGIN * end.span.per)
@@ -246,6 +247,21 @@ export function tighten<B extends Box>(rects: readonly B[], runs: readonly Run[]
   }
   return out.slice(start?.index ?? 0, (end?.index ?? out.length - 1) + 1)
 }
+
+/**
+ * Which part of a mark the rectangles handed to `tighten` are.
+ *
+ * A passage that crosses a page break is drawn on two pages or more, and each
+ * page's rectangles are tightened against that page's words. `head` is the
+ * page it starts on — its first word is there and its last is not, so the last
+ * row runs to the end of its line; `tail` is the page it ends on; `body` a page
+ * it covers from top to bottom. `whole` is a mark all on one page.
+ *
+ * Without this a mark that crossed a page was not touched at all, and every
+ * row of it began wherever SyncTeX's rectangle did: a few letters in from the
+ * margin, a different few on each line.
+ */
+export type Part = 'whole' | 'head' | 'body' | 'tail'
 
 /** A word as drawn: its left and right edges, and the width of one character of the run it is in. */
 interface Span {
@@ -262,58 +278,156 @@ interface Span {
 /** How far outside the ink a measured mark is drawn, in points: enough not to touch the letters. */
 const PAD = 1
 
+/** How far left of SyncTeX's rectangle its first word is still looked for, in characters: a long word and its space. */
+const LATE = 16
+
+/** The runs on a rectangle's baseline that say anything. */
+function on(runs: readonly Run[], rect: Box): Run[] {
+  return runs.filter((run) => {
+    if (run.w <= 0 || !run.text.trim()) return false
+    const middle = run.y + run.h / 2
+    return middle >= rect.y - 1 && middle <= rect.y + rect.h + 1
+  })
+}
+
+/** The next word of three letters or more in `text` from `from`, and the last one before `to`. */
+function wordAfter(text: string, from: number): string | null {
+  return text.slice(from).match(/[\p{L}\p{N}]{3,}/u)?.[0] ?? null
+}
+function wordBefore(text: string, to: number): string | null {
+  const all = text.slice(0, to).match(/[\p{L}\p{N}]{3,}/gu)
+  return all ? all[all.length - 1]! : null
+}
+
+/** Every place `word` is printed, as a whole word, in the measured runs among `among`. */
+function places(among: readonly Run[], word: string): Span[] {
+  const out: Span[] = []
+  for (const run of among) {
+    if (!measured(run)) continue
+    for (let at = find(run.text, word, 0); at !== -1; at = find(run.text, word, at + 1)) {
+      out.push({ from: edge(run, at), to: edge(run, at + word.length), per: run.w / run.text.length, run, at, exact: true })
+    }
+  }
+  return out
+}
+
 /**
- * The mark for a selection BOTH of whose ends were found, in runs whose
- * characters were measured.
+ * The mark for a selection on a page whose lines were measured.
  *
- * This is the one place a rectangle is made WIDER than SyncTeX's, and the
- * reason it may be: SyncTeX's rectangles are late. A record is filed under the
- * source line a word's trailing space was typed on, so the rectangle for a
- * source line starts after that line's first word and runs on over the first
- * word of the next — measured on a thesis set by pdfLaTeX, a passage of three
- * source lines was marked from the second word of its first line to the first
- * word of the line after its last. Tightening could pull those ends in and
- * could never push them out, so a selection that began on a line's first word
- * began, on the page, at its second.
+ * ## SyncTeX's rectangles are late, and this is where that is undone
  *
- * With both ends found and measured there is something better to believe than
- * the rectangles' edges. A contiguous passage of source prints as contiguous
- * text: from its first word to the end of that printed line, every whole line
- * between, and the last line up to its last word. So the first rectangle runs
- * from the first word to the end of its line, the last from the start of its
- * line to the last word, and those between are their whole lines. What a line
- * IS comes from the runs — see `lineOf` — and SyncTeX still decides which
- * printed lines there are.
+ * A record is filed under the source line a word's trailing space was typed
+ * on. So the rectangle for a source line starts AFTER that line's first word
+ * and runs on over the first word of the next — measured on a thesis set by
+ * pdfLaTeX, where a passage of three source lines was marked from the second
+ * word of its first line to the first word of the line after its last, and
+ * every row after the first began where SyncTeX's rectangle did: a word, or
+ * half a hyphenated one, in from the margin.
+ *
+ * Narrowing alone cannot mend that, because the first word of a selection that
+ * begins a source line is not INSIDE the rectangle to be found. So:
+ *
+ *  - **The first word is looked for to the left of the rectangle as well** — a
+ *    long word's width — and, failing that, at the very end of the printed
+ *    line above, which is where a source line's first word goes when TeX broke
+ *    the line right after it. That line is then marked too.
+ *  - **The word that follows decides between two candidates.** The selection's
+ *    second word printed right after one of them is the difference between
+ *    this "the" and the one a few words earlier; when a command stands
+ *    between them and nothing can be told, the old order stands.
+ *  - **Every row but the ends is its whole printed line.** A contiguous
+ *    passage of source prints as contiguous text: from its first word to the
+ *    end of that line, whole lines, and the last line up to its last word.
+ *    What a line IS comes from the runs — see `lineOf` — and SyncTeX still
+ *    decides which printed lines there are.
+ *  - **An end that is not found stays where SyncTeX put it**, as always, and
+ *    the other end and the rows between are still made right.
  *
  * The ends are also carried over the short words and punctuation `printedWords`
  * will not look for — the "a" before "hint", the full stop after "grade" —
  * when the page prints exactly what the source says there.
  */
-function exactly<B extends Box>(
-  rects: readonly B[],
-  runs: readonly Run[],
-  start: { index: number; span: Span },
-  end: { index: number; span: Span },
-  source: string,
-  words: readonly string[],
-): B[] {
-  const before = leading(source, words[0]!)
-  const from = start.span.run.text.slice(0, start.span.at).endsWith(before) ? start.span.at - before.length : start.span.at
-  const after = trailing(source, words[words.length - 1]!)
-  const stop = end.span.at + words[words.length - 1]!.length
-  const to = end.span.run.text.slice(stop).startsWith(after) ? stop + after.length : stop
-  const left = edge(start.span.run, from) - PAD
-  const right = edge(end.span.run, to) + PAD
+function byMeasure<B extends Box>(out: B[], runs: readonly Run[], source: string, words: readonly string[], part: Part): B[] {
+  /* Whether each end is on this page at all, and whether there is a word to look for it by. */
+  const headHere = part === 'whole' || part === 'head'
+  const tailHere = part === 'whole' || part === 'tail'
+  const startsHere = headHere && words.length > 0
+  const endsHere = tailHere && words.length > 0
+  const first = words[0] ?? ''
+  const last = words[words.length - 1] ?? ''
+  const second = words.length > 1 ? words[1]! : null
+  const penultimate = words.length > 1 ? words[words.length - 2]! : null
+  const follows = (span: Span) => second !== null && wordAfter(span.run.text, span.at + first.length) === second
+  const precedes = (span: Span) => penultimate !== null && wordBefore(span.run.text, span.at) === penultimate
 
-  const out = rects.slice(start.index, end.index + 1).map((rect) => ({ ...rect }))
-  out.forEach((rect, index) => {
-    const line = lineOf(runs, rect, index === 0 ? start.span.run : index === out.length - 1 ? end.span.run : null)
-    const x = index === 0 ? left : line.left - PAD
-    const edgeRight = index === out.length - 1 ? right : line.right + PAD
+  /* ---- Where it starts ---- */
+  let start: { index: number; span: Span } | null = null
+  for (let index = 0; startsHere && index < out.length && !start; index += 1) {
+    const rect = out[index]!
+    const reach = index === 0 ? LATE : 1
+    const near = places(on(runs, rect), first).filter((span) => span.to >= rect.x - reach * span.per && span.from <= rect.x + rect.w + span.per)
+    near.sort((a, b) => a.from - b.from)
+    const inside = near.filter((span) => span.to >= rect.x - span.per)
+    /* Confirmed by the word after it; else the first one inside, as before;
+       else the nearest one to the left, which is the late start itself. */
+    const span = near.find(follows) ?? inside[0] ?? near[near.length - 1] ?? null
+    if (span) start = { index, span }
+    else if (index === 0) {
+      /* Broken off onto the line above: its last word, and nothing after it. */
+      const above = { x: rect.x, y: rect.y - (out[1] ? Math.abs(out[1].y - rect.y) : rect.h * 1.4), w: rect.w, h: rect.h }
+      const line = lineOf(runs, above, null)
+      const tail = places(on(runs, above), first)
+        .filter((one) => one.to <= line.right + 1 && one.from >= line.left - 1 && wordAfter(one.run.text, one.at + first.length) === null)
+        .sort((a, b) => b.from - a.from)[0]
+      if (tail) {
+        out.unshift({ ...rect, x: tail.from, y: tail.run.y, w: tail.run.x + tail.run.w - tail.from, h: tail.run.h })
+        start = { index: 0, span: tail }
+      }
+    }
+  }
+
+  /* ---- Where it ends ---- */
+  let end: { index: number; span: Span } | null = null
+  for (let index = out.length - 1; endsHere && index >= (start?.index ?? 0) && !end; index -= 1) {
+    const rect = out[index]!
+    const near = places(on(runs, rect), last)
+      .filter((span) => span.to >= rect.x - span.per && span.from <= rect.x + rect.w + span.per)
+      .filter((span) => !start || index > start.index || span.to > start.span.from)
+    near.sort((a, b) => b.to - a.to)
+    const span = near.find(precedes) ?? near[0] ?? null
+    if (span) end = { index, span }
+  }
+
+  const s = start?.index ?? 0
+  const e = end?.index ?? out.length - 1
+  let left: number | null = null
+  if (start) {
+    const before = leading(source, first)
+    const from = start.span.run.text.slice(0, start.span.at).endsWith(before) ? start.span.at - before.length : start.span.at
+    left = edge(start.span.run, from) - PAD
+  }
+  let right: number | null = null
+  if (end) {
+    const after = trailing(source, last)
+    const stop = end.span.at + last.length
+    const to = end.span.run.text.slice(stop).startsWith(after) ? stop + after.length : stop
+    right = edge(end.span.run, to) + PAD
+  }
+
+  const kept = out.slice(s, e + 1)
+  kept.forEach((rect, index) => {
+    const isFirst = index === 0
+    const isLast = index === kept.length - 1
+    const line = lineOf(runs, rect, isFirst && start ? start.span.run : isLast && end ? end.span.run : null)
+    const was = rect.x + rect.w
+    /* An end that is on another page is no end here: the row is a whole line.
+       An end that should be here and was not found stays where SyncTeX put it. */
+    const x = isFirst ? (left ?? (headHere ? rect.x : line.left - PAD)) : line.left - PAD
+    const to = isLast ? (right ?? (tailHere ? was : line.right + PAD)) : line.right + PAD
     rect.x = x
-    rect.w = Math.max(edgeRight - x, 2)
+    rect.w = Math.max(to - x, 2)
   })
-  return out
+  return kept
 }
 
 /**
