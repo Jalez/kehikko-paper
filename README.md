@@ -271,7 +271,9 @@ was read on. It does not record glyphs and it has no columns. So:
 
 - **Source to PDF** is exact to the source line: one rectangle per printed line
   those source lines reached, as wide as the part they produced.
-- **PDF to source** is exact to the source line under the click.
+- **PDF to source** is exact to the source line under the click. A press selects the
+  word in the source and marks it on the page pressed; the PDF tab stays in
+  front, and a double press turns to the Source tab.
 - **Finer than a line** is done by matching against the PDF's own text
   (`src/pdf/words.ts`): the clicked word is looked for on the named line and
   selected, and the first and last words of a selection are looked for under

@@ -71,6 +71,8 @@ export interface PreviewProps {
   reveal: { nonce: number } | null
   /** A press on a page: which page, where in PDF points, and the word under it if the PDF's text says. */
   onPoint(point: { page: number; x: number; y: number; word: string | null }): void
+  /** A double press on a page: the person wants the source it came from in front of them. */
+  onOpen?(): void
   /** The page most in view changed. One-based. */
   onPage?(page: number): void
   /** The pages to draw, ascending, in the PDF's own numbers. Absent or null draws every page, unlabelled, as always. */
@@ -117,7 +119,7 @@ const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const GAP = 10
 const PAD = 8
 
-export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, outside, outsideOf = 'the picked parts' }: PreviewProps) {
+export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = null, outside, outsideOf = 'the picked parts' }: PreviewProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<PdfDocument | null>(null)
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([])
@@ -232,8 +234,13 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marks, version, runs.current.size])
 
+  /* Once per nonce, and not before there is a scale: a pane that is hidden
+     behind the other tab has no width, and a reveal asked for then is owed
+     until the pane is shown — or the mark is drawn on a page nobody was
+     taken to. */
+  const revealed = useRef<number | null>(null)
   useEffect(() => {
-    if (!reveal) return
+    if (!reveal || revealed.current === reveal.nonce) return
     const first = marks[0]?.rects[0]
     const node = scroller.current
     if (!first || !node || scale <= 0) return
@@ -248,6 +255,7 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
       if (!sheet) return
       top = sheet.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop
     }
+    revealed.current = reveal.nonce
     const y = top + first.y * scale
     /* Only when it is not already comfortably in view: a caret moving down a
        paragraph should not drag the page with every line. */
@@ -255,7 +263,7 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
       node.scrollTo({ top: Math.max(0, y - node.clientHeight / 3), behavior: 'smooth' })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal?.nonce])
+  }, [reveal?.nonce, scale > 0])
 
   const onScroll = useCallback(() => {
     const node = scroller.current
@@ -338,6 +346,7 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
                 root={scroller}
                 marks={drawn.get(number) ?? []}
                 onPress={press}
+                onOpen={onOpen}
               />
             )
             if (pages === null) return sheet
@@ -378,6 +387,7 @@ function PageCanvas({
   root,
   marks,
   onPress,
+  onOpen,
 }: {
   doc: PdfDocument
   version: number
@@ -388,6 +398,7 @@ function PageCanvas({
   root: React.RefObject<HTMLDivElement | null>
   marks: { rect: PageRect; foreign: boolean }[]
   onPress(page: number, event: React.MouseEvent<HTMLDivElement>): void
+  onOpen?: () => void
 }) {
   const holder = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -455,6 +466,7 @@ function PageCanvas({
       data-page={number}
       style={{ width: width * scale, height: height * scale, marginBottom: GAP }}
       onClick={(event) => onPress(number, event)}
+      onDoubleClick={onOpen}
     >
       <canvas ref={canvas} className="block size-full" />
       {marks.map(({ rect, foreign }, i) => (

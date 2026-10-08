@@ -194,6 +194,9 @@ export function Workspace({
   }, [build, compiling, compile, paper.epic, paper.hashes])
 
   const [tab, setTab] = useState<'source' | 'pdf'>('source')
+  const tabRef = useRef(tab)
+  tabRef.current = tab
+  const unseen = useRef(false)
   const [selection, setSelection] = useState({ from: 0, to: 0 })
   const [jump, setJump] = useState<{ from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean } | null>(null)
   const [going, setGoing] = useState<Going | null>(null)
@@ -273,8 +276,18 @@ export function Workspace({
       }
     }
     setJump((was) => ({ from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign }))
+    if (tabRef.current !== 'source') unseen.current = true
     setGoing(null)
   }, [going, file, doc])
+
+  /* The editor was taken somewhere while the PDF tab was in front of it, and
+     an editor with no layout scrolls nowhere. It is owed that scroll when its
+     tab is next shown — only the scroll: the selection is already made. */
+  useEffect(() => {
+    if (tab !== 'source' || !unseen.current) return
+    unseen.current = false
+    setJump((was) => (was ? { ...was, nonce: was.nonce + 1, keep: true, focus: false } : was))
+  }, [tab])
 
   /* ---- Where the caret is, in the three currencies ---------------------- */
 
@@ -553,8 +566,12 @@ export function Workspace({
             return
           }
           wandered()
+          /* The tab is left where it is. The press selects the word in the
+             source, and that selection is what is marked on the page that was
+             pressed: turning to the Source tab here took the person away from
+             the very thing they had just marked. A double press is how the
+             source is asked for — see `onOpen`. */
           go({ file: found.file, line: found.line, word: at.word, select: true, focus: true })
-          setTab('source')
         })
         .catch(() => {})
     },
@@ -874,6 +891,7 @@ export function Workspace({
                 marks={marks}
                 reveal={reveal}
                 onPoint={onPoint}
+                onOpen={() => setTab('source')}
                 {...(sheets ? { pages: sheets.pages, outside: sheets.outside, outsideOf: outsideSaid } : {})}
               />
             ) : (
