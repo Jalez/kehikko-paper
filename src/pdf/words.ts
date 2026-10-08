@@ -163,6 +163,18 @@ export function printedWords(source: string): string[] {
 }
 
 /**
+ * A stretch of source, carried out to the ends of the words it begins and ends
+ * in. A change is often a few letters of a word — `focus` in `focused` — and a
+ * page is searched for whole words, so the fragment alone is never found.
+ */
+export function wholeWords(text: string, from: number, to: number): string {
+  const letter = /[\p{L}\p{N}]/u
+  while (from > 0 && letter.test(text[from - 1]!)) from -= 1
+  while (to < text.length && letter.test(text[to]!)) to += 1
+  return text.slice(from, to)
+}
+
+/**
  * How much of a margin a tightened end keeps, in characters of its run.
  *
  * A run is a string and a width, so a word's edges are found by PROPORTION

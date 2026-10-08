@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { byteAt, eolOf, indexAt, lineAt, startOfLine, textOfLine, toDisk, toEditor } from '../src/lib/offsets.ts'
-import { placeWord, printedWords, tighten, wordAt, type Box, type Run } from '../src/pdf/words.ts'
+import { placeWord, printedWords, tighten, wholeWords, wordAt, type Box, type Run } from '../src/pdf/words.ts'
 
 /**
  * Bytes, characters and lines.
@@ -119,6 +119,19 @@ describe('the words of a piece of source that print as themselves', () => {
       'Literate', 'programming', 'the', 'idea', 'and', 'more',
     ])
     expect(printedWords('\\begin{figure}[t]\\includegraphics[width=3cm]{plot.png}')).toEqual([])
+  })
+})
+
+describe('a stretch of source carried out to whole words', () => {
+  const line = 'an experience-focused, formative evaluation'
+  test('a few letters of a word become the word', () => {
+    const at = line.indexOf('focus')
+    expect(wholeWords(line, at, at + 5)).toBe('focused')
+  })
+  test('whole words are left as they are, and so is a place between two', () => {
+    const at = line.indexOf('formative')
+    expect(wholeWords(line, at, at + 'formative evaluation'.length)).toBe('formative evaluation')
+    expect(wholeWords(line, at - 1, at - 1)).toBe('')
   })
 })
 
