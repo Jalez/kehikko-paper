@@ -134,6 +134,36 @@ function pdfjs() {
  * falls back to proportion, which is what it always did.
  */
 let ruler: CanvasRenderingContext2D | null | undefined
+
+/**
+ * Wait for a page's fonts to be in the document.
+ *
+ * pdf.js hands a page's fonts to the document a moment AFTER it says the page
+ * has been read: the operator list resolves, and the font faces are still
+ * loading. A page measured in that moment measures nothing, and its words were
+ * then filed unmeasured for as long as the PDF was open — which is how a mark
+ * on a page somebody was just TAKEN to, and which had never been drawn, came
+ * out as SyncTeX's bare rectangles. So the fonts are waited for, briefly, and a
+ * font that never arrives (pdf.js draws some as paths, with no face at all) is
+ * remembered so that the next page does not wait for it again.
+ */
+const never = new Set<string>()
+async function fontsFor(names: ReadonlySet<string>, ms = 2000): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts) return
+  const until = Date.now() + ms
+  for (;;) {
+    const faces = new Map<string, FontFace>()
+    for (const face of document.fonts) faces.set(face.family.replace(/^"|"$/g, ''), face)
+    const missing = [...names].filter((name) => !never.has(name) && faces.get(name)?.status !== 'loaded')
+    if (!missing.length) return
+    if (Date.now() >= until) {
+      for (const name of missing) never.add(name)
+      return
+    }
+    const pause = new Promise<void>((done) => setTimeout(done, 80))
+    await Promise.race([Promise.all(missing.map((name) => faces.get(name)?.loaded.then(() => {}, () => {}) ?? pause)), pause.then(() => new Promise<void>((done) => setTimeout(done, 170)))])
+  }
+}
 function offsetsOf(text: string, width: number, font: string | undefined, size: number): number[] | undefined {
   if (typeof document === 'undefined' || !font || !(size > 0) || !(width > 0)) return undefined
   try {
@@ -173,6 +203,17 @@ function offsetsOf(text: string, width: number, font: string | undefined, size: 
   } catch {
     return undefined
   }
+}
+
+/**
+ * Whether a page's words have been read, and how: `measured`, `estimated`, or
+ * nothing yet. Written on the sheet so that a mark that looks wrong can be
+ * told apart from outside — a loose mark on an `estimated` page is this file
+ * failing to measure, and on a `measured` one it is `words.ts` being wrong.
+ */
+function wordsOf(runs: readonly Run[] | undefined): string {
+  if (!runs) return ''
+  return runs.some((run) => run.xs !== undefined) ? 'measured' : 'estimated'
 }
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
@@ -259,6 +300,9 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
       /* The fonts are loaded by the first thing that DRAWS the page, and the
          words may be asked for before that. Without them nothing is measured. */
       await sheet.getOperatorList().catch(() => {})
+      const fonts = new Set<string>()
+      for (const item of content.items as { fontName?: string }[]) if (item.fontName) fonts.add(item.fontName)
+      await fontsFor(fonts).catch(() => {})
       const out: Run[] = []
       for (const item of content.items as { str?: string; transform?: number[]; width?: number; height?: number; fontName?: string }[]) {
         if (typeof item.str !== 'string' || !item.transform || !item.str) continue
@@ -296,9 +340,12 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
       for (const page of all) {
         let rects = pages.get(page)!
         const text = runs.current.get(page)
-        /* Tightened only when the whole mark is on one page: the first word
-           and the last are then both looked for among that page's words. */
-        if (mark.source && text && all.length === 1) rects = tighten(rects, text, mark.source)
+        /* Each page's rectangles against that page's words. A mark that
+           crosses a page break starts on its first page and ends on its last. */
+        if (mark.source && text) {
+          const part = all.length === 1 ? 'whole' : page === all[0] ? 'head' : page === all[all.length - 1] ? 'tail' : 'body'
+          rects = tighten(rects, text, mark.source, part)
+        }
         byPage.set(page, [...(byPage.get(page) ?? []), ...rects.map((rect) => ({ rect, foreign: mark.foreign === true }))])
       }
     }
@@ -436,6 +483,7 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
                 scale={scale}
                 root={scroller}
                 marks={drawn.get(number) ?? []}
+                words={wordsOf(runs.current.get(number))}
                 onPress={press}
                 onOpen={onOpen}
               />
@@ -477,6 +525,7 @@ function PageCanvas({
   scale,
   root,
   marks,
+  words,
   onPress,
   onOpen,
 }: {
@@ -488,6 +537,7 @@ function PageCanvas({
   scale: number
   root: React.RefObject<HTMLDivElement | null>
   marks: { rect: PageRect; foreign: boolean }[]
+  words: string
   onPress(page: number, event: React.MouseEvent<HTMLDivElement>): void
   onOpen?: () => void
 }) {
@@ -555,6 +605,7 @@ function PageCanvas({
       ref={holder}
       className="pdf-page relative mx-auto bg-white"
       data-page={number}
+      data-words={words}
       style={{ width: width * scale, height: height * scale, marginBottom: GAP }}
       onClick={(event) => onPress(number, event)}
       onDoubleClick={onOpen}
