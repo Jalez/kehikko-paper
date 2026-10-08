@@ -85,6 +85,20 @@ export function pointedAt(paper: Paper | null, passage: Passage | null): Pointed
   }
   const file = fileOf(paper, passage.path)
   if (!file) {
+    /* In this paper's own folder, and not a file `main.tex` reaches: a copy
+       kept for another build, a draft, a file no longer included. Sending the
+       person to look for another epic would be sending them away from the
+       right one. */
+    const dir = paper.dir.endsWith('/') ? paper.dir : `${paper.dir}/`
+    if (passage.path.startsWith(dir)) {
+      const name = passage.path.slice(dir.length)
+      return {
+        at: 'elsewhere',
+        said:
+          `Something pointed at ${name}. It is in this paper’s folder, but main.tex does not include it, so it is not part of `
+          + `what is shown here. If the same words are in the paper, point at the file that prints them.`,
+      }
+    }
     return {
       at: 'elsewhere',
       said:
