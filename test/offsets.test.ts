@@ -248,3 +248,82 @@ describe('tightening SyncTeX’s rectangles to the selected words', () => {
     })
   })
 })
+
+/**
+ * The same, when the runs were measured in their own font (`xs`).
+ *
+ * The page is the one this was written against: a thesis set by pdfLaTeX,
+ * where SyncTeX's rectangle for a source line starts after that line's first
+ * word and runs on over the first word of the next. A passage of three source
+ * lines was marked from "their own words" to "taught material."; what was
+ * selected was "followed by … exercise grade".
+ */
+describe('a mark whose ends were measured', () => {
+  /* Eight points a character, so an offset is easy to read; nothing here
+     depends on the characters being the same width, only on `xs` being used. */
+  const run = (x: number, y: number, text: string): Run => ({
+    x,
+    y,
+    w: text.length * 8,
+    h: 10,
+    text,
+    xs: Array.from({ length: text.length + 1 }, (_, i) => i * 8),
+  })
+  const one = 'in their own words, and received a verdict, followed by a hint, a'
+  const two = 'follow-up question or the next item; the score ran out was the'
+  const three = 'exercise grade. EduChat keeps what the agent says with the taught'
+  const page = [run(70, 100, one), run(70, 112, two), run(70, 124, three)]
+  /* Late, as SyncTeX's are: each starts inside its line and the last overruns. */
+  const late = [
+    { x: 70 + 3 * 8, y: 100, w: (one.length - 3) * 8, h: 10, page: 10 },
+    { x: 70 + 5 * 8, y: 112, w: (two.length - 5) * 8, h: 10, page: 10 },
+    { x: 70 + 8 * 8, y: 124, w: (three.length - 8) * 8, h: 10, page: 10 },
+  ]
+  const selected = 'followed by\na hint, a follow-up question or the next item; the score ran\nout was the exercise grade'
+
+  test('runs from its first word to the end of that line, over whole lines, to its last word', () => {
+    const [a, b, c] = tighten(late, page, selected)
+    expect(a!.x).toBeCloseTo(70 + one.indexOf('followed') * 8 - 1, 3)
+    expect(a!.x + a!.w).toBeCloseTo(70 + one.length * 8 + 1, 3)
+    /* Wider than SyncTeX's on the left: the line starts at "follow-up", and SyncTeX's rectangle after it. */
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x + b!.w).toBeCloseTo(70 + two.length * 8 + 1, 3)
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x + c!.w).toBeCloseTo(70 + (three.indexOf('grade') + 'grade'.length) * 8 + 1, 3)
+    expect(c!.page).toBe(10)
+  })
+
+  test('one word is marked as that word and nothing either side of it', () => {
+    const [only, ...rest] = tighten([late[0]!], page, 'verdict')
+    expect(rest).toEqual([])
+    expect(only!.x).toBeCloseTo(70 + one.indexOf('verdict') * 8 - 1, 3)
+    expect(only!.w).toBeCloseTo('verdict'.length * 8 + 2, 3)
+  })
+
+  test('the short words and punctuation at its ends are carried when the page prints what the source says', () => {
+    const [only] = tighten([late[0]!], page, 'a verdict, followed by a')
+    expect(only!.x).toBeCloseTo(70 + one.indexOf('a verdict') * 8 - 1, 3)
+    expect(only!.x + only!.w).toBeCloseTo(70 + (one.indexOf('followed by a') + 'followed by a'.length) * 8 + 1, 3)
+    /* A command at an end prints as something else: the end stays on the word. */
+    const [cut] = tighten([late[0]!], page, '\\emph{a} verdict')
+    expect(cut!.x).toBeCloseTo(70 + one.indexOf('verdict') * 8 - 1, 3)
+  })
+
+  test('a word under the point is found by where its characters are', () => {
+    const wide: Run = { x: 0, y: 0, w: 100, h: 10, text: 'ab cdef', xs: [0, 5, 10, 60, 70, 80, 90, 100] }
+    /* By proportion x = 40 is the third character, the space; measured, the space ends at 60. */
+    expect(wordAt([wide], 40, 5)).toBeNull()
+    expect(wordAt([wide], 65, 5)).toBe('cdef')
+    expect(wordAt([wide], 7, 5)).toBe('ab')
+  })
+
+  test('with one end unmeasured the old rule stands: inward only', () => {
+    const mixed = [page[0]!, page[1]!, { ...page[2]!, xs: undefined }]
+    const out = tighten(late, mixed, selected)
+    expect(out[1]!.x).toBe(late[1]!.x)
+    for (const [i, rect] of out.entries()) {
+      expect(rect.x).toBeGreaterThanOrEqual(late[i]!.x)
+      expect(rect.x + rect.w).toBeLessThanOrEqual(late[i]!.x + late[i]!.w + 1e-9)
+    }
+  })
+})
