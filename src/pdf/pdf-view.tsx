@@ -90,6 +90,8 @@ interface PdfPage {
   getViewport(options: { scale: number }): { width: number; height: number }
   render(options: { canvas: HTMLCanvasElement; canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void>; cancel(): void }
   getTextContent(): Promise<{ items: unknown[] }>
+  /** Asked for only because it is what makes pdf.js load the page's fonts. */
+  getOperatorList(): Promise<unknown>
 }
 interface PdfDocument {
   numPages: number
@@ -115,6 +117,64 @@ function pdfjs() {
   return library
 }
 
+/**
+ * Where each character of a run begins, measured in the font it is printed in.
+ *
+ * pdf.js says what a run says and how wide it is, and nothing about where its
+ * characters are. But it loads every font of a page into the document under
+ * the name the run carries, so a canvas can be asked how wide any part of the
+ * run is in that very font. Spaces are the one thing not asked: TeX prints
+ * none — a space is a gap, stretched to justify the line — and most of its
+ * fonts have no glyph for one. So the words are measured and what is left of
+ * the run's width is shared equally among its spaces, which is what TeX did.
+ *
+ * Undefined whenever the answer cannot be trusted: no canvas, the font is not
+ * loaded, or the measured words do not fit the run (a font whose glyphs pdf.js
+ * had to move elsewhere measures as something else entirely). `words.ts` then
+ * falls back to proportion, which is what it always did.
+ */
+let ruler: CanvasRenderingContext2D | null | undefined
+function offsetsOf(text: string, width: number, font: string | undefined, size: number): number[] | undefined {
+  if (typeof document === 'undefined' || !font || !(size > 0) || !(width > 0)) return undefined
+  try {
+    let loaded = false
+    for (const face of document.fonts) if (face.family.replace(/^"|"$/g, '') === font && face.status === 'loaded') loaded = true
+    if (!loaded) return undefined
+    if (ruler === undefined) ruler = document.createElement('canvas').getContext('2d')
+    if (!ruler) return undefined
+    ruler.font = `${size}px "${font}"`
+    const parts = text.split(/( +)/)
+    let ink = 0
+    let spaces = 0
+    const widths = parts.map((part) => {
+      if (part.startsWith(' ')) {
+        spaces += part.length
+        return 0
+      }
+      const w = ruler!.measureText(part).width
+      ink += w
+      return w
+    })
+    if (!(ink > 0)) return undefined
+    const gap = spaces ? (width - ink) / spaces : 0
+    if (spaces ? gap < 0 || gap > size * 3 : Math.abs(width - ink) > Math.max(1, width * 0.06)) return undefined
+    const stretch = spaces ? 1 : width / ink
+    const xs = [0]
+    let at = 0
+    parts.forEach((part, index) => {
+      if (part.startsWith(' ')) {
+        for (let n = 0; n < part.length; n += 1) xs.push((at += gap))
+        return
+      }
+      for (let n = 1; n <= part.length; n += 1) xs.push(at + ruler!.measureText(part.slice(0, n)).width * stretch)
+      at += widths[index]! * stretch
+    })
+    return xs.length === text.length + 1 ? xs : undefined
+  } catch {
+    return undefined
+  }
+}
+
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const GAP = 10
 const PAD = 8
@@ -128,6 +188,8 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
   const [zoom, setZoom] = useState(1)
   const [version, setVersion] = useState(0)
   const runs = useRef<Map<number, Run[]>>(new Map())
+  /** The document on screen, for an answer that arrives after it was replaced. */
+  const shown = useRef<PdfDocument | null>(null)
   const held = useRef<PdfTask | null>(null)
   const [, setRunsTick] = useState(0)
 
@@ -155,6 +217,7 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
         setSizes(measured)
         const old = held.current
         held.current = task
+        shown.current = next
         setDoc(next)
         /* After the swap, and not before: the pages on screen were drawn from
            the old document and are still being looked at. */
@@ -193,13 +256,22 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
       const sheet = await doc.getPage(page)
       const height = sheet.getViewport({ scale: 1 }).height
       const content = await sheet.getTextContent()
+      /* The fonts are loaded by the first thing that DRAWS the page, and the
+         words may be asked for before that. Without them nothing is measured. */
+      await sheet.getOperatorList().catch(() => {})
       const out: Run[] = []
-      for (const item of content.items as { str?: string; transform?: number[]; width?: number; height?: number }[]) {
+      for (const item of content.items as { str?: string; transform?: number[]; width?: number; height?: number; fontName?: string }[]) {
         if (typeof item.str !== 'string' || !item.transform || !item.str) continue
         const h = item.height || Math.abs(item.transform[3] ?? 0) || 10
+        const w = item.width ?? 0
+        const xs = offsetsOf(item.str, w, item.fontName, Math.hypot(item.transform[0] ?? 0, item.transform[1] ?? 0))
         /* pdf.js gives the BASELINE's left end, from the bottom-left. */
-        out.push({ x: item.transform[4] ?? 0, y: height - (item.transform[5] ?? 0) - h, w: item.width ?? 0, h, text: item.str })
+        out.push({ x: item.transform[4] ?? 0, y: height - (item.transform[5] ?? 0) - h, w, h, text: item.str, ...(xs ? { xs } : {}) })
       }
+      /* A new build landed while this page was being read: these are the old
+         PDF's words, and filing them would have every mark on this page
+         looked for among words that are no longer where they say. */
+      if (shown.current !== doc) return out
       runs.current.set(page, out)
       setRunsTick((n) => n + 1)
       return out
@@ -265,8 +337,27 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reveal?.nonce, scale > 0])
 
+  /* A pane behind the other tab has no width, so no scale, so its sheets have
+     no height — and a scroller whose content has collapsed is at the top when
+     it is shown again. Where it was is kept in PDF points, and put back the
+     moment there is a scale to put it back at. */
+  const kept = useRef(0)
+  const collapsed = useRef(true)
+  useLayoutEffect(() => {
+    const node = scroller.current
+    if (scale <= 0) {
+      collapsed.current = true
+      return
+    }
+    if (!collapsed.current) return
+    collapsed.current = false
+    if (node && kept.current > 0) node.scrollTop = kept.current * scale
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale > 0])
+
   const onScroll = useCallback(() => {
     const node = scroller.current
+    if (node && scale > 0 && node.clientHeight > 0) kept.current = node.scrollTop / scale
     /* Under a focus the sheets are not a plain stack, and nothing asks. */
     if (!node || !onPage || scale <= 0 || pages !== null) return
     const middle = node.scrollTop + node.clientHeight / 2
