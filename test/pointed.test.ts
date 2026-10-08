@@ -37,6 +37,17 @@ describe('whose file', () => {
 })
 
 describe('pointedAt', () => {
+  test('a file in this paper’s folder that main.tex does not include is said to be that, not another paper’s', () => {
+    const answer = pointedAt(paper, passage({ path: `${DIR}/abstract_en.tex`, from: 0, to: 10 }))
+    expect(answer.at).toBe('elsewhere')
+    const said = answer.at === 'elsewhere' ? answer.said : ''
+    expect(said).toContain('abstract_en.tex')
+    expect(said).toContain('main.tex does not include it')
+    expect(said).not.toContain('Open the epic')
+    const other = pointedAt(paper, passage({ path: '/p/.kehikot/paper/e-other/main.tex', from: 0, to: 10 }))
+    expect(other.at === 'elsewhere' ? other.said : '').toContain('Open the epic')
+  })
+
   test('nothing pointed at is nowhere', () => {
     expect(pointedAt(paper, null)).toEqual({ at: 'nowhere' })
   })

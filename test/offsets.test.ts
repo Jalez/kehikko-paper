@@ -330,13 +330,73 @@ describe('a mark whose ends were measured', () => {
     expect(wordAt([wide], 7, 5)).toBe('ab')
   })
 
-  test('with one end unmeasured the old rule stands: inward only', () => {
+  test('an end in a line that could not be measured stays where SyncTeX put it; the rest is still made right', () => {
     const mixed = [page[0]!, page[1]!, { ...page[2]!, xs: undefined }]
-    const out = tighten(late, mixed, selected)
-    expect(out[1]!.x).toBe(late[1]!.x)
-    for (const [i, rect] of out.entries()) {
-      expect(rect.x).toBeGreaterThanOrEqual(late[i]!.x)
-      expect(rect.x + rect.w).toBeLessThanOrEqual(late[i]!.x + late[i]!.w + 1e-9)
+    const [a, b, c] = tighten(late, mixed, selected)
+    expect(a!.x).toBeCloseTo(70 + one.indexOf('followed') * 8 - 1, 3)
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x + c!.w).toBe(late[2]!.x + late[2]!.w)
+  })
+
+  test('a selection that begins a source line is found LEFT of SyncTeX’s late rectangle', () => {
+    /* The whole of the three source lines: SyncTeX's first rectangle starts after "in ". */
+    const whole = 'in their own words, and received a verdict, followed by\na hint, a follow-up question or the next item; the score ran\nout was the exercise grade. EduChat keeps what the agent says with the taught'
+    const rects = [
+      { x: 70 + 9 * 8, y: 100, w: (one.length - 9) * 8, h: 10 },
+      { x: 70 + 5 * 8, y: 112, w: (two.length - 5) * 8, h: 10 },
+      { x: 70 + 8 * 8, y: 124, w: (three.length - 8) * 8, h: 10 },
+    ]
+    const [a, b, c] = tighten(rects, page, whole)
+    /* "their" is left of the rectangle, which starts at "own"; and "in " is carried. */
+    expect(a!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x + c!.w).toBeCloseTo(70 + three.length * 8 + 1, 3)
+  })
+
+  test('a first word TeX left at the end of the line above brings that line into the mark', () => {
+    /* The source line is "hint, a follow-up question": "hint" ends the first printed line. */
+    const lines = [run(70, 100, 'received a verdict, followed by a hint'), run(70, 112, 'a follow-up question or the next item')]
+    const rects = [{ x: 70 + 2 * 8, y: 112, w: 20 * 8, h: 10 }]
+    const [a, b, ...rest] = tighten(rects, lines, 'hint, a follow-up question')
+    expect(rest).toEqual([])
+    expect(a!.y).toBe(100)
+    expect(a!.x).toBeCloseTo(70 + lines[0]!.text.indexOf('hint') * 8 - 1, 3)
+    expect(a!.x + a!.w).toBeCloseTo(70 + lines[0]!.text.length * 8 + 1, 3)
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x + b!.w).toBeCloseTo(70 + (lines[1]!.text.indexOf('question') + 'question'.length) * 8 + 1, 3)
+  })
+
+  test('of two places a word is printed, the one the selection’s next word follows is the start', () => {
+    const line = [run(70, 100, 'the first of the many and the last of the few')]
+    const rects = [{ x: 70, y: 100, w: line[0]!.text.length * 8, h: 10 }]
+    const [only] = tighten(rects, line, 'the last of')
+    expect(only!.x).toBeCloseTo(70 + line[0]!.text.indexOf('the last') * 8 - 1, 3)
+    expect(only!.x + only!.w).toBeCloseTo(70 + (line[0]!.text.indexOf('the last of') + 'the last of'.length) * 8 + 1, 3)
+  })
+
+  test('a mark that crosses a page break: whole lines to the foot of one page, and from the head of the next', () => {
+    const top = [late[0]!, late[1]!]
+    const [a, b] = tighten(top, page, selected, 'head')
+    expect(a!.x).toBeCloseTo(70 + one.indexOf('followed') * 8 - 1, 3)
+    /* The last row on this page is not where the passage ends: it is the whole line. */
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x + b!.w).toBeCloseTo(70 + two.length * 8 + 1, 3)
+
+    const [c, d] = tighten([late[1]!, late[2]!], page, selected, 'tail')
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(d!.x).toBeCloseTo(70 - 1, 3)
+    expect(d!.x + d!.w).toBeCloseTo(70 + (three.indexOf('grade') + 'grade'.length) * 8 + 1, 3)
+
+    for (const rect of tighten(late, page, selected, 'body')) {
+      expect(rect.x).toBeCloseTo(70 - 1, 3)
     }
+  })
+
+  test('nothing to look for — maths, a command — leaves a one-page mark’s ends where SyncTeX put them', () => {
+    const [a, , c] = tighten(late, page, '$x^2$')
+    expect(a!.x).toBe(late[0]!.x)
+    expect(c!.x + c!.w).toBe(late[2]!.x + late[2]!.w)
   })
 })
