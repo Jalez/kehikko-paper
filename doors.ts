@@ -3,6 +3,8 @@ import { join, relative } from 'node:path'
 
 import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
 import { buildStatus, compile, readPdf, syncForward, syncReverse } from './compile/build.ts'
+import { installer } from './compile/install.ts'
+import type { PieceId } from './compile/toolchain.ts'
 import { MAX_EDIT_BYTES } from './latex/edit.ts'
 import { plainText, spanOf } from './latex/parse.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
@@ -1381,6 +1383,52 @@ export function answer(
     const status = buildStatus(epic, projectOf(str(query.get('project'), MAX_PROJECT)))
     if (!status) return bad('There is no paper for that epic in this project.', 404)
     return ok({ ok: true, build: status })
+  }
+
+  /*
+   * The compiler this module can fetch: what it would download, from where,
+   * into which folder, what is already there, and how far an install has got.
+   *
+   * A read, so no ticket. It downloads nothing and looks nothing up — every
+   * figure in it is a literal in `compile/toolchain.ts` or a file's presence.
+   */
+  if (path === '/api/toolchain' && method === 'GET') return ok({ ok: true, toolchain: installer().status() })
+
+  /*
+   * Start the download, or stop it.
+   *
+   * ## Ticketed, and for a stronger reason than a compile is
+   *
+   * This is the one door here that makes the machine fetch a program from the
+   * network and keep it. Nothing but a person pressing the button on this
+   * process's own page may open it: not something on this machine that found
+   * the port, not a page on another origin — which cannot read the ticket, for
+   * the reasons at the head of this file — and not an agent. There is no MCP
+   * tool for it and there must not be one: a tool that installs software is
+   * not a tool a paper-reading door should carry.
+   *
+   * ## What a caller can choose is which pieces, and nothing else
+   *
+   * `pieces` is `tectonic` and/or `biber`, and anything else in it is dropped.
+   * There is no address, version or path in the request: what is fetched and
+   * where it goes is the table's and the server's.
+   *
+   * It answers AT ONCE with the status. The page asks `/api/toolchain` again
+   * while `running` is true; a request held open for a hundred megabytes is a
+   * request a proxy, a sleep or a reload would cut.
+   */
+  if (path === '/api/toolchain/install' && method === 'POST') {
+    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const asked = Array.isArray(body?.pieces) ? body.pieces : []
+    const pieces = asked.filter((one): one is PieceId => one === 'tectonic' || one === 'biber')
+    const tools = installer()
+    if (!tools.status().supported) return bad('There is no compiler this module can fetch for this kind of machine.', 409)
+    return ok({ ok: true, toolchain: tools.install(pieces) })
+  }
+
+  if (path === '/api/toolchain/cancel' && method === 'POST') {
+    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    return ok({ ok: true, toolchain: installer().cancel() })
   }
 
   /* The last PDF that compiled, as bytes. `build` on the address is only a

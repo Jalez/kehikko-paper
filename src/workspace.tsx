@@ -10,6 +10,7 @@ import { plainText } from '../latex/parse.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
+import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
 import { headline, inFocus, narrowed, notesOf, pagesShown, type Narrowed } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
@@ -125,7 +126,7 @@ export function Workspace({
   settle?: number
 }) {
   const theme = useTheme()
-  const { build, compiling, compile } = useBuild(paper.epic)
+  const { build, compiling, compile, refresh } = useBuild(paper.epic)
   const { setPaper, setProposals, setSaid } = wire
 
   const onLanded = useCallback(
@@ -869,11 +870,12 @@ export function Workspace({
               )}
             </section>
           )}
-          {build && !build.engine && (
-            <div className="shrink-0 border-b px-2 py-2 text-[0.75rem] leading-relaxed" role="status" data-no-engine>
-              <p className="mb-1 font-medium">The paper cannot be compiled here</p>
-              <p className="text-muted-foreground">{build.how}</p>
-            </div>
+          {build && (
+            /* A compiler that has just arrived is found by asking again, and
+               the effect above then compiles — asked even when the install
+               stopped short, since it may have got as far as the compiler. A
+               biber that has just arrived is a reason to compile at once. */
+            <CompilerOffer build={build} onInstalled={(what, complete) => void (what === 'compiler' ? refresh() : complete ? compile() : undefined)} />
           )}
           {pdfUrl && sheets && sheets.pages.length === 0 && (
             <p className="text-muted-foreground shrink-0 border-b px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
