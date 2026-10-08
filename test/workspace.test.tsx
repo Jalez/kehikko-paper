@@ -271,6 +271,20 @@ describe('between the source and the PDF', () => {
     await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${at}-${at + 3}`))
   })
 
+  test('a press on the PDF leaves the PDF tab in front; a double press turns to the source', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview).not.toBeNull())
+    const tabOf = (name: string) => screen.getByRole('tab', { name }).getAttribute('aria-selected')
+    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    lastPreview!.onPoint({ page: 2, x: 100.5, y: 200.25, word: 'Fin' })
+    const at = MAIN.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${at}-${at + 3}`))
+    expect(tabOf('PDF')).toBe('true')
+    act(() => lastPreview!.onOpen!())
+    expect(tabOf('Source')).toBe('true')
+  })
+
   test('a press with no word under it lands on the line', async () => {
     built = 'kept'
     await open()
