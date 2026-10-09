@@ -75,6 +75,10 @@ export interface PreviewProps {
   onOpen?(): void
   /** The page most in view changed. One-based. */
   onPage?(page: number): void
+  /** How far down to start, in PDF points of what is drawn. Read once, when this is first shown. */
+  from?: number
+  /** It was scrolled: how far down, in the same points. Never said by a pane that is not laid out. */
+  onScrolled?(top: number): void
   /** The pages to draw, ascending, in the PDF's own numbers. Absent or null draws every page, unlabelled, as always. */
   pages?: readonly number[] | null
   /** Those of `pages` no picked part printed on: drawn because a mark is on them, and labelled as outside. */
@@ -220,7 +224,7 @@ const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const GAP = 10
 const PAD = 8
 
-export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = null, outside, outsideOf = 'the picked parts' }: PreviewProps) {
+export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0, onScrolled, pages = null, outside, outsideOf = 'the picked parts' }: PreviewProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<PdfDocument | null>(null)
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([])
@@ -415,7 +419,7 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
      no height — and a scroller whose content has collapsed is at the top when
      it is shown again. Where it was is kept in PDF points, and put back the
      moment there is a scale to put it back at. */
-  const kept = useRef(0)
+  const kept = useRef(from)
   const collapsed = useRef(true)
   useLayoutEffect(() => {
     const node = scroller.current
@@ -431,7 +435,10 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
 
   const onScroll = useCallback(() => {
     const node = scroller.current
-    if (node && scale > 0 && node.clientHeight > 0) kept.current = node.scrollTop / scale
+    if (node && scale > 0 && node.clientHeight > 0) {
+      kept.current = node.scrollTop / scale
+      onScrolled?.(kept.current)
+    }
     /* Under a focus the sheets are not a plain stack, and nothing asks. */
     if (!node || !onPage || scale <= 0 || pages !== null) return
     const middle = node.scrollTop + node.clientHeight / 2
@@ -444,7 +451,7 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
       }
       top += height
     }
-  }, [onPage, scale, sizes, pages])
+  }, [onPage, onScrolled, scale, sizes, pages])
 
   const press = useCallback(
     async (page: number, event: React.MouseEvent<HTMLDivElement>) => {

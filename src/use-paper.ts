@@ -123,6 +123,8 @@ export function usePaper(framed: boolean) {
 
   const host = useRef<Connection | null>(null)
   const goto = useRef<GotoHandler>(() => {})
+  /** What the host kept for this module and handed back on its greeting; after that, what it was last asked to keep. */
+  const kept = useRef<string | null>(null)
   const standingOn = useRef<string | null | undefined>(undefined)
   const standingInRef = useRef<string | null | undefined>(undefined)
   const asking = useRef(0)
@@ -212,7 +214,10 @@ export function usePaper(framed: boolean) {
     const live = connect(
       ID,
       {
-        onHello: (context, _kept) => arrived(context, true),
+        onHello: (context, was) => {
+          kept.current = was ?? null
+          arrived(context, true)
+        },
         onContext: (context) => arrived(context, false),
         onGoto: (message, answer) => goto.current(message, answer),
       },
@@ -393,6 +398,13 @@ export function usePaper(framed: boolean) {
 
   const resize = useCallback((height: number) => host.current?.resize(height), [])
 
+  /** Ask the host to keep a string. Said once per change, and a host that refuses or is not there is not an error: see `remembered.ts`. */
+  const keep = useCallback((state: string) => {
+    if (kept.current === state) return
+    kept.current = state
+    void host.current?.request('state.set', { state }).catch(() => {})
+  }, [])
+
   /** Say where the reader is. Refused or unanswered is the same as not said: a host need not grant it. */
   const point = useCallback((passage: Passage | null) => {
     const conversation = host.current
@@ -410,6 +422,8 @@ export function usePaper(framed: boolean) {
       pointed,
       parts,
       goto,
+      kept,
+      keep,
       start,
       setPaper,
       setProposals,
@@ -424,7 +438,7 @@ export function usePaper(framed: boolean) {
       save,
       askAgain,
     }),
-    [sight, said, resize, point, pointed, parts, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain],
+    [sight, said, resize, point, pointed, parts, keep, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain],
   )
 }
 
