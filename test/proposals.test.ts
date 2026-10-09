@@ -87,12 +87,8 @@ function pending(): { id: string; from: number; to: number; text: string; was_te
     .proposals
 }
 
-function decide(id: string, decision: string, ticket: unknown = TICKET) {
-  return answer('POST', '/api/proposal', new URLSearchParams({ epic: 'a-paper', project }), {
-    id,
-    decision,
-    ticket,
-  })
+function decide(id: string, decision: string, ticket: string | null = TICKET) {
+  return answer('POST', '/api/proposal', new URLSearchParams({ epic: 'a-paper', project }), { id, decision }, ticket)
 }
 
 describe('nothing an agent can reach writes', () => {
@@ -281,8 +277,7 @@ describe('two pending in one file', () => {
       file: 'main.tex',
       text: SOURCE.replace('tpyo', 'typographical'),
       was: hash,
-      ticket: TICKET,
-    })
+      }, TICKET)
     expect(wrote?.status).toBe(200)
     const after = (wrote?.body as { proposals: { from: number }[] }).proposals[0]!
     expect(after.from - before.from).toBe('typographical'.length - 'tpyo'.length)
@@ -298,8 +293,7 @@ describe('two pending in one file', () => {
       file: 'main.tex',
       text: SOURCE.replace('prose after them', 'words that follow'),
       was: hash,
-      ticket: TICKET,
-    })
+      }, TICKET)
     const body = wrote?.body as { proposals: unknown[]; said: string }
     expect(body.proposals).toHaveLength(0)
     expect(body.said).toContain('dropped')

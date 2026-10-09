@@ -512,15 +512,25 @@ never pushing. `git.ts` says what it refuses and why.
 | `GET /api/templates` | the built-in starting points |
 | `POST /mcp` | the six tools |
 
-Every POST but `/mcp` demands the ticket printed into this process's page.
-There is no CORS header and the manifest declares `storage: true`, so the page
-keeps a real origin and the ticket is not readable from another one.
+Every POST but `/mcp` demands the ticket printed into this process's page, in
+the `x-module-ticket` header. There is no CORS header and the manifest declares
+`storage: true`, so the page keeps a real origin and the ticket is not readable
+from another one.
+
+The doors are served by `doors()` from `kehikot-module-protocol` (pinned to a
+tag), which also prints this process's build into the page and stamps every
+answer with it. The page uses the protocol's `useHost`, `ask` and `Cover`: a
+page that finds it is older than its server reloads itself once, and one whose
+server has stopped says so with a Try again. Whatever was typed and not yet
+saved is written to this tab as it changes (`held`), so it is back in the same
+file after a reload — and if that file was written by somebody else meanwhile,
+it comes back as the ordinary conflict rather than over their version.
 
 ## Layout
 
 ```
 manifest.ts          what a host reads
-doors.ts             every door, as functions; vite.config.ts adapts them
+doors.ts             every door, as functions; the protocol's doors() serves them
 store.ts             papers on disk: reading, the two writers, starting one
 templates.ts         the built-in starting points
 compile/engine.ts    which engine and its arguments (pure)

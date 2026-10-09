@@ -128,10 +128,9 @@ describe('/api/proposals is measured against the disk', () => {
     expect(body.said).toBe('')
     /* And accepting it now lands, which is the whole point of restamping. */
     const accepted = answer('POST', '/api/proposal', new URLSearchParams({ project, epic }), {
-      ticket: TICKET,
       id: filed!.id,
       decision: 'accept',
-    })
+    }, TICKET)
     expect(accepted?.status).toBe(200)
     expect(readFileSync(main, 'utf8')).toContain('one an agent will propose')
   })

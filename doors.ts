@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { establishBuild, mintTicket, refuseTicket, type Reply as DoorReply } from 'kehikot-module-protocol/serve'
 import { join, relative } from 'node:path'
 
 import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
@@ -79,8 +79,8 @@ import { templateList } from './templates.ts'
  * a condition rather than as an aspiration:
  *
  *  - **A ticket minted per process and printed into the page.** `TICKET`,
- *    below; `page/document.ts` puts it in the document; both write doors demand
- *    it in the body. It separates "this app's own page" from "something else on
+ *    below; the protocol's `doors()` prints it into the document; every write
+ *    door demands it, in the `x-module-ticket` header. It separates "this app's own page" from "something else on
  *    this machine that guessed the port", and it separates NOTHING else. It is
  *    not an authorization check, anybody who can read the page can read the
  *    ticket, and it is worth nothing at all the moment this origin becomes
@@ -220,7 +220,7 @@ const MAX_WHY = 240
  * ## What it is for, and the much longer list of what it is not
  *
  * It says "this request came from the page this process served". That is all.
- * It is printed into the document by `page/document.ts`, so anything that can
+ * It is printed into the document by the protocol's `doors()`, so anything that can
  * READ the page can read it, and it therefore proves nothing about who the
  * person at the keyboard is, what they are allowed to change, or whether they
  * meant it. Journeys mints one and is careful to write the same sentence beside
@@ -242,22 +242,31 @@ const MAX_WHY = 240
  * Per process, and never written down. A ticket in a file is a ticket that
  * outlives the process that minted it and can be replayed against the next one.
  */
-export const TICKET = randomUUID()
+export const TICKET = mintTicket()
 
 /**
- * Whether a body carried this process's ticket.
- *
- * Compared as a plain string. A timing-safe compare would be the reflex, and it
- * would be theatre here: the caller is a process on this machine that can read
- * the page and simply take the ticket, so there is no secret to extract one
- * byte at a time.
+ * What this process is built from, established once so it is one identity for
+ * the life of the process. `doors()` says it in the manifest, in the health
+ * check's answer, in the page, and as a stamp on every answer — which is how a
+ * page with a paper open tells that the server answering it is no longer the
+ * one that served it, before a save is refused for its ticket.
  */
-function ticketed(body: Record<string, unknown> | null): boolean {
-  return typeof body?.ticket === 'string' && body.ticket === TICKET
-}
+export const BUILD = establishBuild({ version: VERSION, dir: import.meta.dirname })
 
 /**
- * What to say when it did not.
+ * The refusal for a write that did not carry this process's ticket, or `null`
+ * when it did.
+ *
+ * The ticket rides in the header every module uses, `x-module-ticket`, and the
+ * comparison and the refusal are the protocol's: the 403 is marked, so the
+ * page's own `ask` can tell "this page is older than its server" from any
+ * other refusal, and reload itself rather than leave somebody typing into a
+ * page that can no longer save.
+ */
+const unticketed = (ticket: string | null | undefined): Reply | null => refuseTicket(ticket, TICKET, NO_TICKET)
+
+/**
+ * What it is told.
  *
  * A 403 and a sentence naming what is missing rather than a bare refusal,
  * because the caller who hits this is almost always a person's own script or a
@@ -274,25 +283,43 @@ function str(value: unknown, max: number): string {
   return value.trim().slice(0, max)
 }
 
-/** A status and a document. Nothing here writes bytes; the adapter does that. */
-export interface Reply {
-  status: number
-  /** `null` means "answer with no body", which is what a notification gets. */
-  body: unknown
-  /**
-   * An image, when the answer is one, with the content type to send it under.
-   *
-   * The one non-JSON answer this app has. It is a separate field rather than a
-   * `body` that is sometimes bytes so that the adapter cannot serve an image
-   * as `application/json` or a refusal as `image/png` by forgetting a branch —
-   * a refusal here is still an ordinary JSON `body`, and `binary` is present
-   * only when there really are bytes.
-   *
-   * The type comes from `store.ts`'s extension table and never from the bytes.
-   * See the essay there.
-   */
-  binary?: { bytes: Uint8Array; type: string }
-}
+/**
+ * A status and a document: the protocol's `Reply`. Nothing here writes bytes;
+ * `doors()` does that.
+ *
+ * `raw` is the one non-JSON answer this app has — an image, or the PDF. It is a
+ * separate field rather than a `body` that is sometimes bytes so that nothing
+ * can serve an image as `application/json` or a refusal as `image/png` by
+ * forgetting a branch: a refusal here is still an ordinary JSON `body`, and
+ * `raw` is present only when there really are bytes.
+ */
+export type Reply = DoorReply
+
+/**
+ * Bytes, with the content type to send them under and the three headers that
+ * go with every one of them.
+ *
+ * The type comes from `store.ts`'s extension table and never from the bytes.
+ * `nosniff` and a `default-src 'none'` policy ride along because a browser
+ * that decides for itself what these bytes are would undo that on its own.
+ *
+ * `cache-control: private` is there for what it is NOT. `doors()` answers
+ * everything `no-store` unless the reply says otherwise, and that is right for
+ * a JSON answer and wrong for these: the PDF's address carries the build it
+ * came from precisely so the browser may keep it, and before `doors()` these
+ * went out with no cache header at all. `private` says the same thing as that
+ * silence — the browser may store it, nothing shared may — and nothing more.
+ */
+const bytes = (binary: { bytes: Uint8Array; type: string }): Reply => ({
+  status: 200,
+  body: null,
+  raw: binary,
+  headers: {
+    'cache-control': 'private',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; sandbox",
+  },
+})
 
 const ok = (body: unknown): Reply => ({ status: 200, body })
 const bad = (why: string, status = 400): Reply => ({ status, body: { ok: false, error: why } })
@@ -858,6 +885,7 @@ export function answer(
   path: string,
   query: URLSearchParams,
   body: Record<string, unknown> | null,
+  ticket: string | null = null,
 ): Reply | null {
   if (path === '/healthz') return ok({ ok: true, id: ID, version: VERSION })
 
@@ -944,7 +972,8 @@ export function answer(
        demanding the same thing is one rule to read instead of two, and a reader
        who found one write gated and the other not would reasonably conclude the
        gate was decorative. */
-    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const refused = unticketed(ticket)
+    if (refused) return refused
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
@@ -982,7 +1011,8 @@ export function answer(
    * second request racing a third writer.
    */
   if (path === '/api/file' && method === 'POST') {
-    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const refused = unticketed(ticket)
+    if (refused) return refused
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
@@ -1087,7 +1117,8 @@ export function answer(
    * paper as it now is sent back on the refusal.
    */
   if (path === '/api/proposal' && method === 'POST') {
-    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const refused = unticketed(ticket)
+    if (refused) return refused
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
@@ -1237,7 +1268,8 @@ export function answer(
    * over somebody's paper for doing nothing wrong.
    */
   if (path === '/api/save' && method === 'POST') {
-    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const refused = unticketed(ticket)
+    if (refused) return refused
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
@@ -1355,7 +1387,7 @@ export function answer(
        refusal here is undifferentiated: a reply that distinguished them would
        report what is on this disk. */
     if (!figure) return bad('that paper does not name a figure by that name', 404)
-    return { status: 200, body: null, binary: figure }
+    return bytes(figure)
   }
 
   if (path === '/api/source' && method === 'GET') {
@@ -1418,7 +1450,8 @@ export function answer(
    * request a proxy, a sleep or a reload would cut.
    */
   if (path === '/api/toolchain/install' && method === 'POST') {
-    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const refused = unticketed(ticket)
+    if (refused) return refused
     const asked = Array.isArray(body?.pieces) ? body.pieces : []
     const pieces = asked.filter((one): one is PieceId => one === 'tectonic' || one === 'biber')
     const tools = installer()
@@ -1427,7 +1460,8 @@ export function answer(
   }
 
   if (path === '/api/toolchain/cancel' && method === 'POST') {
-    if (!ticketed(body)) return bad(NO_TICKET, 403)
+    const refused = unticketed(ticket)
+    if (refused) return refused
     return ok({ ok: true, toolchain: installer().cancel() })
   }
 
@@ -1438,7 +1472,7 @@ export function answer(
     if (!isEpic(epic)) return bad('that is not an epic name')
     const pdf = readPdf(epic, projectOf(str(query.get('project'), MAX_PROJECT)))
     if (!pdf) return bad('that paper has no compiled PDF yet', 404)
-    return { status: 200, body: null, binary: { bytes: pdf.bytes, type: 'application/pdf' } }
+    return bytes({ bytes: pdf.bytes, type: 'application/pdf' })
   }
 
   /*
@@ -1500,10 +1534,12 @@ export function later(
   method: string,
   path: string,
   query: URLSearchParams,
-  body: Record<string, unknown> | null,
+  _body: Record<string, unknown> | null,
+  ticket: string | null = null,
 ): Promise<Reply> | null {
   if (path !== '/api/compile' || method !== 'POST') return null
-  if (!ticketed(body)) return Promise.resolve(bad(NO_TICKET, 403))
+  const refused = unticketed(ticket)
+  if (refused) return Promise.resolve(refused)
   const epic = str(query.get('epic'), MAX_SLUG)
   if (!isEpic(epic)) return Promise.resolve(bad('that is not an epic name'))
   const project = projectOf(str(query.get('project'), MAX_PROJECT))

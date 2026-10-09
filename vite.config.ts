@@ -1,15 +1,12 @@
-import type { IncomingMessage } from 'node:http'
 import { resolve } from 'node:path'
 
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { LEGACY_WELL_KNOWN, WELL_KNOWN, legacyManifest } from 'kehikot-module-protocol'
-import { frameAncestors, serves } from 'kehikot-module-protocol/serve'
+import { doors, serves, type Answer } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
-import { MANIFEST, TICKET, answer, later, type Reply } from './doors.ts'
+import { BUILD, MANIFEST, TICKET, answer, later } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
-import { page } from './page/document.ts'
 
 /**
  * Every door this app answers on, served by the one process that serves the
@@ -35,23 +32,35 @@ import { page } from './page/document.ts'
  * feel necessary there. Two ports is where a permissive CORS policy comes from;
  * removing the second port removes the reason for the header.
  *
+ * ## What serves them
+ *
+ * The protocol's `doors()`: the manifest at both well-known paths, `/app`
+ * (generated, with the write ticket and this process's build printed into it,
+ * `no-store`, `frame-ancestors`), and `/healthz`, `/mcp` and `/api/*` through
+ * `through` below — `later` for the one door that takes seconds, `answer` for
+ * every other. See the protocol's docs/module-plumbing.md.
+ *
  * ## Why the page is generated rather than a file
  *
- * `/app` is answered with a document this process builds, run through Vite's
+ * `/app` is answered with a document built per process, run through Vite's
  * own `transformIndexHtml` so the client and the module graph are injected
- * exactly as they would be for an `index.html` on disk. Journeys does this to
- * carry a write ticket into the page; there is no ticket here, and the reason
- * is the other one from that file — the collision Atlas lost half a day to.
- * `entry` is `/app`, and under Vite dev an extensionless path is not free: a
+ * exactly as they would be for an `index.html` on disk. One reason is the
+ * ticket, which has to reach the page without a door of its own. The other is
+ * the collision Atlas lost half a day to. `entry` is `/app`, and under Vite dev an extensionless path is not free: a
  * request for `/app` next to an `app.tsx` resolves to that module and answers
  * `200 text/javascript` with compiled source. A browser loads such a document
  * happily and runs nothing in it: the frame's `load` fires, the host greets it,
  * and nothing answers. Here `/app` is claimed before Vite's resolver ever sees
  * it, so no file that happens to sit next to this one can take it.
  */
-function doors(): Plugin {
+const through: Answer = (method, path, query, body, ticket) =>
+  later(method, path, query, body, ticket) ?? answer(method, path, query, body, ticket)
+
+/** One line at startup, and the reason it is still worth a plugin of its own. */
+function says(): Plugin {
   return {
-    name: 'paper-doors',
+    name: 'paper-says',
+    apply: 'serve',
     configureServer(server) {
       /*
        * Say at startup where this program looks — which is no longer a place.
@@ -80,126 +89,21 @@ function doors(): Plugin {
           + 'KEHIKKO_PAPERS_DIR and KEHIKKO_THESIS_DIR are gone, and so is the papers.json that briefly replaced '
           + 'them; all three are ignored if they are still there.',
       )
-
-      server.middlewares.use((request, response, next) => {
-        const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-        const path = url.pathname
-        const method = (request.method ?? 'GET').toUpperCase()
-
-        const send = (reply: Reply) => {
-          if (reply.binary) {
-            /*
-             * The one non-JSON answer. `nosniff` so the browser uses the type
-             * `store.ts` looked up rather than one it decided from the bytes,
-             * and a policy of `default-src 'none'` so that whatever these bytes
-             * turn out to be, they load nothing and run nothing on this origin.
-             * `sandbox` for the same reason, one layer further out.
-             */
-            response.statusCode = reply.status
-            response.setHeader('content-type', reply.binary.type)
-            response.setHeader('x-content-type-options', 'nosniff')
-            response.setHeader('content-security-policy', "default-src 'none'; sandbox")
-            response.end(Buffer.from(reply.binary.bytes))
-            return
-          }
-          if (reply.body === null) {
-            response.statusCode = reply.status
-            response.end()
-            return
-          }
-          response.statusCode = reply.status
-          response.setHeader('content-type', 'application/json; charset=utf-8')
-          response.end(JSON.stringify(reply.body, null, 2))
-        }
-
-        /* Spelled by the protocol package so that this app and every host
-           cannot disagree about it by a character. */
-        if (path === WELL_KNOWN) return send({ status: 200, body: MANIFEST })
-        /* The same manifest in the spelling a host from before the rename asks for. */
-        if (path === LEGACY_WELL_KNOWN) return send({ status: 200, body: legacyManifest(MANIFEST) })
-
-        if (path === '/app' || path === '/app/' || path === '/') {
-          void server
-            /* The ticket goes into the document here rather than being fetched
-               by the page, because a door that hands tickets out is a door
-               anything on this machine can ask. See the essay on `TICKET`. */
-            .transformIndexHtml(request.url ?? '/app', page(TICKET), request.originalUrl)
-            .then((html) => {
-              response.statusCode = 200
-              response.setHeader('content-type', 'text/html; charset=utf-8')
-              /*
-               * Framed by a host and by nothing else — and by nothing at all is
-               * fine too, which is what opening this page directly is.
-               *
-               * `frame-ancestors` is the module's own half of the arrangement:
-               * a host says which origins IT will frame, and this says who may
-               * frame this. It is deliberately not a list of one: whoever is
-               * running this decides, through `frameAncestors()` (`KEHIKOT_ORIGINS`, falling back to `ROADMAP_ORIGIN`), and the default
-               * is the address the host in this workspace actually serves on.
-               */
-              response.setHeader('content-security-policy', frameAncestors())
-              response.end(html)
-            })
-            .catch(next)
-          return
-        }
-
-        const ours = path === '/healthz' || path === '/mcp' || path.startsWith('/api/')
-        if (!ours) return next()
-
-        /* Only the paths above read a body, and only those wait for one. Vite's
-           own middleware stack has to keep seeing an unconsumed request for
-           everything else. */
-        void body(request)
-          .then((parsed) => {
-            /* The one door that takes seconds — a compile — answers with a
-               promise and is asked first. See `later` in `doors.ts`. */
-            const slow = later(method, path, url.searchParams, parsed)
-            if (slow) return slow.then(send)
-            const reply = answer(method, path, url.searchParams, parsed)
-            if (!reply) return next()
-            send(reply)
-          })
-          .catch(next)
-      })
     },
   }
 }
 
 /**
- * The request body, as JSON, or null.
+ * The most a request body may be.
  *
- * Bounded at a megabyte, because the caller is whatever on this machine found
- * the port — loopback is a fence around the machine and not around the programs
- * on it — and a handler that reads until the socket closes is a handler that
- * can be asked to read forever. The only body this app ever reads is an MCP
- * envelope naming an epic; the bound is a bound rather than a budget.
- *
- * Unparseable is null rather than a throw, and `doors.ts` says "that was not a
- * request" about it. A malformed body is an ordinary answer to give.
+ * Bounded, because the caller is whatever on this machine found the port —
+ * loopback is a fence around the machine and not around the programs on it —
+ * and a handler that reads until the socket closes is a handler that can be
+ * asked to read forever. Six megabytes, because the largest body this app
+ * reads is a whole `.tex` file being saved. Past it `doors()` answers 413 and
+ * `answer` is never called.
  */
 const MAX_BODY_BYTES = 6_000_000
-
-async function body(request: IncomingMessage): Promise<Record<string, unknown> | null> {
-  if ((request.method ?? 'GET').toUpperCase() !== 'POST') return null
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of request) {
-    const piece = chunk as Buffer
-    size += piece.length
-    if (size > MAX_BODY_BYTES) return null
-    chunks.push(piece)
-  }
-  if (!chunks.length) return null
-  try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
-  } catch {
-    return null
-  }
-}
 
 /**
  * The dev server, and the one line that is absent from it.
@@ -226,7 +130,7 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown> |
  * This app used to have no ticket to leak, being read-only, so the leak here
  * would have been the smaller one. That has stopped being true: a reader can
  * correct a sentence in place now, `doors.ts` mints a `TICKET`, and
- * `page/document.ts` prints it into the document — which is exactly the string
+ * `doors()` prints it into the document — which is exactly the string
  * the `curl` above pulled out of Journeys. So the argument for this line's
  * absence is no longer "the leak would be small"; it is the same argument
  * Journeys makes, with the same thing at stake.
@@ -284,7 +188,19 @@ export default defineConfig({
    * just fetched.
    */
   base: './',
-  plugins: [serves({ id: ID, prefer: PREFERRED_PORT }), doors(), react(), tailwindcss()],
+  plugins: [
+    serves({ id: ID, prefer: PREFERRED_PORT }),
+    says(),
+    doors({
+      manifest: MANIFEST,
+      answer: through,
+      build: BUILD,
+      page: { title: 'Paper', ticket: TICKET },
+      maxBodyBytes: MAX_BODY_BYTES,
+    }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: { alias: { '@': resolve(import.meta.dirname, 'src') } },
   build: { outDir: 'dist', emptyOutDir: true },
 })

@@ -253,6 +253,113 @@ describe('saving', () => {
   })
 })
 
+describe('what was typed and not saved, across a reload of the page', () => {
+  /* A reload is a page that knows nothing: the components are torn down and
+     mounted afresh, and what survives is what was written to the tab. */
+  const reload = async () => {
+    cleanup()
+    return open()
+  }
+  /** This app's own server, stopped: nothing answers. */
+  const stopped = () => {
+    const answering = globalThis.fetch
+    globalThis.fetch = (() => Promise.reject(new TypeError('Load failed'))) as unknown as typeof fetch
+    return () => {
+      globalThis.fetch = answering
+    }
+  }
+
+  test('the words are back in the same file, and are saved as they would have been', async () => {
+    const editor = await open()
+    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+    const restart = stopped()
+    const mine = MAIN.replace('tpyo', 'typo, typed while the server was away')
+    fireEvent.change(editor, { target: { value: mine } })
+    await new Promise((done) => setTimeout(done, 60))
+    expect(disk['main.tex']).toBe(MAIN)
+
+    restart()
+    const after = await reload()
+    expect(after.value).toBe(mine)
+    await waitFor(() => expect(disk['main.tex']).toBe(mine))
+    /* Measured against the file they were typed over, like any other save. */
+    expect(posted('/api/file').at(-1)!.body).toMatchObject({ file: 'main.tex', text: mine, was: hashOf(MAIN) })
+
+    /* And once saved, nothing is held: the next reload is just the file. */
+    await waitFor(() => expect(document.querySelector('[data-save]')?.getAttribute('data-save')).toBe('saved'))
+    expect((await reload()).value).toBe(mine)
+    expect(window.sessionStorage.getItem(`kehikot.paper.unsaved:${PROJECT}`)).toBeNull()
+  })
+
+  test('they are never put over a file somebody has written since: it is the ordinary conflict', async () => {
+    const editor = await open()
+    const restart = stopped()
+    const mine = MAIN.replace('tpyo', 'typo')
+    fireEvent.change(editor, { target: { value: mine } })
+    await new Promise((done) => setTimeout(done, 60))
+
+    const theirs = MAIN.replace('A claim', 'A claim, restated by somebody else')
+    disk['main.tex'] = theirs
+    restart()
+    const after = await reload()
+    expect(after.value).toBe(mine)
+    expect((await screen.findByRole('alert')).textContent).toContain('changed on disk')
+    await new Promise((done) => setTimeout(done, 60))
+    expect(disk['main.tex']).toBe(theirs)
+
+    fireEvent.click(screen.getByRole('button', { name: /Take the disk/ }))
+    await waitFor(() => expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(theirs))
+    expect(window.sessionStorage.getItem(`kehikot.paper.unsaved:${PROJECT}`)).toBeNull()
+  })
+
+  test('words typed in one project do not appear in a paper of the same name in another', async () => {
+    const editor = await open()
+    /* Reads answer and no save lands, so the file on disk stays as it was: the
+       only way the words could reach the other project is by being held for it. */
+    const answering = globalThis.fetch
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      String(input).includes('/api/file') ? Promise.reject(new TypeError('Load failed')) : answering(input, init)) as typeof fetch
+    try {
+      fireEvent.change(editor, { target: { value: MAIN.replace('tpyo', 'typo') } })
+      await new Promise((done) => setTimeout(done, 60))
+      cleanup()
+      ;(window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM.setURL('http://127.0.0.1:7870/app?project=%2Fsomewhere%2Felse&epic=a-paper')
+      expect((await open()).value).toBe(MAIN)
+      await new Promise((done) => setTimeout(done, 60))
+      expect(disk['main.tex']).toBe(MAIN)
+      expect(window.sessionStorage.getItem('kehikot.paper.unsaved:/somewhere/else')).toBeNull()
+      expect(window.sessionStorage.getItem(`kehikot.paper.unsaved:${PROJECT}`)).toContain('typo')
+    } finally {
+      globalThis.fetch = answering
+    }
+  })
+})
+
+describe('this app’s own server, stopped', () => {
+  test('the cover goes over the paper, never instead of it, and Try again reads again', async () => {
+    const editor = await open()
+    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+    const answering = globalThis.fetch
+    globalThis.fetch = (() => Promise.reject(new TypeError('Load failed'))) as unknown as typeof fetch
+    const mine = MAIN.replace('tpyo', 'typo')
+    try {
+      fireEvent.change(editor, { target: { value: mine } })
+      expect(await screen.findByText('Paper’s own server is not answering.')).toBeDefined()
+      /* Still mounted, still holding what was typed. */
+      expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(mine)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+      await new Promise((done) => setTimeout(done, 20))
+      expect(screen.getByText('Paper’s own server is not answering.')).toBeDefined()
+    } finally {
+      globalThis.fetch = answering
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.queryByText('Paper’s own server is not answering.')).toBeNull())
+    expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(mine)
+  })
+})
+
 describe('between the source and the PDF', () => {
   test('a selection asks where its LINES came out and hands the rectangles, with its words, to the preview', async () => {
     built = 'kept'

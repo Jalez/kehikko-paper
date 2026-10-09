@@ -503,12 +503,13 @@ describe('writeFile: the whole file, guarded by what it was', () => {
 })
 
 describe('the file door', () => {
+  /* The ticket rides in a header, which `doors()` hands to `answer` as its last argument. */
   const send = (body: Record<string, unknown>) =>
-    answer('POST', '/api/file', new URLSearchParams(`epic=a-paper&project=${encodeURIComponent(project)}`), body)
+    answer('POST', '/api/file', new URLSearchParams(`epic=a-paper&project=${encodeURIComponent(project)}`), body, TICKET)
 
   test('a save lands and the paper comes back re-read, with the hash the next save needs', () => {
     const paper = open()
-    const reply = send({ ticket: TICKET, file: 'main.tex', text: MAIN.replace('tpyo', 'typo'), was: paper.hashes['main.tex']! })
+    const reply = send({ file: 'main.tex', text: MAIN.replace('tpyo', 'typo'), was: paper.hashes['main.tex']! })
     expect(reply?.status).toBe(200)
     const body = reply?.body as { ok: boolean; hash: string; paper: { hashes: Record<string, string> } }
     expect(body.ok).toBe(true)
@@ -522,7 +523,7 @@ describe('the file door', () => {
        be: a save that ate the final newline would show in every diff. */
     const paper = open()
     const next = MAIN.trimEnd() + '\n\n\n'
-    send({ ticket: TICKET, file: 'main.tex', text: next, was: paper.hashes['main.tex']! })
+    send({ file: 'main.tex', text: next, was: paper.hashes['main.tex']! })
     expect(mainNow()).toBe(next)
   })
 
@@ -530,7 +531,7 @@ describe('the file door', () => {
     const paper = open()
     const theirs = MAIN.replace('A claim', 'A claim, restated')
     writeFileSync(join(paperDir, 'main.tex'), theirs)
-    const reply = send({ ticket: TICKET, file: 'main.tex', text: MAIN.replace('tpyo', 'typo'), was: paper.hashes['main.tex']! })
+    const reply = send({ file: 'main.tex', text: MAIN.replace('tpyo', 'typo'), was: paper.hashes['main.tex']! })
     expect(reply?.status).toBe(409)
     const body = reply?.body as { stale: boolean; source: string; hash: string }
     expect(body.stale).toBe(true)
@@ -543,7 +544,7 @@ describe('the file door', () => {
 
   test('every other refusal is a 400 and leaves the paper alone', () => {
     const paper = open()
-    const reply = send({ ticket: TICKET, file: 'scratch.tex', text: 'x', was: paper.hashes['main.tex']! })
+    const reply = send({ file: 'scratch.tex', text: 'x', was: paper.hashes['main.tex']! })
     expect(reply?.status).toBe(400)
     expect((reply?.body as { stale: boolean }).stale).toBe(false)
     expect(mainNow()).toBe(MAIN)
@@ -551,21 +552,21 @@ describe('the file door', () => {
 
   test('a body with no text in it is refused rather than read as an empty file', () => {
     const paper = open()
-    const reply = send({ ticket: TICKET, file: 'main.tex', was: paper.hashes['main.tex']! })
+    const reply = send({ file: 'main.tex', was: paper.hashes['main.tex']! })
     expect(reply?.status).toBe(400)
     expect(mainNow()).toBe(MAIN)
   })
 
   test('a save with no project named is a 409 and not a guess', () => {
-    const reply = answer('POST', '/api/file', new URLSearchParams('epic=a-paper'), { ticket: TICKET, file: 'main.tex', text: 'x', was: 'y' })
+    const reply = answer('POST', '/api/file', new URLSearchParams('epic=a-paper'), { file: 'main.tex', text: 'x', was: 'y' }, TICKET)
     expect(reply?.status).toBe(409)
     expect(mainNow()).toBe(MAIN)
   })
 
   test('the door it replaced is gone', () => {
     const reply = answer('POST', '/api/edit', new URLSearchParams(`epic=a-paper&project=${encodeURIComponent(project)}`), {
-      ticket: TICKET, file: 'main.tex', from: 0, to: 1, text: 'x', was: open().hashes['main.tex']!,
-    })
+      file: 'main.tex', from: 0, to: 1, text: 'x', was: open().hashes['main.tex']!,
+    }, TICKET)
     expect(reply?.status).toBe(404)
     expect(mainNow()).toBe(MAIN)
   })
