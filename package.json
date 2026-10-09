@@ -21,7 +21,7 @@
     "@uiw/react-codemirror": "^4.25.12",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "kehikot-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#v0.36.0",
+    "kehikot-module-protocol": "git+ssh://git@github.com/Jalez/kehikko-protocol.git#v1.0.0",
     "lucide-react": "^1.37.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.2.8",

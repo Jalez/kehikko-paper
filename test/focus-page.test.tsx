@@ -448,6 +448,52 @@ describe('a pointer from another module, at a passage outside the picked parts',
   })
 })
 
+describe('the passage the canvas holds, by this page’s own rule for “the same”', () => {
+  test('one whose section ends somewhere else is the one it was, and any other difference is another passage', async () => {
+    const seen: { passage: Passage | null } = { passage: null }
+    function Probe() {
+      seen.passage = usePaper(true).pointed
+      return null
+    }
+    const canvas = host()
+    render(<Probe />)
+    canvas.greet()
+    const said = (over: Partial<Passage> = {}, section: Passage['section'] = { title: 'Method', from: 0, to: 40 }): Passage => ({
+      path: `${DIR}/chapters/method.tex`, page: 3, from: 17, to: 27, quoted: 'The method', section, ...over,
+    })
+    canvas.context([], said())
+    const first = seen.passage!
+    expect(first).toEqual(said())
+
+    /* Typing moves the end of the section the caret is in, and the host says
+       it back: the same passage, and the same object, so nothing redraws. */
+    canvas.context([], said({}, { title: 'Method', from: 0, to: 41 }))
+    expect(seen.passage).toBe(first)
+    canvas.context([], said())
+    expect(seen.passage).toBe(first)
+
+    for (const other of [
+      said({}, { title: 'Method', from: 1, to: 40 }),
+      said({}, { title: 'Results', from: 0, to: 40 }),
+      said({}, null),
+      said({ to: 28 }),
+      said({ from: 16 }),
+      said({ page: 4 }),
+      said({ quoted: 'The methods' }),
+      said({ path: `${DIR}/chapters/design.tex` }),
+    ]) {
+      canvas.context([], other)
+      expect(seen.passage).not.toBe(first)
+      expect(seen.passage).toEqual(other)
+      canvas.context([], said())
+      expect(seen.passage).toEqual(said())
+    }
+    canvas.context([], null)
+    expect(seen.passage).toBeNull()
+    await waitFor(() => expect(asked('/api/paper')).toBe(1))
+  })
+})
+
 describe('the whole paper, with nothing picked', () => {
   test('a press in the PDF opens the file that printed it, and one small press goes back to main.tex', async () => {
     await framed(PARTS())
