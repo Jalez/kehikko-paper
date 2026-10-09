@@ -116,8 +116,6 @@ export function usePaper(framed: boolean) {
   const [disk, setDisk] = useState<Record<string, string> | null>(null)
   const [nudge, setNudge] = useState(0)
   const askAgain = useCallback(() => setNudge((n) => n + 1), [])
-  /** The passage the canvas holds — this page's own, echoed, or somebody else's. */
-  const [pointed, setPointed] = useState<Passage | null>(null)
   /** The open epic's parts, as the host last said them. `[]` from a host that has none to say, and when nothing frames this page. */
   const [parts, setParts] = useState<readonly EpicPart[]>(NO_PARTS)
 
@@ -174,18 +172,13 @@ export function usePaper(framed: boolean) {
    * What a greeting and every later context both do, after `useHost` has done
    * what is the same in every module: the theme is already on `<html>`.
    *
-   * The passage and the parts are held HERE rather than read off the hook, and
-   * by this file's own rule for "the same": a passage whose section ends
-   * somewhere else is still the same passage. Typing moves the end of the
-   * section the caret is in, this page publishes that, the host says it back —
-   * and a passage that changed identity on every keystroke would redraw the
-   * marks over a PDF nobody had moved in.
+   * The parts are held HERE rather than read off the hook; the passage is the
+   * hook's, by the rule `useHost` is given below.
    */
   const arrived = (
-    context: { epic: string | null; projectPath?: string | null; passage?: Passage | null; parts?: readonly EpicPart[] },
+    context: { epic: string | null; projectPath?: string | null; parts?: readonly EpicPart[] },
     greeting: boolean,
   ) => {
-    setPointed((was) => (samePassage(was, context.passage ?? null) ? was : (context.passage ?? null)))
     /* Compared by value: a host composes the list afresh for every context
        it sends, and one that says what the last one said must not redraw a
        PDF. Before the early return below, which is about the EPIC. */
@@ -220,6 +213,13 @@ export function usePaper(framed: boolean) {
    * before "nobody is there", the theme on `<html>`, and the reload of a page
    * that finds it is older than its own server. The handlers are read through
    * a ref inside it, so the newest is the one called.
+   *
+   * `same.passage` is this file's own rule for when the passage the canvas
+   * holds is the one it was: a passage whose section ends somewhere else is
+   * still the same passage. Typing moves the end of the section the caret is
+   * in, this page publishes that, the host says it back — and a passage that
+   * changed identity on every keystroke would redraw the marks over a PDF
+   * nobody had moved in.
    */
   const host = useHost(
     ID,
@@ -231,9 +231,9 @@ export function usePaper(framed: boolean) {
       onContext: (context) => arrived(context, false),
       onGoto: (message, answer) => goto.current(message, answer),
     },
-    { gotoBackstop: 900 },
+    { gotoBackstop: 900, same: { passage: samePassage } },
   )
-  const { where, resize, request, point } = host
+  const { where, resize, request, point, passage: pointed } = host
 
   /** Start a paper for an epic that has none: the plain article, a built-in template, or a copy of a folder. Answers why not, or null. */
   const start = useCallback(async (epic: string, from?: StartFrom): Promise<string | null> => {

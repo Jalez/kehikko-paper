@@ -303,19 +303,18 @@ export type Reply = DoorReply
  * `nosniff` and a `default-src 'none'` policy ride along because a browser
  * that decides for itself what these bytes are would undo that on its own.
  *
- * `cache-control: private` is there for what it is NOT. `doors()` answers
- * everything `no-store` unless the reply says otherwise, and that is right for
- * a JSON answer and wrong for these: the PDF's address carries the build it
- * came from precisely so the browser may keep it, and before `doors()` these
- * went out with no cache header at all. `private` says the same thing as that
- * silence — the browser may store it, nothing shared may — and nothing more.
+ * The empty `cache-control` sends none. `doors()` answers everything
+ * `no-store` unless the reply says otherwise, and that is right for a JSON
+ * answer and wrong for these: the PDF's address carries the build it came from
+ * precisely so the browser may keep it, and before `doors()` these went out
+ * with no cache header at all — as they do again.
  */
 const bytes = (binary: { bytes: Uint8Array; type: string }): Reply => ({
   status: 200,
   body: null,
   raw: binary,
   headers: {
-    'cache-control': 'private',
+    'cache-control': '',
     'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; sandbox",
   },

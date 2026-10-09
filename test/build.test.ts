@@ -195,8 +195,8 @@ describe('the doors in front of it', () => {
     const pdf = (await at('/api/pdf'))!
     expect(pdf.headers.get('content-type')).toBe('application/pdf')
     /* Not `no-store`: its address carries the build it came from so that it can
-       be kept, and before `doors()` it went out with no cache header at all. */
-    expect(pdf.headers.get('cache-control')).toBe('private')
+       be kept, and it goes out with no cache header at all, as before `doors()`. */
+    expect(pdf.headers.get('cache-control')).toBeNull()
     expect(pdf.headers.get('x-content-type-options')).toBe('nosniff')
     expect(pdf.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox")
     expect(await pdf.text()).toBe(GOOD)

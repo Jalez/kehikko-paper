@@ -96,7 +96,13 @@ function serve(path: string, query: URLSearchParams, body: Record<string, unknow
   if (path === '/api/sync') {
     if (query.has('page')) return [200, { ok: true, found: { build: built, file: 'chapters/method.tex', line: 1 } }]
     const page = (MAP as Record<string, { page: number }[]>)[file]?.[0]?.page ?? 1
-    return [200, { ok: true, found: { build: built, exact: true, line: Number(query.get('line')), rects: [{ page, x: 10, y: 20, w: 30, h: 8 }] } }]
+    /* As SyncTeX answers: a line of the preamble prints nothing and has no
+       record of its own, so the answer for it is its nearest neighbour and
+       says so — which the page does not draw for a caret. Every other line has
+       one. The caret a paper opens with is on `\documentclass`. */
+    const line = Number(query.get('line'))
+    const exact = line > disk[file]!.split('\n').indexOf('\\begin{document}')
+    return [200, { ok: true, found: { build: built, exact, line, rects: [{ page, x: 10, y: 20, w: 30, h: 8 }] } }]
   }
   return [404, { ok: false, error: `no ${path} in this test` }]
 }
@@ -382,6 +388,12 @@ describe('what a focus must not do in silence', () => {
   test('picked parts that own no file: nothing of the paper is in them, and the page says so and where to fix it', async () => {
     await framed(PARTS('the-steps'))
     await waitFor(() => expect(banner()).not.toBeNull())
+    /* What follows is said of the page once it has come to rest, so the caret's
+       own line is asked about and answered first: a mark there would put its
+       page on screen, flagged, and "no page" would stop being true. The caret
+       is on the preamble, which prints nothing, so there is none. */
+    await waitFor(() => expect(asked('/api/sync')).toBe(1))
+    await act(() => new Promise<void>((done) => setTimeout(done, 0)))
     expect(banner()!.getAttribute('data-focus')).toBe('none')
     expect(banner()!.textContent).toContain('that part owns no files of this paper')
     expect(banner()!.textContent).toContain('Give the part its files in Journeys')
@@ -433,6 +445,52 @@ describe('a pointer from another module, at a passage outside the picked parts',
     const from = Buffer.from(TEXT['chapters/method.tex']!).indexOf('The method')
     canvas.context(PARTS(), { path: `${DIR}/chapters/method.tex`, page: 3, from, to: from + 10, quoted: 'The method', section: null })
     await waitFor(() => expect(screen.getByTestId('said').textContent).toBe('Something pointed at chapters/method.tex, bytes 17–27. It is marked in the source.'))
+  })
+})
+
+describe('the passage the canvas holds, by this page’s own rule for “the same”', () => {
+  test('one whose section ends somewhere else is the one it was, and any other difference is another passage', async () => {
+    const seen: { passage: Passage | null } = { passage: null }
+    function Probe() {
+      seen.passage = usePaper(true).pointed
+      return null
+    }
+    const canvas = host()
+    render(<Probe />)
+    canvas.greet()
+    const said = (over: Partial<Passage> = {}, section: Passage['section'] = { title: 'Method', from: 0, to: 40 }): Passage => ({
+      path: `${DIR}/chapters/method.tex`, page: 3, from: 17, to: 27, quoted: 'The method', section, ...over,
+    })
+    canvas.context([], said())
+    const first = seen.passage!
+    expect(first).toEqual(said())
+
+    /* Typing moves the end of the section the caret is in, and the host says
+       it back: the same passage, and the same object, so nothing redraws. */
+    canvas.context([], said({}, { title: 'Method', from: 0, to: 41 }))
+    expect(seen.passage).toBe(first)
+    canvas.context([], said())
+    expect(seen.passage).toBe(first)
+
+    for (const other of [
+      said({}, { title: 'Method', from: 1, to: 40 }),
+      said({}, { title: 'Results', from: 0, to: 40 }),
+      said({}, null),
+      said({ to: 28 }),
+      said({ from: 16 }),
+      said({ page: 4 }),
+      said({ quoted: 'The methods' }),
+      said({ path: `${DIR}/chapters/design.tex` }),
+    ]) {
+      canvas.context([], other)
+      expect(seen.passage).not.toBe(first)
+      expect(seen.passage).toEqual(other)
+      canvas.context([], said())
+      expect(seen.passage).toEqual(said())
+    }
+    canvas.context([], null)
+    expect(seen.passage).toBeNull()
+    await waitFor(() => expect(asked('/api/paper')).toBe(1))
   })
 })
 
