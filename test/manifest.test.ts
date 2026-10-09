@@ -37,13 +37,15 @@ describe('what this app claims about itself', () => {
     expect(MANIFEST.declares.storage).toBe(true)
   })
 
-  test('it asks to say where the reader is pointing, and for nothing else', () => {
+  test('it asks to say where the reader is pointing, and to have one line kept for it, and for nothing else', () => {
     /* Which epic is open is not in this list because it is not a capability: it
        arrives on the greeting to every module whatever it declared. What IS
        here is the one thing this app asks permission to do to its neighbours —
        put a path, a page, a byte range and a paragraph of somebody's document
-       into the context every container on the canvas is told. */
-    expect(MANIFEST.declares.uses).toEqual(['passage:set'])
+       into the context every container on the canvas is told. `state:keep`
+       touches no neighbour: it is the open file and tab, handed back to this
+       module alone so a paper opens where its reader left it. */
+    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'state:keep'])
     expect(MANIFEST.declares.prompt).toBe(false)
   })
 
@@ -65,7 +67,7 @@ describe('what this app claims about itself', () => {
        manifest had no `reacts` to say so. Neither is a capability — picking a
        part is the host's own control, and reading a context needs no leave. */
     expect(MANIFEST.reacts).toEqual(['passage', 'parts'])
-    expect(MANIFEST.declares.uses).toEqual(['passage:set'])
+    expect(MANIFEST.declares.uses).not.toContain('parts:set')
   })
 
   test('the id is the one the registration file has to be named after', () => {

@@ -48,7 +48,10 @@ export interface EditorProps {
   onSave(): void
   /** Go there, once per new `nonce`: scroll it into view and put the caret (or, with `select`, the selection) on it. */
   /** With `keep`, only scroll there: the caret and selection are the person's and stay where they put them. */
-  jump: { from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean } | null
+  /** With `top`, that offset is put at the top of the editor instead of the range in its middle: a place being put back. */
+  jump: { from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean; top?: number } | null
+  /** The editor was scrolled: the offset now at its top. Never said by an editor that is not laid out. */
+  onScrolled?(top: number): void
   /** A range somebody ELSE pointed at — a note's anchor, a question's — drawn without touching the selection. */
   mark: { from: number; to: number } | null
   /** One-based lines the engine complained about. */
@@ -98,8 +101,10 @@ const marksField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-export function SourceEditor({ value, onChange, onSelect, onSave, jump, mark, problems, theme }: EditorProps) {
+export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
+  const scrolled = useRef(onScrolled)
+  scrolled.current = onScrolled
   const select = useRef(onSelect)
   select.current = onSelect
   const save = useRef(onSave)
@@ -150,7 +155,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, mark, pr
     const end = Math.min(Math.max(to.to, from), length)
     view.dispatch({
       ...(to.keep ? {} : { selection: to.select ? { anchor: from, head: end } : { anchor: from } }),
-      effects: EditorView.scrollIntoView(from, { y: 'center' }),
+      effects: to.top === undefined ? EditorView.scrollIntoView(from, { y: 'center' }) : EditorView.scrollIntoView(Math.min(to.top, length), { y: 'start', yMargin: 0 }),
     })
     if (to.focus) view.focus()
   }
@@ -179,6 +184,20 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, mark, pr
       onChange={onChange}
       onCreateEditor={(view) => {
         view.dispatch({ effects: setMarks.of({ mark, problems }) })
+        /* Where the editor is scrolled to, as the offset at its top-left: a
+           place in the text, which means the same at another width. Behind the
+           other tab it has no height and is "at the top" — which is not where
+           anybody put it, and is not said. */
+        view.scrollDOM.addEventListener(
+          'scroll',
+          () => {
+            const box = view.scrollDOM.getBoundingClientRect()
+            if (box.height === 0) return
+            const top = view.posAtCoords({ x: view.contentDOM.getBoundingClientRect().left + 1, y: box.top + 1 }, false)
+            scrolled.current?.(top)
+          },
+          { passive: true },
+        )
         land(view)
       }}
       basicSetup={{

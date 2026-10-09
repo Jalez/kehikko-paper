@@ -72,8 +72,8 @@ export const PREFERRED_PORT = 7870
  *   protocol's rule is that a declaration is not a request and is not answered,
  *   so nothing breaks either way — which is exactly why an unused one would
  *   never be noticed, and exactly why it goes now rather than later.
- * - **`passage:set` — declared, and it is the only capability this module asks
- *   for.** A reader drags across a paragraph, and this app can do something no
+ * - **`passage:set` — declared, and it is the capability that matters to
+ *   anybody else.** A reader drags across a paragraph, and this app can do something no
  *   other program on the canvas can: turn "these words on screen" into
  *   `chapters/2_bridge.tex`, bytes 4120–4380, and the text that was there. That
  *   is a fact about where the reader is standing, and the protocol's answer for
@@ -92,6 +92,12 @@ export const PREFERRED_PORT = 7870
  *
  *   Declared where `epics:read` was removed, and by the same rule: a capability
  *   is declared when the program calls the method and not otherwise.
+ * - **`state:keep` — declared, for one line of view state.** Which file of
+ *   which paper was open and which tab was in front, so that a paper opens
+ *   where its reader left it after the window itself has gone. Not the
+ *   auto-approve tick, which is a permission and stays in this browser;
+ *   `src/remembered.ts` argues both. A host that keeps nothing costs a reader
+ *   nothing they had before.
  * - **`steps:read` — not declared.** A paper is prose. It argues for an
  *   arrangement; it does not track work, and a reader that drew a step rail
  *   beside the argument would be a second, worse Journeys.
@@ -252,7 +258,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   reacts: ['passage', 'parts'],
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
-    /* One entry, and see the essay above. What this app READS is handed to it
+    /* Two entries, and see the essay above. What this app READS is handed to it
        unbidden, on the greeting and on every context, whatever it declared —
        which epic is open, and now also `passage`, so a container that holds a note
        about a passage can turn this one to it. There has never been anything to
@@ -265,8 +271,11 @@ export const MANIFEST: Manifest = manifestSchema.parse({
        shape that can loop, so the rule about when this module speaks is in
        `shouldPublish` with a test rather than in a comment: never while it is
        showing a passage somebody else set, and never back at the container that set
-       it. */
-    uses: ['passage:set'],
+       it.
+
+       `state.set` changes nothing anybody else is told: the host keeps a
+       string it does not read and hands it back to this module alone. */
+    uses: ['passage:set', 'state:keep'],
     storage: true,
     prompt: false,
   },

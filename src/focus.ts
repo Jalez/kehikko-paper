@@ -320,6 +320,23 @@ export function fileAfterTicks(focus: Narrowed | null, open: string, midEdit: bo
   return focus.files[0] ?? null
 }
 
+/**
+ * The file a paper OPENS on — or null, for `main.tex`, where every paper starts.
+ *
+ * `was` is the file the person was in when this page was last on this paper
+ * (`remembered.ts`), and it wins over starting on `main.tex`: a reload is not
+ * a reason to lose a chapter. But it is a remembered thing and the ticks are
+ * a present one, so it is used only while it is still a file of the paper and
+ * still inside what is picked. Otherwise this is what it was before anything
+ * was remembered: under a focus that does not own `main.tex`, the first file
+ * that is in it.
+ */
+export function fileOnOpening(focus: Narrowed | null, files: readonly string[], was: string | null): string | null {
+  if (was !== null && files.includes(was) && (focus === null || focus.files.length === 0 || focus.files.includes(was))) return was
+  const first = focus?.files[0]
+  return first && !focus!.files.includes(MAIN_FILE) ? first : null
+}
+
 /** One file in the switch above the editor. */
 export interface FileTab {
   file: string

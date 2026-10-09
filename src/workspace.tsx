@@ -13,14 +13,14 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import { MAIN_FILE, fileAfterTicks, headline, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
+import { MAIN_FILE, fileAfterTicks, fileOnOpening, headline, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
 import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
 import { ProposalsPanel } from './proposals-panel.tsx'
-import { autoApproveKey, autoApproveWas, rememberAutoApprove } from './remembered.ts'
+import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSpot, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
 import type { usePaper } from './use-paper.ts'
 import { usePublishedPassage, type Highlighted, type Sheet } from './use-published-passage.ts'
@@ -126,6 +126,8 @@ interface Going {
   focus?: boolean
   /** Mark it as somebody else's anchor rather than moving the selection onto it. */
   foreign?: boolean
+  /** A byte to put at the top of the editor, rather than the range in its middle: a place being put back. */
+  top?: number | null
 }
 
 export function Workspace({
@@ -178,18 +180,39 @@ export function Workspace({
   const isOutside = useCallback((name: string) => !ticked.inFocus({ file: name }), [ticked])
   const outsideSaid = focus ? `the picked part${focus.parts.length === 1 ? '' : 's'}` : ''
 
-  /* A paper OPENED under a focus starts on a file that is in it. Once per
-     paper, which is what the dependency says: after this the open file moves
-     only when the ticks do (below). Declared straight after `useSource` so
-     that it runs after that hook's own "a new paper starts on main.tex" —
-     and with no guard of its own beyond the dependency, so that it runs
-     after it EVERY time that one runs. StrictMode, which is how the page is
-     mounted, runs both twice; a ref that let this run once left the second
-     "starts on main.tex" standing, and a reload with a part ticked opened
-     `main.tex`, marked outside. */
+  /* A paper OPENED goes back to where its reader was — the file, the tab, and
+     the caret and scroll in that file — and, with nothing remembered or the
+     file no longer in what is shown, starts under a focus on a file that is in
+     it. `fileOnOpening` has the rule and `remembered.ts` what is kept. A place
+     in the file is put back only while the file is byte for byte the one it
+     was a place in.
+
+     Once per paper, which is what the dependency says: after this the open
+     file moves only when the ticks do (below). Declared straight after
+     `useSource` so that it runs after that hook's own "a new paper starts on
+     main.tex" — and with no guard of its own beyond the dependency, so that
+     it runs after it EVERY time that one runs. StrictMode, which is how the
+     page is mounted, runs both twice; a ref that let this run once left the
+     second "starts on main.tex" standing, and a reload with a part ticked
+     opened `main.tex`, marked outside. Nothing is REMEMBERED before a file's
+     text is on screen (below), so the second run reads what the first did.
+
+     Before the effect that walks to a passage the canvas holds, so that one
+     has the last word: what somebody pointed at outranks where this was. */
   useEffect(() => {
-    const first = focusRef.current?.files[0]
-    if (first && !focusRef.current!.files.includes('main.tex')) source.open(first)
+    /* Whatever passage was walked to was walked to before this ran, and this
+       is about to open a file over it: the walk is owed again. Without it the
+       second of StrictMode's two runs left the page off the passage. */
+    walkedFor.current = null
+    const was = placeWas(standingIn(), paper.epic, wire.kept.current)
+    if (was) setTab(was.tab)
+    const next = fileOnOpening(focusRef.current, paper.files, was?.file ?? null)
+    if (next !== null) source.open(next)
+    const spot = was && was.file === (next ?? MAIN_FILE) ? spotWas(standingIn(), paper.epic, was.file) : null
+    if (!was || !spot || spot.hash !== paper.hashes[was.file]) return
+    putBack.current = { file: was.file, from: spot.from, to: spot.to }
+    if (spot.top !== null) scrolled.current = { file: was.file, top: spot.top }
+    setGoing({ file: was.file, bytes: { from: spot.from, to: spot.to }, top: spot.top, select: true, focus: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paper.epic])
 
@@ -199,6 +222,17 @@ export function Workspace({
      a re-read of the paper or a save never moves the editor, and neither does
      opening a paper (that is the effect above). */
   const ticks = ticksOf(parts)
+  /* How far down the PDF was, read while drawing and before anything can have
+     been written over it; only under the ticks it was scrolled under, since
+     the same number of points down a different set of sheets is another page. */
+  const pdfFrom = useMemo(() => {
+    const was = pdfWas(standingIn(), paper.epic)
+    return was && was.ticks === ticks ? was.top : 0
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paper.epic])
+  const ticksRef = useRef(ticks)
+  ticksRef.current = ticks
+  const onPdfScrolled = useCallback((top: number) => rememberPdf(standingIn(), paper.epic, { top, ticks: ticksRef.current }), [paper.epic])
   const followed = useRef<{ epic: string; ticks: string } | null>(null)
   const midEdit = source.state !== 'saved'
   useEffect(() => {
@@ -243,6 +277,10 @@ export function Workspace({
   const [selection, setSelection] = useState({ from: 0, to: 0 })
   const [jump, setJump] = useState<{ from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean } | null>(null)
   const [going, setGoing] = useState<Going | null>(null)
+  /** The byte at the top of the editor, as the editor last said it, and the file it is a byte of. */
+  const scrolled = useRef<{ file: string; top: number } | null>(null)
+  /** The selection that was put back on opening: not the person selecting, so not a reason to turn the PDF to it. */
+  const putBack = useRef<{ file: string; from: number; to: number } | null>(null)
   /** Somebody else's anchor, in bytes of a file of this paper. */
   const [theirs, setForeign] = useState<{ file: string; from: number; to: number; quoted: string } | null>(null)
   /**
@@ -336,7 +374,8 @@ export function Workspace({
         from = to = start + (text.length - text.trimStart().length)
       }
     }
-    setJump((was) => ({ from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign }))
+    const top = typeof going.top === 'number' ? { top: indexAt(doc.text, going.top, doc.eol) } : {}
+    setJump((was) => ({ from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign, ...top }))
     if (tabRef.current !== 'source') unseen.current = true
     setGoing(null)
   }, [going, file, doc])
@@ -365,6 +404,44 @@ export function Workspace({
 
   const map = build?.pdf?.map ?? null
   const page = useMemo(() => (map ? pageOfLine(map, file, fromLine) : null), [map, file, fromLine])
+
+  /* ---- Remembering where this is, for the next time the page loads ------- */
+
+  /* The file and the tab, once that file's text is on screen — not before, or
+     the `main.tex` every paper starts on would be written over the place this
+     is about to go back to. To this tab's session and, being one short line
+     that changes when a person changes file, to the host. */
+  const { keep } = wire
+  useEffect(() => {
+    if (!doc) return
+    const place = { file, tab }
+    rememberPlace(standingIn(), paper.epic, place)
+    const line = keptPlace(standingIn(), paper.epic, place)
+    if (line !== null) keep(line)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paper.epic, file, tab, doc === null, keep])
+
+  /* The selection and the editor's scroll, in bytes of the file as it is on
+     disk and with the hash that says which bytes those are. Not while there is
+     unsaved text: the offsets would be into text the disk does not hold yet,
+     and the save that follows changes the hash and comes through here. */
+  const spot = useRef({ file, from: fromByte, to: toByte, text, eol, hash: doc && doc.text === doc.saved ? doc.hash : null })
+  spot.current = { file, from: fromByte, to: toByte, text, eol, hash: doc && doc.text === doc.saved ? doc.hash : null }
+  const rememberHere = useCallback(() => {
+    const now = spot.current
+    if (now.hash === null) return
+    const top = scrolled.current?.file === now.file ? scrolled.current.top : null
+    rememberSpot(standingIn(), paper.epic, now.file, { from: now.from, to: now.to, top, hash: now.hash })
+  }, [paper.epic])
+  useEffect(rememberHere, [rememberHere, file, fromByte, toByte, spot.current.hash])
+  const onEditorScrolled = useCallback(
+    (top: number) => {
+      const now = spot.current
+      scrolled.current = { file: now.file, top: byteAt(now.text, top, now.eol) }
+      rememberHere()
+    },
+    [rememberHere],
+  )
 
   /* A caret that MOVED is the person going somewhere. Compared with what is
      held, because the editor also reports a selection when the disk's text
@@ -523,8 +600,12 @@ export function Workspace({
           if (stopped) return
           setOwnRects(rects)
           /* A SELECTION is followed; a caret moving is not, or the page would
-             slide under every arrow key. */
-          if (rects.length && (selecting || wanted.current)) setReveal((was) => ({ nonce: (was?.nonce ?? 0) + 1 }))
+             slide under every arrow key. Nor is the selection this page put
+             back itself: the PDF was put back too, to where IT was. */
+          const now = spot.current
+          const back = putBack.current
+          const restored = back !== null && back.file === now.file && back.from === now.from && back.to === now.to
+          if (rects.length && ((selecting && !restored) || wanted.current)) setReveal((was) => ({ nonce: (was?.nonce ?? 0) + 1 }))
           wanted.current = false
         })
         .catch(() => {})
@@ -1026,6 +1107,7 @@ export function Workspace({
                 value={doc.text}
                 onChange={source.edit}
                 onSelect={onSelect}
+                onScrolled={onEditorScrolled}
                 onSave={() => void source.flush()}
                 jump={jump}
                 mark={
@@ -1100,6 +1182,8 @@ export function Workspace({
                 reveal={reveal}
                 onPoint={onPoint}
                 onOpen={() => setTab('source')}
+                from={pdfFrom}
+                onScrolled={onPdfScrolled}
                 {...(sheets ? { pages: sheets.pages, outside: sheets.outside, outsideOf: outsideSaid } : {})}
               />
             ) : (
