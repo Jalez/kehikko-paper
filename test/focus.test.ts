@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { partsSchema, type EpicPart } from 'kehikot-module-protocol'
+import { anchorInFocus, partsSchema, type EpicPart } from 'kehikot-module-protocol'
 
 import type { PageSpan } from '../compile/synctex.ts'
-import { fileAfterTicks, gapsBetween, headline, inFocus, narrowed, notesOf, pagesSaid, pagesShown, sameParts, tabsOf, ticksOf } from '../src/focus.ts'
+import { fileAfterTicks, gapsBetween, headline, narrowed, notesOf, pagesSaid, pagesShown, tabsOf, ticksOf } from '../src/focus.ts'
 import { jumpsOf, type SectionAt } from '../src/lib/sections.ts'
 
 /**
@@ -64,7 +64,7 @@ describe('nothing picked', () => {
   test('is the whole paper: no narrowing at all, and every file in front of the person', () => {
     expect(narrowed(parts(), paper, pdf)).toBeNull()
     expect(narrowed([], paper, pdf)).toBeNull()
-    for (const file of paper.files) expect(inFocus(parts(), paper, file)).toBe(true)
+    for (const file of paper.files) expect(anchorInFocus(parts(), { file: file }, paper.epic)).toBe(true)
   })
 
   test('the fixtures are parts a host could send', () => {
@@ -81,8 +81,8 @@ describe('one part picked', () => {
     expect(focus.totalFiles).toBe(4)
     expect(focus.outsideFiles).toBe(3)
     /* `main.tex` is in no part, so it is outside every focus. */
-    expect(inFocus(parts('the-design'), paper, 'main.tex')).toBe(false)
-    expect(inFocus(parts('the-design'), paper, 'chapters/design.tex')).toBe(true)
+    expect(anchorInFocus(parts('the-design'), { file: 'main.tex' }, paper.epic)).toBe(false)
+    expect(anchorInFocus(parts('the-design'), { file: 'chapters/design.tex' }, paper.epic)).toBe(true)
   })
 
   test('the pages its file printed on, by their real numbers — the shared sheet included', () => {
@@ -101,8 +101,8 @@ describe('one part picked', () => {
 
   test('a file is compared by the protocol, so an absolute path of THIS paper is in focus and another epic’s is not', () => {
     const picked = parts('the-design')
-    expect(inFocus(picked, paper, `/p/.kehikot/paper/${EPIC}/chapters/design.tex`)).toBe(true)
-    expect(inFocus(picked, paper, '/p/.kehikot/paper/another-epic/chapters/design.tex')).toBe(false)
+    expect(anchorInFocus(picked, { file: `/p/.kehikot/paper/${EPIC}/chapters/design.tex` }, paper.epic)).toBe(true)
+    expect(anchorInFocus(picked, { file: '/p/.kehikot/paper/another-epic/chapters/design.tex' }, paper.epic)).toBe(false)
   })
 })
 
@@ -229,15 +229,6 @@ describe('the pages the PDF pane draws', () => {
     expect([...gapsBetween([], 20)]).toEqual([[21, { from: 1, to: 20 }]])
     /* A page count the build did not give leaves the tail unsaid, not guessed. */
     expect([...gapsBetween([2], null)]).toEqual([[2, { from: 1, to: 1 }]])
-  })
-})
-
-describe('whether the parts changed', () => {
-  test('is asked by value, so a host repeating itself redraws nothing', () => {
-    expect(sameParts(parts('the-design'), parts('the-design'))).toBe(true)
-    expect(sameParts(parts('the-design'), parts('the-method'))).toBe(false)
-    expect(sameParts(parts(), [])).toBe(false)
-    expect(sameParts([], [])).toBe(true)
   })
 })
 

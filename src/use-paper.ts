@@ -1,4 +1,4 @@
-import type { EpicPart, Goto, Passage } from 'kehikot-module-protocol'
+import { sameParts, type EpicPart, type Goto, type Passage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { connect, type Connection } from 'kehikot-module-protocol/client'
@@ -7,7 +7,6 @@ import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { json, post, standIn, standingIn } from './api.ts'
-import { sameParts } from './focus.ts'
 
 /**
  * Which paper this page is on, and the conversation with whatever framed it.
