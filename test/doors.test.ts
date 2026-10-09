@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { answer } from '../doors.ts'
+import { TICKET, answer } from '../doors.ts'
 import { ID } from '../manifest.ts'
 
 /**
@@ -129,13 +129,19 @@ describe('the write paths are exactly two, and both are ticketed', () => {
 
   test('a ticket from some other process is refused the same way', () => {
     const reply = answer('POST', '/api/file', new URLSearchParams(inProject(projectDir, 'epic=a-paper')), {
-      ticket: '00000000-0000-4000-8000-000000000000',
       file: 'main.tex',
       from: 0,
       to: 1,
       text: 'x',
       was: 'whatever',
-    })
+    }, '00000000-0000-4000-8000-000000000000')
+    expect(reply?.status).toBe(403)
+    /* Marked, so the page's own `ask` can tell a page older than its server from any other refusal, and reload. */
+    expect(reply?.body).toMatchObject({ ok: false, refused: 'ticket' })
+  })
+
+  test('the ticket in the body, where this app used to carry it, is no ticket', () => {
+    const reply = answer('POST', '/api/save', new URLSearchParams(inProject(projectDir, 'epic=a-paper')), { ticket: TICKET })
     expect(reply?.status).toBe(403)
   })
 
@@ -389,8 +395,8 @@ describe('the figure door', () => {
     const reply = get('/api/figure', inProject(thesisProject, 'epic=thesis&file=figures%2Fplot.png'))
     expect(reply?.status).toBe(200)
     expect(reply?.body).toBeNull()
-    expect(reply?.binary?.type).toBe('image/png')
-    expect(Buffer.from(reply!.binary!.bytes).equals(PNG)).toBe(true)
+    expect(reply?.raw?.type).toBe('image/png')
+    expect(Buffer.from(reply!.raw!.bytes as Uint8Array).equals(PNG)).toBe(true)
   })
 
   test('a file sitting beside it that the paper never named is refused', () => {
@@ -399,7 +405,7 @@ describe('the figure door', () => {
        does not name it. */
     const reply = get('/api/figure', inProject(thesisProject, 'epic=thesis&file=figures%2Fprivate.png'))
     expect(reply?.status).toBe(404)
-    expect(reply?.binary).toBeUndefined()
+    expect(reply?.raw).toBeUndefined()
   })
 
   test('a refusal is still JSON, so no branch can serve an error as an image', () => {
@@ -409,7 +415,7 @@ describe('the figure door', () => {
       'epic=thesis',
     ]) {
       const reply = get('/api/figure', inProject(thesisProject, query))
-      expect(reply?.binary).toBeUndefined()
+      expect(reply?.raw).toBeUndefined()
       expect(reply?.status).toBeGreaterThanOrEqual(400)
     }
   })

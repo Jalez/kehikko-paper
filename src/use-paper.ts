@@ -1,7 +1,7 @@
 import { sameParts, type EpicPart, type Goto, type Passage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { connect, type Connection } from 'kehikot-module-protocol/client'
+import { useHost } from 'kehikot-module-protocol/client/react'
 
 import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
@@ -121,7 +121,6 @@ export function usePaper(framed: boolean) {
   /** The open epic's parts, as the host last said them. `[]` from a host that has none to say, and when nothing frames this page. */
   const [parts, setParts] = useState<readonly EpicPart[]>(NO_PARTS)
 
-  const host = useRef<Connection | null>(null)
   const goto = useRef<GotoHandler>(() => {})
   /** What the host kept for this module and handed back on its greeting; after that, what it was last asked to keep. */
   const kept = useRef<string | null>(null)
@@ -171,65 +170,70 @@ export function usePaper(framed: boolean) {
     if (asked) void look(asked)
   }, [framed, look])
 
-  useEffect(() => {
-    const arrived = (
-      context: { epic: string | null; projectPath?: string | null; theme?: string; passage?: Passage | null; parts?: readonly EpicPart[] },
-      greeting: boolean,
-    ) => {
-      const root = document.documentElement
-      if (context.theme === 'dark' || context.theme === 'light') {
-        root.classList.toggle('dark', context.theme === 'dark')
-        root.classList.toggle('light', context.theme === 'light')
-      }
-      setPointed((was) => (samePassage(was, context.passage ?? null) ? was : (context.passage ?? null)))
-      /* Compared by value: a host composes the list afresh for every context
-         it sends, and one that says what the last one said must not redraw a
-         PDF. Before the early return below, which is about the EPIC. */
-      const said = Array.isArray(context.parts) ? context.parts : NO_PARTS
-      setParts((was) => (sameParts(was, said) ? was : said))
+  /**
+   * What a greeting and every later context both do, after `useHost` has done
+   * what is the same in every module: the theme is already on `<html>`.
+   *
+   * The passage and the parts are held HERE rather than read off the hook, and
+   * by this file's own rule for "the same": a passage whose section ends
+   * somewhere else is still the same passage. Typing moves the end of the
+   * section the caret is in, this page publishes that, the host says it back —
+   * and a passage that changed identity on every keystroke would redraw the
+   * marks over a PDF nobody had moved in.
+   */
+  const arrived = (
+    context: { epic: string | null; projectPath?: string | null; passage?: Passage | null; parts?: readonly EpicPart[] },
+    greeting: boolean,
+  ) => {
+    setPointed((was) => (samePassage(was, context.passage ?? null) ? was : (context.passage ?? null)))
+    /* Compared by value: a host composes the list afresh for every context
+       it sends, and one that says what the last one said must not redraw a
+       PDF. Before the early return below, which is about the EPIC. */
+    const said = Array.isArray(context.parts) ? context.parts : NO_PARTS
+    setParts((was) => (sameParts(was, said) ? was : said))
 
-      /* A greeting is a new conversation: whatever this page believed about
-         where the canvas stood belonged to the last one. */
-      if (greeting) {
-        standingOn.current = undefined
-        standingInRef.current = undefined
-      }
-      const project =
-        typeof context.projectPath === 'string' && context.projectPath.trim() ? context.projectPath.trim() : null
-      const relocated = standingInRef.current !== project
-      standingInRef.current = project
-      if (relocated) standIn(project)
-
-      if (!relocated && context.epic === standingOn.current) return
-      standingOn.current = context.epic
-
-      if (context.epic === null) {
-        setSight(project === null ? { at: 'no-project', why: '' } : { at: 'no-epic' })
-        setSaid('')
-        return
-      }
-      void look(context.epic)
+    /* A greeting is a new conversation: whatever this page believed about
+       where the canvas stood belonged to the last one. */
+    if (greeting) {
+      standingOn.current = undefined
+      standingInRef.current = undefined
     }
+    const project =
+      typeof context.projectPath === 'string' && context.projectPath.trim() ? context.projectPath.trim() : null
+    const relocated = standingInRef.current !== project
+    standingInRef.current = project
+    if (relocated) standIn(project)
 
-    const live = connect(
-      ID,
-      {
-        onHello: (context, was) => {
-          kept.current = was ?? null
-          arrived(context, true)
-        },
-        onContext: (context) => arrived(context, false),
-        onGoto: (message, answer) => goto.current(message, answer),
+    if (!relocated && context.epic === standingOn.current) return
+    standingOn.current = context.epic
+
+    if (context.epic === null) {
+      setSight(project === null ? { at: 'no-project', why: '' } : { at: 'no-epic' })
+      setSaid('')
+      return
+    }
+    void look(context.epic)
+  }
+
+  /**
+   * The host: the protocol's `useHost`, which is the connection, the grace
+   * before "nobody is there", the theme on `<html>`, and the reload of a page
+   * that finds it is older than its own server. The handlers are read through
+   * a ref inside it, so the newest is the one called.
+   */
+  const host = useHost(
+    ID,
+    {
+      onHello: (context, was) => {
+        kept.current = was ?? null
+        arrived(context, true)
       },
-      { gotoBackstop: 900 },
-    )
-    host.current = live
-    live.listen()
-    return () => {
-      live.stop()
-      if (host.current === live) host.current = null
-    }
-  }, [look])
+      onContext: (context) => arrived(context, false),
+      onGoto: (message, answer) => goto.current(message, answer),
+    },
+    { gotoBackstop: 900 },
+  )
+  const { where, resize, request, point } = host
 
   /** Start a paper for an epic that has none: the plain article, a built-in template, or a copy of a folder. Answers why not, or null. */
   const start = useCallback(async (epic: string, from?: StartFrom): Promise<string | null> => {
@@ -396,25 +400,31 @@ export function usePaper(framed: boolean) {
     }
   }, [askAgain])
 
-  const resize = useCallback((height: number) => host.current?.resize(height), [])
-
   /** Ask the host to keep a string. Said once per change, and a host that refuses or is not there is not an error: see `remembered.ts`. */
   const keep = useCallback((state: string) => {
     if (kept.current === state) return
     kept.current = state
-    void host.current?.request('state.set', { state }).catch(() => {})
-  }, [])
+    void request('state.set', { state }).catch(() => {})
+  }, [request])
 
-  /** Say where the reader is. Refused or unanswered is the same as not said: a host need not grant it. */
-  const point = useCallback((passage: Passage | null) => {
-    const conversation = host.current
-    if (!conversation) return
-    void conversation.request('passage.set', { passage }).catch(() => {})
-  }, [])
+  /**
+   * Try again, after this app's own server has answered again: a paper that
+   * could not be opened is asked for once more, and one that is open has its
+   * standing read now rather than at the next poll.
+   */
+  const again = useCallback(() => {
+    const on = standingOn.current ?? (framed ? null : epicFromUrl(window.location.search))
+    if (on && showing.current === null) void look(on)
+    askAgain()
+  }, [framed, look, askAgain])
 
   return useMemo(
     () => ({
       sight,
+      /** Whether anything is framing this page, and what the canvas is on: what the shared cover asks. */
+      where,
+      projectPath: host.projectPath,
+      epic: host.epic,
       said,
       setSaid,
       resize,
@@ -437,8 +447,9 @@ export function usePaper(framed: boolean) {
       saving,
       save,
       askAgain,
+      again,
     }),
-    [sight, said, resize, point, pointed, parts, keep, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, parts, keep, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again],
   )
 }
 

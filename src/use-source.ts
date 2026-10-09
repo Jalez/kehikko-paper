@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
-import { json, post } from './api.ts'
+import { held } from 'kehikot-module-protocol/client'
+
+import { json, post, standingIn } from './api.ts'
 import { eolOf, toDisk, toEditor, type Eol } from './lib/offsets.ts'
 
 /**
@@ -69,6 +71,40 @@ export interface Landed {
 
 const MAIN = 'main.tex'
 
+/**
+ * What somebody typed and this page has not yet saved, kept across a reload of
+ * the page itself.
+ *
+ * A save here waits most of a second for the typing to stop, and a save that
+ * cannot land — this app's own server is restarting — waits longer. Three
+ * things reload the page in that window and none can be caught in time: a page
+ * that finds it is older than its server, the person, and Vite's own client,
+ * which reloads the moment its dev server answers again. So the words are
+ * written as they change, with the protocol's `held`, to this tab's
+ * `sessionStorage`; nothing is sent anywhere.
+ *
+ * Keyed so they cannot land anywhere else: by the open project, and under it
+ * by the epic and the file. And kept WITH the hash of the file they were typed
+ * over, which is what makes putting them back honest. Back in the editor they
+ * are an unsaved edit like any other, measured against that hash: if the file
+ * on disk is still the one they were typed over they are saved a moment later,
+ * and if somebody has written it since, that is the ordinary conflict — both
+ * versions in front of the person, and nothing overwritten on their behalf.
+ */
+interface Unsaved {
+  text: string
+  hash: string
+}
+
+const unsaved = held<Unsaved>('kehikot.paper.unsaved', (stored) => {
+  const one = stored as Partial<Unsaved> | null
+  return one && typeof one === 'object' && typeof one.text === 'string' && typeof one.hash === 'string'
+    ? { text: one.text, hash: one.hash }
+    : null
+})
+
+const aimedAt = (epic: string, file: string) => `${epic}\u0000${file}`
+
 export function useSource({
   paper,
   disk,
@@ -107,6 +143,14 @@ export function useSource({
 
   /* A different paper is a different set of buffers. Nothing typed for the
      last one is carried over; it was either saved or is the last paper's. */
+  /** Hold a file's unsaved words, or forget them once they are what is saved. */
+  const hold = useCallback((name: string) => {
+    const on = epicRef.current
+    const doc = docs.current.get(name)
+    if (on === null || !doc) return
+    unsaved.at(standingIn()).keep(aimedAt(on, name), doc.text === doc.saved ? null : { text: doc.text, hash: doc.hash })
+  }, [])
+
   if (epicRef.current !== epic) {
     epicRef.current = epic
     docs.current = new Map()
@@ -142,7 +186,25 @@ export function useSource({
     void read(file)
       .then((got) => {
         if (stopped || !got || epicRef.current !== epic) return
-        docs.current.set(file, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
+        const typed = unsaved.at(standingIn()).read(aimedAt(epic, file))
+        if (!typed || typed.text === got.text) {
+          docs.current.set(file, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
+          hold(file)
+        } else if (typed.hash === got.hash) {
+          /* The file is the one these words were typed over: they are back in
+             the editor, unsaved, and saved the way a keystroke would have been. */
+          docs.current.set(file, { text: typed.text, saved: got.text, hash: got.hash, eol: got.eol })
+          if (timer.current) clearTimeout(timer.current)
+          timer.current = setTimeout(() => {
+            timer.current = null
+            void saveNow(file)
+          }, saveDelay)
+        } else {
+          /* Somebody has written the file since. Their version is not
+             overwritten and these words are not dropped: it is a conflict. */
+          docs.current.set(file, { text: typed.text, saved: got.text, hash: typed.hash, eol: got.eol })
+          setConflict({ file, theirs: got.text, hash: got.hash, eol: got.eol })
+        }
         redraw()
       })
       .catch((e) => setFailure(`${file} could not be read: ${(e as Error).message}`))
@@ -171,6 +233,8 @@ export function useSource({
           if (body.ok === true && typeof body.hash === 'string') {
             doc.hash = body.hash
             doc.saved = sending
+            /* Saved: nothing is held, unless more was typed while this went out. */
+            hold(name)
             setFailure('')
             landed.current(body as Landed, name)
             return true
@@ -196,7 +260,7 @@ export function useSource({
         if (inflight.current === run) inflight.current = null
       }
     },
-    [redraw],
+    [redraw, hold],
   )
 
   const edit = useCallback(
@@ -204,6 +268,7 @@ export function useSource({
       const doc = docs.current.get(file)
       if (!doc || doc.text === text) return
       doc.text = text
+      hold(file)
       redraw()
       if (timer.current) clearTimeout(timer.current)
       const name = file
@@ -218,7 +283,7 @@ export function useSource({
         })
       }, saveDelay)
     },
-    [file, redraw, saveDelay, saveNow],
+    [file, redraw, saveDelay, saveNow, hold],
   )
 
   /** Save everything typed, now. True when the disk holds what the editor does. */
@@ -266,10 +331,11 @@ export function useSource({
     const mine = docs.current.get(at.file)?.text
     docs.current.set(at.file, { text: at.theirs, saved: at.theirs, hash: at.hash, eol: at.eol })
     if (mine !== undefined) setChanged((was) => changedBy(at.file, mine, at.theirs, was))
+    hold(at.file)
     setConflict(null)
     setTaken((n) => n + 1)
     redraw()
-  }, [redraw])
+  }, [redraw, hold])
 
   const keepMine = useCallback(() => {
     const at = conflictRef.current
@@ -280,11 +346,12 @@ export function useSource({
     if (doc) {
       doc.hash = at.hash
       doc.saved = at.theirs
+      hold(at.file)
     }
     conflictRef.current = null
     setConflict(null)
     void saveNow(at.file)
-  }, [saveNow])
+  }, [saveNow, hold])
 
   const doc = docs.current.get(file) ?? null
   let dirty = false

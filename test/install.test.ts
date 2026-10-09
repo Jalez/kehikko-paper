@@ -385,7 +385,7 @@ describe('the doors in front of it', () => {
 
   test('starting a download needs the ticket, and so does stopping one', () => {
     expect(answer('POST', '/api/toolchain/install', none, { pieces: ['tectonic'] })?.status).toBe(403)
-    expect(answer('POST', '/api/toolchain/install', none, { ticket: 'guess' })?.status).toBe(403)
+    expect(answer('POST', '/api/toolchain/install', none, {}, 'guess')?.status).toBe(403)
     expect(answer('POST', '/api/toolchain/install', none, null)?.status).toBe(403)
     expect(answer('POST', '/api/toolchain/cancel', none, {})?.status).toBe(403)
     expect(answer('GET', '/api/toolchain/install', none, null)?.status).toBe(404)
@@ -394,13 +394,13 @@ describe('the doors in front of it', () => {
   })
 
   test('with it, the download starts and the answer does not wait for it; the caller chooses pieces and nothing else', async () => {
-    const reply = answer('POST', '/api/toolchain/install', none, { ticket: TICKET, pieces: ['biber', 'rm -rf', 7], url: 'https://example.com/x', dir: '/tmp/x' })
+    const reply = answer('POST', '/api/toolchain/install', none, { pieces: ['biber', 'rm -rf', 7], url: 'https://example.com/x', dir: '/tmp/x' }, TICKET)
     expect(reply?.status).toBe(200)
     const toolchain = (reply!.body as { toolchain: { running: boolean; wanted: string[]; dir: string } }).toolchain
     expect(toolchain.running).toBe(true)
     expect(toolchain.wanted).toEqual(['biber'])
     expect(toolchain.dir).toBe(dir)
-    expect(answer('POST', '/api/toolchain/cancel', none, { ticket: TICKET })?.status).toBe(200)
+    expect(answer('POST', '/api/toolchain/cancel', none, {}, TICKET)?.status).toBe(200)
     /* Wait for it to end, so the fake network's refusal is on record. */
     for (let i = 0; i < 100; i += 1) {
       const now = (answer('GET', '/api/toolchain', none, null)!.body as { toolchain: { running: boolean } }).toolchain

@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { buildDir, buildStatus, compile, forgetBuilds, readPdf, syncForward } from '../compile/build.ts'
-import { TICKET, answer, later } from '../doors.ts'
+import { BUILD_HEADER, buildStamp } from 'kehikot-module-protocol'
+import { TICKET_HEADER, doorsFetch } from 'kehikot-module-protocol/serve'
+
+import { BUILD, MANIFEST, TICKET, answer, later } from '../doors.ts'
 
 /**
  * The build queue, run for real against an engine that is not one.
@@ -160,21 +163,57 @@ describe('the doors in front of it', () => {
 
   test('compiling needs the ticket; with it, the answer is the build', async () => {
     expect((await later('POST', '/api/compile', query(), { anything: 1 }))?.status).toBe(403)
-    const reply = await later('POST', '/api/compile', query(), { ticket: TICKET })
+    const reply = await later('POST', '/api/compile', query(), {}, TICKET)
     expect(reply?.status).toBe(200)
     expect((reply?.body as { build: { last: { ok: boolean } } }).build.last.ok).toBe(true)
     expect(later('GET', '/api/compile', query(), null)).toBeNull()
-    expect(later('POST', '/api/file', query(), { ticket: TICKET })).toBeNull()
+    expect(later('POST', '/api/file', query(), {}, TICKET)).toBeNull()
   })
 
   test('the PDF is served as a PDF, and the status without compiling', async () => {
     await compile('a-paper', project)
     const pdf = answer('GET', '/api/pdf', query(), null)
-    expect(pdf?.binary?.type).toBe('application/pdf')
-    expect(Buffer.from(pdf!.binary!.bytes).toString()).toBe(GOOD)
+    expect(pdf?.raw?.type).toBe('application/pdf')
+    expect(Buffer.from(pdf!.raw!.bytes as Uint8Array).toString()).toBe(GOOD)
     const status = answer('GET', '/api/build', query(), null)
     expect((status?.body as { build: { engine: string } }).build.engine).toBe('tectonic')
     expect(answer('GET', '/api/pdf', new URLSearchParams({ epic: 'no-such-paper', project }), null)?.status).toBe(404)
+  })
+
+  test('through the real doors: the PDF may be kept by the browser, nothing else may, and the ticket is a header', async () => {
+    /* The same options `vite.config.ts` names, as one request goes through them. */
+    const through = doorsFetch({
+      manifest: MANIFEST,
+      answer: (method, path, asked, body, ticket) => later(method, path, asked, body, ticket) ?? answer(method, path, asked, body, ticket),
+      build: BUILD,
+      page: { title: 'Paper', ticket: TICKET },
+      maxBodyBytes: 6_000_000,
+    })
+    const at = (path: string, init?: RequestInit) => through(new Request(`http://127.0.0.1${path}?${query()}`, init))
+
+    await compile('a-paper', project)
+    const pdf = (await at('/api/pdf'))!
+    expect(pdf.headers.get('content-type')).toBe('application/pdf')
+    /* Not `no-store`: its address carries the build it came from so that it can
+       be kept, and before `doors()` it went out with no cache header at all. */
+    expect(pdf.headers.get('cache-control')).toBe('private')
+    expect(pdf.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(pdf.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox")
+    expect(await pdf.text()).toBe(GOOD)
+
+    const status = (await at('/api/build'))!
+    expect(status.headers.get('cache-control')).toBe('no-store')
+    expect(status.headers.get(BUILD_HEADER)).toBe(buildStamp(BUILD))
+
+    /* A write carries the ticket in the header every module uses; without it the refusal is marked. */
+    const refused = (await at('/api/compile', { method: 'POST', body: '{}' }))!
+    expect(refused.status).toBe(403)
+    expect(await refused.json()).toMatchObject({ ok: false, refused: 'ticket' })
+    expect((await at('/api/compile', { method: 'POST', body: '{}', headers: { [TICKET_HEADER]: TICKET } }))!.status).toBe(200)
+
+    const page = await (await through(new Request('http://127.0.0.1/app')))!.text()
+    expect(page).toContain(`<script id="ticket" type="application/json">${JSON.stringify(TICKET)}</script>`)
+    expect(page).toContain('id="build"')
   })
 
   test('sync asks are checked before they are answered', () => {

@@ -2,8 +2,13 @@ import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button.tsx'
 
-import { json } from './api.ts'
+import { held } from 'kehikot-module-protocol/client'
+
+import { json, standingIn } from './api.ts'
 import type { StartFrom } from './use-paper.ts'
+
+/** A path typed into "from a folder on this machine" and not yet used, by project and epic. */
+const paths = held<string>('kehikot.paper.start', (stored) => (typeof stored === 'string' && stored.trim() ? stored : null))
 
 /**
  * An epic with no paper, and the ways to give it one.
@@ -24,7 +29,15 @@ export function Start({
   onStart(epic: string, from?: StartFrom): Promise<string | null>
 }) {
   const [templates, setTemplates] = useState<{ id: string; name: string; about: string }[]>([])
-  const [folder, setFolder] = useState('')
+  /* The folder somebody is part-way through typing survives a reload of this
+     page, like anything else typed and not sent: written as it changes, and
+     put back only for this project and this epic. */
+  const typed = paths.at(standingIn())
+  const [folder, setFolderNow] = useState(() => typed.read(epic) ?? '')
+  const setFolder = (next: string) => {
+    setFolderNow(next)
+    typed.keep(epic, next)
+  }
   const [why, setWhy] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -46,6 +59,7 @@ export function Start({
     const refused = await onStart(epic, from)
     setBusy(false)
     if (refused) setWhy(refused)
+    else typed.keep(epic, null)
   }
 
   return (

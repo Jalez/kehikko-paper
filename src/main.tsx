@@ -22,21 +22,14 @@ import './index.css'
 import 'kehikot-module-protocol/client'
 import { App } from './app.tsx'
 
-/**
- * The theme, seeded once, before React paints.
- *
- * This is the only place `prefers-color-scheme` is consulted in JavaScript, and
- * it is consulted for one case: a page nobody is framing, where there is no
- * host to have an opinion and the machine's is the only one going. Any
- * `kehikot.context` that arrives overrides it, which is what makes the class on
- * the root element the single answer to "what theme is this" rather than one of
- * two mechanisms that can disagree.
+/*
+ * The theme is not seeded here any more. The document `doors()` serves decides
+ * it in a blocking script, before the first paint and before this file has
+ * loaded — what the host said last time, or the machine's own preference for a
+ * page nobody is framing — and `useHost` puts the host's word on the root
+ * element from the greeting on. The class there is still the single answer to
+ * "what theme is this".
  */
-const root = document.documentElement
-if (!root.classList.contains('dark') && !root.classList.contains('light')) {
-  root.classList.toggle('dark', window.matchMedia?.('(prefers-color-scheme: dark)').matches === true)
-}
-
 const mount = document.getElementById('root')
 if (mount) {
   createRoot(mount).render(

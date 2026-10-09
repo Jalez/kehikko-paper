@@ -20,6 +20,7 @@ interface Call {
   method: string
   path: string
   body: Record<string, unknown> | null
+  ticket: string | null
 }
 
 let calls: Call[]
@@ -65,7 +66,7 @@ beforeEach(() => {
     const url = new URL(String(input), 'http://127.0.0.1:7870')
     const method = (init?.method ?? 'GET').toUpperCase()
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null
-    calls.push({ method, path: url.pathname, body })
+    calls.push({ method, path: url.pathname, body, ticket: new Headers(init?.headers).get('x-module-ticket') })
     if (url.pathname === '/api/toolchain/install') onInstall((body?.pieces as string[]) ?? [])
     if (url.pathname === '/api/toolchain/cancel') state = { ...state, running: false }
     return new Response(JSON.stringify({ ok: true, toolchain: state }), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -107,7 +108,9 @@ describe('no compiler on this machine', () => {
     expect(posts()).toHaveLength(1)
     expect(posts()[0]!.path).toBe('/api/toolchain/install')
     expect(posts()[0]!.body!.pieces).toEqual(['tectonic', 'biber'])
-    expect('ticket' in posts()[0]!.body!).toBe(true)
+    /* In the header every module uses, and not in the body. */
+    expect(posts()[0]!.ticket).not.toBeNull()
+    expect('ticket' in posts()[0]!.body!).toBe(false)
     expect(screen.queryByRole('button', { name: /Install the compiler/ })).toBeNull()
 
     state = { ...state, received: 34_000_000 }

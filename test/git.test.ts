@@ -114,12 +114,11 @@ function accept(id: string) {
   return answer('POST', '/api/proposal', new URLSearchParams({ epic: 'a-paper', project }), {
     id,
     decision: 'accept',
-    ticket: TICKET,
-  })
+    }, TICKET)
 }
 
 function save() {
-  return answer('POST', '/api/save', new URLSearchParams({ epic: 'a-paper', project }), { ticket: TICKET })
+  return answer('POST', '/api/save', new URLSearchParams({ epic: 'a-paper', project }), {}, TICKET)
 }
 
 function uncommitted() {
@@ -197,8 +196,7 @@ describe('a commit can never carry somebody else’s work', () => {
       file: 'main.tex',
       text: SOURCE.replace('tpyo', 'typo'),
       was: hashOfMain(),
-      ticket: TICKET,
-    })
+      }, TICKET)
     expect(subjects()).toHaveLength(1)
 
     expect(save()?.status).toBe(200)

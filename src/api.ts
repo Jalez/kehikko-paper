@@ -1,3 +1,5 @@
+import { ask, replied } from 'kehikot-module-protocol/client'
+
 /**
  * This app's own server, and the one thing every call to it has to say.
  *
@@ -68,79 +70,47 @@ export function apiUrl(path: string, params: Record<string, string> = {}): strin
   return rendered ? `${path}?${rendered}` : path
 }
 
-/** A read that answers with a document, or throws. */
-export async function json(path: string, params: Record<string, string> = {}): Promise<Record<string, unknown>> {
-  const response = await fetch(apiUrl(path, params), { headers: { accept: 'application/json' } })
-  const body: unknown = await response.json()
-  if (!body || typeof body !== 'object') throw new Error('that answer was not a document')
-  return body as Record<string, unknown>
-}
+/** The project as a query value: left out altogether when none is open, never the empty string. */
+const inProject = (params: Record<string, string>) => ({ ...params, project })
 
 /**
- * This process's write ticket, read out of the document that printed it.
+ * A read that answers with a document, or throws.
  *
- * ## Read once, and an empty string when there is none
- *
- * `page/document.ts` puts it in a `<script type="application/json">` ahead of
- * the module script, so it is there before anything here can ask. It is read
- * lazily and kept: the document does not change under us, and re-reading would
- * be a `getElementById` on every correction somebody types.
- *
- * An empty string when the tag is missing rather than a throw, deliberately.
- * The two ways to get there are a test that rendered the components without the
- * shell and a page served by something that is not this server. Neither should
- * stop the READS — the whole app apart from the write is unaffected — and the
- * write is refused by the server with a sentence saying to reload, which is the
- * right instruction in both cases and better than an exception thrown out of a
- * blur handler.
- *
- * It is not a secret from anything that can already read this page, and it does
- * not travel: it goes back to the origin that issued it and nowhere else. The
- * essay on `TICKET` in `doors.ts` says what it does and does not separate.
+ * The protocol's `ask`, so no caller is silent and none shows a raw "Failed to
+ * fetch". A refusal — a 404, a 409 carrying the file as it now stands — is
+ * still an answer and comes back as the server's own document, `ok: false` and
+ * its sentence under `error`. What throws is what is not the server's answer
+ * at all: nothing answered, the page is older than its server, or the reply is
+ * not a document. Those are also what the cover in `app.tsx` draws.
  */
-const TICKET_ID = 'kehikot-paper-ticket'
-let ticket: string | null = null
-
-export function writeTicket(): string {
-  if (ticket !== null) return ticket
-  const tag = typeof document === 'undefined' ? null : document.getElementById(TICKET_ID)
-  try {
-    const parsed: unknown = JSON.parse(tag?.textContent ?? '""')
-    ticket = typeof parsed === 'string' ? parsed : ''
-  } catch {
-    ticket = ''
-  }
-  return ticket
+export async function json(path: string, params: Record<string, string> = {}): Promise<Record<string, unknown>> {
+  return replied(await ask<Record<string, unknown>>(path, { query: inProject(params) }))
 }
 
 /**
  * A write.
  *
- * Same URL builder as `json`, so the project rides along as it does on every
- * read — a POST that forgot it would ask the server to make a folder in a
- * project nobody named.
+ * The project rides along as it does on every read — a POST that forgot it
+ * would ask the server to make a folder in a project nobody named.
  *
- * The ticket is added HERE and not at the call sites, for exactly the reason
- * the project is: a rule every caller has to remember is a rule the fifth
- * caller will not. It rides in the body rather than in the query, because the
- * query string is the part of a URL that ends up in a log, a referrer and
- * somebody's shell history.
+ * The ticket is added by `ask` and not at the call sites, for exactly the
+ * reason the project is added here: a rule every caller has to remember is a
+ * rule the fifth caller will not. It is read out of the document that printed
+ * it and rides in the `x-module-ticket` header — never in the query, because
+ * the query string is the part of a URL that ends up in a log, a referrer and
+ * somebody's shell history. It is not a secret from anything that can already
+ * read this page, and it does not travel: it goes back to the origin that
+ * issued it and nowhere else. The essay on `TICKET` in `doors.ts` says what it
+ * does and does not separate.
  *
  * Starting a paper sends nothing else — what is made there is decided by the
- * epic and the project. An edit sends the file, the range, the text and the
- * hash of the file it was measured against; see `use-paper.ts`.
+ * epic and the project. A save sends the file, its text and the hash of the
+ * file it was measured against; see `use-source.ts`.
  */
 export async function post(
   path: string,
   params: Record<string, string> = {},
   sending: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(apiUrl(path, params), {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ ...sending, ticket: writeTicket() }),
-  })
-  const body: unknown = await response.json()
-  if (!body || typeof body !== 'object') throw new Error('that answer was not a document')
-  return body as Record<string, unknown>
+  return replied(await ask<Record<string, unknown>>(path, { query: inProject(params), body: sending }))
 }
