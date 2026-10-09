@@ -182,8 +182,8 @@ export function headline(focus: Narrowed): string {
     return (
       `The focus is on ${subject(focus.parts)}, and ${one ? 'that part owns' : 'those parts own'} no files of this paper, `
       + `so none of the paper is in ${one ? 'it' : 'them'}: ${all} outside the focus. Give ${one ? 'the part' : 'a part'} its `
-      + 'files in Journeys — open the journey’s parts, press “files” on the part, and name each from the paper’s folder, '
-      + `like chapters/design.tex. ${where}`
+      + 'files in Journeys — open the journey’s parts and press “files” on the part to tick them, or “make a part for '
+      + `each chapter file” to have one made for every file main.tex pulls in. ${where}`
     )
   }
   const it = one ? 'it' : 'them'
@@ -263,6 +263,101 @@ export function gapsBetween(pages: readonly number[], total: number | null): Map
 /** “p. 3” or “pp. 3–6”. */
 export function pagesSaid(run: { from: number; to: number }): string {
   return run.from === run.to ? `p. ${run.from}` : `pp. ${run.from}–${run.to}`
+}
+
+/** The file every paper starts from, and the one the editor rests on when nothing is picked. */
+export const MAIN_FILE = 'main.tex'
+
+/**
+ * What is ticked, as one string: the picked parts and the files they own.
+ *
+ * It is what the editor FOLLOWS (see `fileAfterTicks`), so it is made of the
+ * host's ticks and nothing else. Not of the paper's own file list: a chapter
+ * added to `main.tex` while one part is picked must not look like a change
+ * of focus and move the editor.
+ */
+export function ticksOf(parts: readonly EpicPart[]): string {
+  return pickedParts(parts)
+    .map((part) => `${part.id}\u0000${(part.files ?? []).join('\u0000')}`)
+    .join('\n')
+}
+
+/**
+ * The file the editor goes to when the ticks in the host's bar change — or
+ * null, to leave the one that is open.
+ *
+ * ## The editor follows the ticks
+ *
+ * It used not to. Picking a part narrowed the file LIST and left the editor
+ * where it was, with a line offering the part's first file; the person then
+ * chose the chapter a second time, in this page's own dropdown. That is "you
+ * are able to pick to show a specific chapter" — a chapter picker of this
+ * module's — and it is not what was asked for. What was asked for is that the
+ * ticks ARE the choice:
+ *
+ *  - **nothing ticked** is the whole paper, and the editor rests on
+ *    `main.tex`;
+ *  - **one part ticked** opens that part's file;
+ *  - **several ticked** open the first of their files, and the rest are tabs.
+ *
+ * A file that is already in the new focus is left open: ticking a second
+ * part beside the one being read must not move the reader.
+ *
+ * ## Except out from under somebody typing
+ *
+ * `midEdit` is the open file holding text that has not reached the disk —
+ * typed and not yet saved, a save in flight, a save that failed. Then nothing
+ * moves. The file stays open, is saved as it always is, and the page says it
+ * is outside the picked parts and offers the way to them; it leaves when the
+ * person leaves it. A tick in another control is not a reason to take a
+ * sentence away from the person in the middle of it. (Nothing would be LOST
+ * either way — every file's text is kept and saved whichever is on screen —
+ * but the person would be looking at a different file than the one their
+ * hands are in.)
+ *
+ * And a focus that owns no file of the paper has nowhere to go to; the open
+ * file stays, and the line above the paper says why nothing is in the focus.
+ */
+export function fileAfterTicks(focus: Narrowed | null, open: string, midEdit: boolean): string | null {
+  if (midEdit) return null
+  if (focus === null) return open === MAIN_FILE ? null : MAIN_FILE
+  if (focus.files.length === 0 || focus.files.includes(open)) return null
+  return focus.files[0] ?? null
+}
+
+/** One file in the switch above the editor. */
+export interface FileTab {
+  file: string
+  /** What the tab says: the file's own name, or its whole path where two share a name. */
+  label: string
+  /** Open, and outside the picked parts: it is here because it is open. */
+  outside: boolean
+}
+
+/**
+ * The files to switch among, above the editor: the picked parts' own.
+ *
+ * None when nothing is picked. The whole paper is in front of the person
+ * then, and it is walked by pressing the PDF and by the section list — a row
+ * of every file would be the file picker this page stopped having.
+ *
+ * Under a focus they are exactly the files in it, in the paper's order,
+ * and — last, and marked — the open file when it is not one of them: a file
+ * kept open under somebody typing, or one a note in another module pointed
+ * into. That one is not a way to widen the focus; it is the tab the person
+ * is standing on, which has to be drawn for the others to be tabs at all.
+ *
+ * A single file is not a switch, and the page draws no tabs for one.
+ */
+export function tabsOf(focus: Narrowed | null, open: string): FileTab[] {
+  if (focus === null) return []
+  const files = focus.files.includes(open) ? focus.files : [...focus.files, open]
+  const names = files.map((file) => file.split('/').pop() ?? file)
+  return files.map((file, i) => ({
+    file,
+    label: names.indexOf(names[i]!) === names.lastIndexOf(names[i]!) ? names[i]! : file,
+    outside: !focus.files.includes(file),
+  }))
 }
 
 /** Two lists of parts, by value: what `context.parts` is compared with before the page is redrawn for it. */

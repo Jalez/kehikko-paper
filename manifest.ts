@@ -1,7 +1,7 @@
 import { MANIFEST_KIND, PROTOCOL, manifestSchema, type Manifest } from 'kehikot-module-protocol'
 
 export const ID = 'kehikot.paper'
-export const VERSION = '2.2.0'
+export const VERSION = '2.3.0'
 
 /**
  * The port this app would rather have, said once and beside the name it belongs
