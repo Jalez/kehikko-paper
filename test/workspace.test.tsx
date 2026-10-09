@@ -271,6 +271,20 @@ describe('between the source and the PDF', () => {
     await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${at}-${at + 3}`))
   })
 
+  test('a press on the PDF leaves the PDF tab in front; a double press turns to the source', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview).not.toBeNull())
+    const tabOf = (name: string) => screen.getByRole('tab', { name }).getAttribute('aria-selected')
+    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    lastPreview!.onPoint({ page: 2, x: 100.5, y: 200.25, word: 'Fin' })
+    const at = MAIN.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${at}-${at + 3}`))
+    expect(tabOf('PDF')).toBe('true')
+    act(() => lastPreview!.onOpen!())
+    expect(tabOf('Source')).toBe('true')
+  })
+
   test('a press with no word under it lands on the line', async () => {
     built = 'kept'
     await open()
@@ -322,6 +336,63 @@ describe('a suggested change', () => {
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
     const order = calls.filter((one) => one.method === 'POST' && (one.path === '/api/file' || one.path === '/api/proposal')).map((one) => one.path)
     expect(order).toEqual(['/api/file', '/api/proposal'])
+  })
+})
+
+/**
+ * A change nobody on this page made: where it is, shown without being asked.
+ *
+ * The polls are woken the way a returning tab wakes them, so a suggestion or a
+ * save "arrives" here exactly as it does while somebody watches.
+ */
+describe('a change that arrives', () => {
+  const at = MAIN.indexOf('tpyo')
+  const suggestion = () => ({ id: 'p1', file: 'main.tex', from: at, to: at + 4, text: 'typo', was_text: 'tpyo', was: hashOf(MAIN), why: 'A misspelling.', by: 'an agent', at: 1, asked: { find: 'tpyo', replace: 'typo' } })
+  const wake = () => act(() => void document.dispatchEvent(new Event('visibilitychange')))
+  const source = () => screen.getByLabelText('LaTeX source')
+
+  test('a suggestion already waiting when the paper is opened takes nobody anywhere', async () => {
+    proposals = [suggestion()]
+    await open()
+    await screen.findByText('A misspelling.')
+    expect(source().getAttribute('data-mark')).toBe('')
+    expect(source().getAttribute('data-jump')).toBe('')
+  })
+
+  test('one that arrives is marked and gone to, the tab is left alone, and the Source tab counts it', async () => {
+    built = 'kept'
+    await open()
+    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    proposals = [suggestion()]
+    wake()
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 4}`))
+    expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`)
+    expect(screen.getByRole('tab', { name: 'PDF' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'Source · 1' })).toBeDefined()
+    expect(await screen.findByText(/A change was suggested in main\.tex/)).toBeDefined()
+    /* On the page too, in the colour of a passage somebody else chose. */
+    await waitFor(() => expect(lastPreview!.marks.some((mark) => mark.foreign)).toBe(true))
+    /* Rejected: there is nothing left to point at. */
+    fireEvent.click(screen.getByRole('tab', { name: 'Source · 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(''))
+  })
+
+  test('somebody typing is not scrolled away: the mark is made and the editor stays', async () => {
+    const editor = await open()
+    editor.focus()
+    proposals = [suggestion()]
+    wake()
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 4}`))
+    expect(source().getAttribute('data-jump')).toBe('')
+  })
+
+  test('text that lands from the disk is marked where it changed', async () => {
+    await open()
+    disk['main.tex'] = MAIN.replace('tpyo', 'mistake')
+    wake()
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 'mistake'.length}`))
+    expect(await screen.findByText(/main\.tex changed on disk/)).toBeDefined()
   })
 })
 

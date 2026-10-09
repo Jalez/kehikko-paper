@@ -271,7 +271,9 @@ was read on. It does not record glyphs and it has no columns. So:
 
 - **Source to PDF** is exact to the source line: one rectangle per printed line
   those source lines reached, as wide as the part they produced.
-- **PDF to source** is exact to the source line under the click.
+- **PDF to source** is exact to the source line under the click. A press selects the
+  word in the source and marks it on the page pressed; the PDF tab stays in
+  front, and a double press turns to the Source tab.
 - **Finer than a line** is done by matching against the PDF's own text
   (`src/pdf/words.ts`): the clicked word is looked for on the named line and
   selected, and the first and last words of a selection are looked for under
@@ -281,6 +283,14 @@ was read on. It does not record glyphs and it has no columns. So:
   proportion, good to a character or two, so a pulled-in end keeps two
   characters of margin rather than risk cutting into the word. When no match
   is found the line-level answer stands, and nothing is ever widened past it.
+- **Where a word is on the page** is measured, not estimated. pdf.js gives a
+  printed line as a string and a width; each line is measured in the font it is
+  printed in (`offsetsOf` in `src/pdf/pdf-view.tsx`), with what is left of its
+  width shared among its spaces, as TeX shared it. When both ends of a
+  selection are found that way the mark runs from the first word to the last
+  exactly, and may be WIDER than SyncTeX's rectangles, which under pdfLaTeX
+  start a word late and end a word late. When a line cannot be measured the old
+  rule stands: by proportion, inward only.
 
 Measured on a 20-page paper (661 prose lines, 1,177 words clicked), with
 Tectonic: every source line's rectangles were on the printed lines holding its

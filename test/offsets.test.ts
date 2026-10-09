@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { byteAt, eolOf, indexAt, lineAt, startOfLine, textOfLine, toDisk, toEditor } from '../src/lib/offsets.ts'
-import { placeWord, printedWords, tighten, wordAt, type Box, type Run } from '../src/pdf/words.ts'
+import { placeWord, printedWords, tighten, wholeWords, wordAt, type Box, type Run } from '../src/pdf/words.ts'
 
 /**
  * Bytes, characters and lines.
@@ -119,6 +119,19 @@ describe('the words of a piece of source that print as themselves', () => {
       'Literate', 'programming', 'the', 'idea', 'and', 'more',
     ])
     expect(printedWords('\\begin{figure}[t]\\includegraphics[width=3cm]{plot.png}')).toEqual([])
+  })
+})
+
+describe('a stretch of source carried out to whole words', () => {
+  const line = 'an experience-focused, formative evaluation'
+  test('a few letters of a word become the word', () => {
+    const at = line.indexOf('focus')
+    expect(wholeWords(line, at, at + 5)).toBe('focused')
+  })
+  test('whole words are left as they are, and so is a place between two', () => {
+    const at = line.indexOf('formative')
+    expect(wholeWords(line, at, at + 'formative evaluation'.length)).toBe('formative evaluation')
+    expect(wholeWords(line, at - 1, at - 1)).toBe('')
   })
 })
 
@@ -246,5 +259,144 @@ describe('tightening SyncTeX’s rectangles to the selected words', () => {
       /* `code … deleting` is not in that order on the page. */
       expect(tighten(answer, page, 'code and then deleting')).toEqual(answer)
     })
+  })
+})
+
+/**
+ * The same, when the runs were measured in their own font (`xs`).
+ *
+ * The page is the one this was written against: a thesis set by pdfLaTeX,
+ * where SyncTeX's rectangle for a source line starts after that line's first
+ * word and runs on over the first word of the next. A passage of three source
+ * lines was marked from "their own words" to "taught material."; what was
+ * selected was "followed by … exercise grade".
+ */
+describe('a mark whose ends were measured', () => {
+  /* Eight points a character, so an offset is easy to read; nothing here
+     depends on the characters being the same width, only on `xs` being used. */
+  const run = (x: number, y: number, text: string): Run => ({
+    x,
+    y,
+    w: text.length * 8,
+    h: 10,
+    text,
+    xs: Array.from({ length: text.length + 1 }, (_, i) => i * 8),
+  })
+  const one = 'in their own words, and received a verdict, followed by a hint, a'
+  const two = 'follow-up question or the next item; the score ran out was the'
+  const three = 'exercise grade. EduChat keeps what the agent says with the taught'
+  const page = [run(70, 100, one), run(70, 112, two), run(70, 124, three)]
+  /* Late, as SyncTeX's are: each starts inside its line and the last overruns. */
+  const late = [
+    { x: 70 + 3 * 8, y: 100, w: (one.length - 3) * 8, h: 10, page: 10 },
+    { x: 70 + 5 * 8, y: 112, w: (two.length - 5) * 8, h: 10, page: 10 },
+    { x: 70 + 8 * 8, y: 124, w: (three.length - 8) * 8, h: 10, page: 10 },
+  ]
+  const selected = 'followed by\na hint, a follow-up question or the next item; the score ran\nout was the exercise grade'
+
+  test('runs from its first word to the end of that line, over whole lines, to its last word', () => {
+    const [a, b, c] = tighten(late, page, selected)
+    expect(a!.x).toBeCloseTo(70 + one.indexOf('followed') * 8 - 1, 3)
+    expect(a!.x + a!.w).toBeCloseTo(70 + one.length * 8 + 1, 3)
+    /* Wider than SyncTeX's on the left: the line starts at "follow-up", and SyncTeX's rectangle after it. */
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x + b!.w).toBeCloseTo(70 + two.length * 8 + 1, 3)
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x + c!.w).toBeCloseTo(70 + (three.indexOf('grade') + 'grade'.length) * 8 + 1, 3)
+    expect(c!.page).toBe(10)
+  })
+
+  test('one word is marked as that word and nothing either side of it', () => {
+    const [only, ...rest] = tighten([late[0]!], page, 'verdict')
+    expect(rest).toEqual([])
+    expect(only!.x).toBeCloseTo(70 + one.indexOf('verdict') * 8 - 1, 3)
+    expect(only!.w).toBeCloseTo('verdict'.length * 8 + 2, 3)
+  })
+
+  test('the short words and punctuation at its ends are carried when the page prints what the source says', () => {
+    const [only] = tighten([late[0]!], page, 'a verdict, followed by a')
+    expect(only!.x).toBeCloseTo(70 + one.indexOf('a verdict') * 8 - 1, 3)
+    expect(only!.x + only!.w).toBeCloseTo(70 + (one.indexOf('followed by a') + 'followed by a'.length) * 8 + 1, 3)
+    /* A command at an end prints as something else: the end stays on the word. */
+    const [cut] = tighten([late[0]!], page, '\\emph{a} verdict')
+    expect(cut!.x).toBeCloseTo(70 + one.indexOf('verdict') * 8 - 1, 3)
+  })
+
+  test('a word under the point is found by where its characters are', () => {
+    const wide: Run = { x: 0, y: 0, w: 100, h: 10, text: 'ab cdef', xs: [0, 5, 10, 60, 70, 80, 90, 100] }
+    /* By proportion x = 40 is the third character, the space; measured, the space ends at 60. */
+    expect(wordAt([wide], 40, 5)).toBeNull()
+    expect(wordAt([wide], 65, 5)).toBe('cdef')
+    expect(wordAt([wide], 7, 5)).toBe('ab')
+  })
+
+  test('an end in a line that could not be measured stays where SyncTeX put it; the rest is still made right', () => {
+    const mixed = [page[0]!, page[1]!, { ...page[2]!, xs: undefined }]
+    const [a, b, c] = tighten(late, mixed, selected)
+    expect(a!.x).toBeCloseTo(70 + one.indexOf('followed') * 8 - 1, 3)
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x + c!.w).toBe(late[2]!.x + late[2]!.w)
+  })
+
+  test('a selection that begins a source line is found LEFT of SyncTeX’s late rectangle', () => {
+    /* The whole of the three source lines: SyncTeX's first rectangle starts after "in ". */
+    const whole = 'in their own words, and received a verdict, followed by\na hint, a follow-up question or the next item; the score ran\nout was the exercise grade. EduChat keeps what the agent says with the taught'
+    const rects = [
+      { x: 70 + 9 * 8, y: 100, w: (one.length - 9) * 8, h: 10 },
+      { x: 70 + 5 * 8, y: 112, w: (two.length - 5) * 8, h: 10 },
+      { x: 70 + 8 * 8, y: 124, w: (three.length - 8) * 8, h: 10 },
+    ]
+    const [a, b, c] = tighten(rects, page, whole)
+    /* "their" is left of the rectangle, which starts at "own"; and "in " is carried. */
+    expect(a!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(c!.x + c!.w).toBeCloseTo(70 + three.length * 8 + 1, 3)
+  })
+
+  test('a first word TeX left at the end of the line above brings that line into the mark', () => {
+    /* The source line is "hint, a follow-up question": "hint" ends the first printed line. */
+    const lines = [run(70, 100, 'received a verdict, followed by a hint'), run(70, 112, 'a follow-up question or the next item')]
+    const rects = [{ x: 70 + 2 * 8, y: 112, w: 20 * 8, h: 10 }]
+    const [a, b, ...rest] = tighten(rects, lines, 'hint, a follow-up question')
+    expect(rest).toEqual([])
+    expect(a!.y).toBe(100)
+    expect(a!.x).toBeCloseTo(70 + lines[0]!.text.indexOf('hint') * 8 - 1, 3)
+    expect(a!.x + a!.w).toBeCloseTo(70 + lines[0]!.text.length * 8 + 1, 3)
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x + b!.w).toBeCloseTo(70 + (lines[1]!.text.indexOf('question') + 'question'.length) * 8 + 1, 3)
+  })
+
+  test('of two places a word is printed, the one the selection’s next word follows is the start', () => {
+    const line = [run(70, 100, 'the first of the many and the last of the few')]
+    const rects = [{ x: 70, y: 100, w: line[0]!.text.length * 8, h: 10 }]
+    const [only] = tighten(rects, line, 'the last of')
+    expect(only!.x).toBeCloseTo(70 + line[0]!.text.indexOf('the last') * 8 - 1, 3)
+    expect(only!.x + only!.w).toBeCloseTo(70 + (line[0]!.text.indexOf('the last of') + 'the last of'.length) * 8 + 1, 3)
+  })
+
+  test('a mark that crosses a page break: whole lines to the foot of one page, and from the head of the next', () => {
+    const top = [late[0]!, late[1]!]
+    const [a, b] = tighten(top, page, selected, 'head')
+    expect(a!.x).toBeCloseTo(70 + one.indexOf('followed') * 8 - 1, 3)
+    /* The last row on this page is not where the passage ends: it is the whole line. */
+    expect(b!.x).toBeCloseTo(70 - 1, 3)
+    expect(b!.x + b!.w).toBeCloseTo(70 + two.length * 8 + 1, 3)
+
+    const [c, d] = tighten([late[1]!, late[2]!], page, selected, 'tail')
+    expect(c!.x).toBeCloseTo(70 - 1, 3)
+    expect(d!.x).toBeCloseTo(70 - 1, 3)
+    expect(d!.x + d!.w).toBeCloseTo(70 + (three.indexOf('grade') + 'grade'.length) * 8 + 1, 3)
+
+    for (const rect of tighten(late, page, selected, 'body')) {
+      expect(rect.x).toBeCloseTo(70 - 1, 3)
+    }
+  })
+
+  test('nothing to look for — maths, a command — leaves a one-page mark’s ends where SyncTeX put them', () => {
+    const [a, , c] = tighten(late, page, '$x^2$')
+    expect(a!.x).toBe(late[0]!.x)
+    expect(c!.x + c!.w).toBe(late[2]!.x + late[2]!.w)
   })
 })

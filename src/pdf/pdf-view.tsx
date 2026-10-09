@@ -71,6 +71,8 @@ export interface PreviewProps {
   reveal: { nonce: number } | null
   /** A press on a page: which page, where in PDF points, and the word under it if the PDF's text says. */
   onPoint(point: { page: number; x: number; y: number; word: string | null }): void
+  /** A double press on a page: the person wants the source it came from in front of them. */
+  onOpen?(): void
   /** The page most in view changed. One-based. */
   onPage?(page: number): void
   /** The pages to draw, ascending, in the PDF's own numbers. Absent or null draws every page, unlabelled, as always. */
@@ -88,6 +90,8 @@ interface PdfPage {
   getViewport(options: { scale: number }): { width: number; height: number }
   render(options: { canvas: HTMLCanvasElement; canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void>; cancel(): void }
   getTextContent(): Promise<{ items: unknown[] }>
+  /** Asked for only because it is what makes pdf.js load the page's fonts. */
+  getOperatorList(): Promise<unknown>
 }
 interface PdfDocument {
   numPages: number
@@ -113,11 +117,110 @@ function pdfjs() {
   return library
 }
 
+/**
+ * Where each character of a run begins, measured in the font it is printed in.
+ *
+ * pdf.js says what a run says and how wide it is, and nothing about where its
+ * characters are. But it loads every font of a page into the document under
+ * the name the run carries, so a canvas can be asked how wide any part of the
+ * run is in that very font. Spaces are the one thing not asked: TeX prints
+ * none — a space is a gap, stretched to justify the line — and most of its
+ * fonts have no glyph for one. So the words are measured and what is left of
+ * the run's width is shared equally among its spaces, which is what TeX did.
+ *
+ * Undefined whenever the answer cannot be trusted: no canvas, the font is not
+ * loaded, or the measured words do not fit the run (a font whose glyphs pdf.js
+ * had to move elsewhere measures as something else entirely). `words.ts` then
+ * falls back to proportion, which is what it always did.
+ */
+let ruler: CanvasRenderingContext2D | null | undefined
+
+/**
+ * Wait for a page's fonts to be in the document.
+ *
+ * pdf.js hands a page's fonts to the document a moment AFTER it says the page
+ * has been read: the operator list resolves, and the font faces are still
+ * loading. A page measured in that moment measures nothing, and its words were
+ * then filed unmeasured for as long as the PDF was open — which is how a mark
+ * on a page somebody was just TAKEN to, and which had never been drawn, came
+ * out as SyncTeX's bare rectangles. So the fonts are waited for, briefly, and a
+ * font that never arrives (pdf.js draws some as paths, with no face at all) is
+ * remembered so that the next page does not wait for it again.
+ */
+const never = new Set<string>()
+async function fontsFor(names: ReadonlySet<string>, ms = 2000): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts) return
+  const until = Date.now() + ms
+  for (;;) {
+    const faces = new Map<string, FontFace>()
+    for (const face of document.fonts) faces.set(face.family.replace(/^"|"$/g, ''), face)
+    const missing = [...names].filter((name) => !never.has(name) && faces.get(name)?.status !== 'loaded')
+    if (!missing.length) return
+    if (Date.now() >= until) {
+      for (const name of missing) never.add(name)
+      return
+    }
+    const pause = new Promise<void>((done) => setTimeout(done, 80))
+    await Promise.race([Promise.all(missing.map((name) => faces.get(name)?.loaded.then(() => {}, () => {}) ?? pause)), pause.then(() => new Promise<void>((done) => setTimeout(done, 170)))])
+  }
+}
+function offsetsOf(text: string, width: number, font: string | undefined, size: number): number[] | undefined {
+  if (typeof document === 'undefined' || !font || !(size > 0) || !(width > 0)) return undefined
+  try {
+    let loaded = false
+    for (const face of document.fonts) if (face.family.replace(/^"|"$/g, '') === font && face.status === 'loaded') loaded = true
+    if (!loaded) return undefined
+    if (ruler === undefined) ruler = document.createElement('canvas').getContext('2d')
+    if (!ruler) return undefined
+    ruler.font = `${size}px "${font}"`
+    const parts = text.split(/( +)/)
+    let ink = 0
+    let spaces = 0
+    const widths = parts.map((part) => {
+      if (part.startsWith(' ')) {
+        spaces += part.length
+        return 0
+      }
+      const w = ruler!.measureText(part).width
+      ink += w
+      return w
+    })
+    if (!(ink > 0)) return undefined
+    const gap = spaces ? (width - ink) / spaces : 0
+    if (spaces ? gap < 0 || gap > size * 3 : Math.abs(width - ink) > Math.max(1, width * 0.06)) return undefined
+    const stretch = spaces ? 1 : width / ink
+    const xs = [0]
+    let at = 0
+    parts.forEach((part, index) => {
+      if (part.startsWith(' ')) {
+        for (let n = 0; n < part.length; n += 1) xs.push((at += gap))
+        return
+      }
+      for (let n = 1; n <= part.length; n += 1) xs.push(at + ruler!.measureText(part.slice(0, n)).width * stretch)
+      at += widths[index]! * stretch
+    })
+    return xs.length === text.length + 1 ? xs : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether a page's words have been read, and how: `measured`, `estimated`, or
+ * nothing yet. Written on the sheet so that a mark that looks wrong can be
+ * told apart from outside — a loose mark on an `estimated` page is this file
+ * failing to measure, and on a `measured` one it is `words.ts` being wrong.
+ */
+function wordsOf(runs: readonly Run[] | undefined): string {
+  if (!runs) return ''
+  return runs.some((run) => run.xs !== undefined) ? 'measured' : 'estimated'
+}
+
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const GAP = 10
 const PAD = 8
 
-export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, outside, outsideOf = 'the picked parts' }: PreviewProps) {
+export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = null, outside, outsideOf = 'the picked parts' }: PreviewProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<PdfDocument | null>(null)
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([])
@@ -126,6 +229,8 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
   const [zoom, setZoom] = useState(1)
   const [version, setVersion] = useState(0)
   const runs = useRef<Map<number, Run[]>>(new Map())
+  /** The document on screen, for an answer that arrives after it was replaced. */
+  const shown = useRef<PdfDocument | null>(null)
   const held = useRef<PdfTask | null>(null)
   const [, setRunsTick] = useState(0)
 
@@ -153,6 +258,7 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
         setSizes(measured)
         const old = held.current
         held.current = task
+        shown.current = next
         setDoc(next)
         /* After the swap, and not before: the pages on screen were drawn from
            the old document and are still being looked at. */
@@ -191,13 +297,25 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
       const sheet = await doc.getPage(page)
       const height = sheet.getViewport({ scale: 1 }).height
       const content = await sheet.getTextContent()
+      /* The fonts are loaded by the first thing that DRAWS the page, and the
+         words may be asked for before that. Without them nothing is measured. */
+      await sheet.getOperatorList().catch(() => {})
+      const fonts = new Set<string>()
+      for (const item of content.items as { fontName?: string }[]) if (item.fontName) fonts.add(item.fontName)
+      await fontsFor(fonts).catch(() => {})
       const out: Run[] = []
-      for (const item of content.items as { str?: string; transform?: number[]; width?: number; height?: number }[]) {
+      for (const item of content.items as { str?: string; transform?: number[]; width?: number; height?: number; fontName?: string }[]) {
         if (typeof item.str !== 'string' || !item.transform || !item.str) continue
         const h = item.height || Math.abs(item.transform[3] ?? 0) || 10
+        const w = item.width ?? 0
+        const xs = offsetsOf(item.str, w, item.fontName, Math.hypot(item.transform[0] ?? 0, item.transform[1] ?? 0))
         /* pdf.js gives the BASELINE's left end, from the bottom-left. */
-        out.push({ x: item.transform[4] ?? 0, y: height - (item.transform[5] ?? 0) - h, w: item.width ?? 0, h, text: item.str })
+        out.push({ x: item.transform[4] ?? 0, y: height - (item.transform[5] ?? 0) - h, w, h, text: item.str, ...(xs ? { xs } : {}) })
       }
+      /* A new build landed while this page was being read: these are the old
+         PDF's words, and filing them would have every mark on this page
+         looked for among words that are no longer where they say. */
+      if (shown.current !== doc) return out
       runs.current.set(page, out)
       setRunsTick((n) => n + 1)
       return out
@@ -222,9 +340,12 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
       for (const page of all) {
         let rects = pages.get(page)!
         const text = runs.current.get(page)
-        /* Tightened only when the whole mark is on one page: the first word
-           and the last are then both looked for among that page's words. */
-        if (mark.source && text && all.length === 1) rects = tighten(rects, text, mark.source)
+        /* Each page's rectangles against that page's words. A mark that
+           crosses a page break starts on its first page and ends on its last. */
+        if (mark.source && text) {
+          const part = all.length === 1 ? 'whole' : page === all[0] ? 'head' : page === all[all.length - 1] ? 'tail' : 'body'
+          rects = tighten(rects, text, mark.source, part)
+        }
         byPage.set(page, [...(byPage.get(page) ?? []), ...rects.map((rect) => ({ rect, foreign: mark.foreign === true }))])
       }
     }
@@ -232,8 +353,13 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marks, version, runs.current.size])
 
+  /* Once per nonce, and not before there is a scale: a pane that is hidden
+     behind the other tab has no width, and a reveal asked for then is owed
+     until the pane is shown — or the mark is drawn on a page nobody was
+     taken to. */
+  const revealed = useRef<number | null>(null)
   useEffect(() => {
-    if (!reveal) return
+    if (!reveal || revealed.current === reveal.nonce) return
     const first = marks[0]?.rects[0]
     const node = scroller.current
     if (!first || !node || scale <= 0) return
@@ -248,6 +374,7 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
       if (!sheet) return
       top = sheet.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop
     }
+    revealed.current = reveal.nonce
     const y = top + first.y * scale
     /* Only when it is not already comfortably in view: a caret moving down a
        paragraph should not drag the page with every line. */
@@ -255,10 +382,29 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
       node.scrollTo({ top: Math.max(0, y - node.clientHeight / 3), behavior: 'smooth' })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal?.nonce])
+  }, [reveal?.nonce, scale > 0])
+
+  /* A pane behind the other tab has no width, so no scale, so its sheets have
+     no height — and a scroller whose content has collapsed is at the top when
+     it is shown again. Where it was is kept in PDF points, and put back the
+     moment there is a scale to put it back at. */
+  const kept = useRef(0)
+  const collapsed = useRef(true)
+  useLayoutEffect(() => {
+    const node = scroller.current
+    if (scale <= 0) {
+      collapsed.current = true
+      return
+    }
+    if (!collapsed.current) return
+    collapsed.current = false
+    if (node && kept.current > 0) node.scrollTop = kept.current * scale
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale > 0])
 
   const onScroll = useCallback(() => {
     const node = scroller.current
+    if (node && scale > 0 && node.clientHeight > 0) kept.current = node.scrollTop / scale
     /* Under a focus the sheets are not a plain stack, and nothing asks. */
     if (!node || !onPage || scale <= 0 || pages !== null) return
     const middle = node.scrollTop + node.clientHeight / 2
@@ -337,7 +483,9 @@ export function PdfView({ url, marks, reveal, onPoint, onPage, pages = null, out
                 scale={scale}
                 root={scroller}
                 marks={drawn.get(number) ?? []}
+                words={wordsOf(runs.current.get(number))}
                 onPress={press}
+                onOpen={onOpen}
               />
             )
             if (pages === null) return sheet
@@ -377,7 +525,9 @@ function PageCanvas({
   scale,
   root,
   marks,
+  words,
   onPress,
+  onOpen,
 }: {
   doc: PdfDocument
   version: number
@@ -387,7 +537,9 @@ function PageCanvas({
   scale: number
   root: React.RefObject<HTMLDivElement | null>
   marks: { rect: PageRect; foreign: boolean }[]
+  words: string
   onPress(page: number, event: React.MouseEvent<HTMLDivElement>): void
+  onOpen?: () => void
 }) {
   const holder = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -453,8 +605,10 @@ function PageCanvas({
       ref={holder}
       className="pdf-page relative mx-auto bg-white"
       data-page={number}
+      data-words={words}
       style={{ width: width * scale, height: height * scale, marginBottom: GAP }}
       onClick={(event) => onPress(number, event)}
+      onDoubleClick={onOpen}
     >
       <canvas ref={canvas} className="block size-full" />
       {marks.map(({ rect, foreign }, i) => (
