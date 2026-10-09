@@ -1,4 +1,4 @@
-import { fileInFocus, focusCount, isFocused, pickedFiles, pickedParts, type EpicPart } from 'kehikot-module-protocol'
+import { isFocused, narrowToFocus, pickedFiles, pickedParts, type EpicPart } from 'kehikot-module-protocol'
 
 import type { PageSpan } from '../compile/synctex.ts'
 
@@ -21,10 +21,11 @@ import type { PageSpan } from '../compile/synctex.ts'
  *
  *  - **Nothing picked is the whole epic.** `narrowed` answers null, and the
  *    page is exactly the page it was before any of this existed.
- *  - **Otherwise only what a picked part owns is shown** (`fileInFocus`).
+ *  - **Otherwise only what a picked part owns is shown**: a file is anchored
+ *    by its own name, `{ file }`, and `narrowToFocus` decides.
  *  - **What is in no part is OUTSIDE the focus** — `main.tex`, usually, and
- *    everything written directly in it — and it is counted and said
- *    (`focusCount`), never dropped without a word. A paper that is shorter
+ *    everything written directly in it — and it is counted (`narrowToFocus`
+ *    again) and said, never dropped without a word. A paper that is shorter
  *    than it was for a reason nobody can see is the failure this is arranged
  *    against.
  *
@@ -105,11 +106,6 @@ export interface NarrowablePdf {
   map: Record<string, PageSpan[]>
 }
 
-/** Whether one of the paper's files is in front of the person. True for every file when nothing is picked. */
-export function inFocus(parts: readonly EpicPart[], paper: NarrowablePaper, file: string): boolean {
-  return fileInFocus(parts, file, paper.epic)
-}
-
 /**
  * The paper as a picked focus leaves it — or null when nothing is picked, and
  * the whole paper is in front of the person.
@@ -118,8 +114,7 @@ export function narrowed(parts: readonly EpicPart[], paper: NarrowablePaper, pdf
   if (!isFocused(parts)) return null
   const picked = pickedParts(parts)
   const owned = pickedFiles(parts)
-  const files = paper.files.filter((file) => inFocus(parts, paper, file))
-  const { outside } = focusCount(parts, paper.files, (file) => inFocus(parts, paper, file))
+  const { shown: files, outside } = narrowToFocus(parts, paper.files, (file) => ({ file }), { epic: paper.epic })
 
   const missing = owned
     .filter((file) => !paper.files.includes(file))
@@ -358,9 +353,4 @@ export function tabsOf(focus: Narrowed | null, open: string): FileTab[] {
     label: names.indexOf(names[i]!) === names.lastIndexOf(names[i]!) ? names[i]! : file,
     outside: !focus.files.includes(file),
   }))
-}
-
-/** Two lists of parts, by value: what `context.parts` is compared with before the page is redrawn for it. */
-export function sameParts(a: readonly EpicPart[], b: readonly EpicPart[]): boolean {
-  return a === b || JSON.stringify(a) === JSON.stringify(b)
 }

@@ -1,4 +1,5 @@
-import type { EpicPart, Passage as WirePassage } from 'kehikot-module-protocol'
+import type { Passage as WirePassage } from 'kehikot-module-protocol'
+import { useFocus } from 'kehikot-module-protocol/client/react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button.tsx'
@@ -12,7 +13,7 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import { MAIN_FILE, fileAfterTicks, headline, inFocus, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
+import { MAIN_FILE, fileAfterTicks, headline, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
@@ -163,7 +164,8 @@ export function Workspace({
 
   /* ---- The parts the canvas is pointed at ------------------------------- */
 
-  const parts = wire.parts ?? NO_PARTS
+  const ticked = useFocus({ parts: wire.parts, epic: paper.epic })
+  const parts = ticked.parts
   const pdf = build?.pdf ?? null
   const focus = useMemo(
     () => narrowed(parts, paper, pdf),
@@ -173,7 +175,7 @@ export function Workspace({
   const focusRef = useRef(focus)
   focusRef.current = focus
   /** Whether a file is outside what is picked. Never, when nothing is. */
-  const isOutside = useCallback((name: string) => !inFocus(parts, paper, name), [parts, paper])
+  const isOutside = useCallback((name: string) => !ticked.inFocus({ file: name }), [ticked])
   const outsideSaid = focus ? `the picked part${focus.parts.length === 1 ? '' : 's'}` : ''
 
   /* A paper OPENED under a focus starts on a file that is in it. Once per
@@ -1124,7 +1126,6 @@ export function Workspace({
 }
 
 const NONE: readonly Problem[] = []
-const NO_PARTS: readonly EpicPart[] = []
 
 /** Added to what is said about a place this page was sent to, when no picked part owns the file it is in. */
 function outsidePassage(focus: Narrowed | null): string {
