@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MESSAGE, PROTOCOL, type EpicPart, type Passage } from 'kehikot-module-protocol'
 import { createHash } from 'node:crypto'
+import { StrictMode } from 'react'
 
 import { parseLatex } from '../latex/parse.ts'
 import { standIn } from '../src/api.ts'
@@ -350,6 +351,24 @@ describe('a part is picked in the host’s bar', () => {
     expect(openFile()).toBe('chapters/method.tex')
     expect(tabs()).toEqual([])
     expect(screen.getByTestId('preview').getAttribute('data-pages')).toBe('3,4')
+  })
+
+  test('and it does as the page is really mounted, in StrictMode, where every effect runs twice', async () => {
+    /* `main.tsx` mounts the page in StrictMode and Vite serves it unbuilt, so
+       this is the mount a person gets. The second run of "a new paper starts
+       on main.tex" used to win, because the choice below it was guarded to
+       run once: a reload with a part ticked opened `main.tex`, marked outside. */
+    built = 'kept'
+    const canvas = host()
+    render(
+      <StrictMode>
+        <Framed />
+      </StrictMode>,
+    )
+    canvas.greet(PARTS('the-method'))
+    await waitFor(() => expect(openFile()).toBe('chapters/method.tex'))
+    await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
+    expect(tabs()).toEqual([])
   })
 
   test('two parts are the union, and the shared sheet is drawn once', async () => {

@@ -177,13 +177,15 @@ export function Workspace({
   const outsideSaid = focus ? `the picked part${focus.parts.length === 1 ? '' : 's'}` : ''
 
   /* A paper OPENED under a focus starts on a file that is in it. Once per
-     paper, and only then: after this the open file is the person's, and a
-     change of focus never moves it. Declared straight after `useSource` so
-     that it runs after that hook's own "a new paper starts on main.tex". */
-  const startedFor = useRef<string | null>(null)
+     paper, which is what the dependency says: after this the open file moves
+     only when the ticks do (below). Declared straight after `useSource` so
+     that it runs after that hook's own "a new paper starts on main.tex" —
+     and with no guard of its own beyond the dependency, so that it runs
+     after it EVERY time that one runs. StrictMode, which is how the page is
+     mounted, runs both twice; a ref that let this run once left the second
+     "starts on main.tex" standing, and a reload with a part ticked opened
+     `main.tex`, marked outside. */
   useEffect(() => {
-    if (startedFor.current === paper.epic) return
-    startedFor.current = paper.epic
     const first = focusRef.current?.files[0]
     if (first && !focusRef.current!.files.includes('main.tex')) source.open(first)
     // eslint-disable-next-line react-hooks/exhaustive-deps
