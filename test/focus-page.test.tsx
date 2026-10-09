@@ -96,7 +96,13 @@ function serve(path: string, query: URLSearchParams, body: Record<string, unknow
   if (path === '/api/sync') {
     if (query.has('page')) return [200, { ok: true, found: { build: built, file: 'chapters/method.tex', line: 1 } }]
     const page = (MAP as Record<string, { page: number }[]>)[file]?.[0]?.page ?? 1
-    return [200, { ok: true, found: { build: built, exact: true, line: Number(query.get('line')), rects: [{ page, x: 10, y: 20, w: 30, h: 8 }] } }]
+    /* As SyncTeX answers: a line of the preamble prints nothing and has no
+       record of its own, so the answer for it is its nearest neighbour and
+       says so — which the page does not draw for a caret. Every other line has
+       one. The caret a paper opens with is on `\documentclass`. */
+    const line = Number(query.get('line'))
+    const exact = line > disk[file]!.split('\n').indexOf('\\begin{document}')
+    return [200, { ok: true, found: { build: built, exact, line, rects: [{ page, x: 10, y: 20, w: 30, h: 8 }] } }]
   }
   return [404, { ok: false, error: `no ${path} in this test` }]
 }
@@ -382,6 +388,12 @@ describe('what a focus must not do in silence', () => {
   test('picked parts that own no file: nothing of the paper is in them, and the page says so and where to fix it', async () => {
     await framed(PARTS('the-steps'))
     await waitFor(() => expect(banner()).not.toBeNull())
+    /* What follows is said of the page once it has come to rest, so the caret's
+       own line is asked about and answered first: a mark there would put its
+       page on screen, flagged, and "no page" would stop being true. The caret
+       is on the preamble, which prints nothing, so there is none. */
+    await waitFor(() => expect(asked('/api/sync')).toBe(1))
+    await act(() => new Promise<void>((done) => setTimeout(done, 0)))
     expect(banner()!.getAttribute('data-focus')).toBe('none')
     expect(banner()!.textContent).toContain('that part owns no files of this paper')
     expect(banner()!.textContent).toContain('Give the part its files in Journeys')
