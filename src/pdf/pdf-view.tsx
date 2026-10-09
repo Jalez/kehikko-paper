@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import type { PageRect } from '../../compile/synctex.ts'
 import { gapsBetween, pagesSaid } from '../focus.ts'
-import { tighten, wordAt, type Run } from './words.ts'
+import { tightenPages, wordAt, type Run } from './words.ts'
 
 /**
  * The compiled PDF, drawn with pdf.js.
@@ -67,7 +67,7 @@ export interface PreviewProps {
   /** Where the PDF's bytes are. Changes when a new build lands. Null when there is none. */
   url: string | null
   marks: readonly PdfMark[]
-  /** Scroll the first rectangle of the first mark into view, once per new `nonce`. */
+  /** Scroll the first mark into view — where it is drawn, once its page's words are read — once per new `nonce`. */
   reveal: { nonce: number } | null
   /** A press on a page: which page, where in PDF points, and the word under it if the PDF's text says. */
   onPoint(point: { page: number; x: number; y: number; word: string | null }): void
@@ -228,6 +228,8 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
   const [width, setWidth] = useState(0)
   const [zoom, setZoom] = useState(1)
   const [version, setVersion] = useState(0)
+  /** The `url` of the document on screen. */
+  const [loaded, setLoaded] = useState<string | null>(null)
   const runs = useRef<Map<number, Run[]>>(new Map())
   /** The document on screen, for an answer that arrives after it was replaced. */
   const shown = useRef<PdfDocument | null>(null)
@@ -260,6 +262,7 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
         held.current = task
         shown.current = next
         setDoc(next)
+        setLoaded(url)
         /* After the swap, and not before: the pages on screen were drawn from
            the old document and are still being looked at. */
         if (old) void old.destroy().catch(() => {})
@@ -327,31 +330,54 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
   useEffect(() => {
     for (const mark of marks) {
       if (!mark.source) continue
-      for (const rect of mark.rects) if (!runs.current.has(rect.page)) void textOf(rect.page).catch(() => {})
+      for (const rect of mark.rects) {
+        if (runs.current.has(rect.page)) continue
+        /* A page that cannot be read is filed as saying nothing, so that a
+           reveal waiting for its words is not left waiting. */
+        void textOf(rect.page).catch(() => {
+          if (shown.current !== doc || runs.current.has(rect.page)) return
+          runs.current.set(rect.page, [])
+          setRunsTick((n) => n + 1)
+        })
+      }
     }
-  }, [marks, textOf])
+  }, [marks, textOf, doc])
 
-  const drawn = useMemo(() => {
+  const now = useMemo(() => {
     const byPage = new Map<number, { rect: PageRect; foreign: boolean }[]>()
+    /* Where the first mark is DRAWN, for `reveal` — or undefined while a page
+       of it is still to be read, and where it is drawn is not known. */
+    let first: PageRect | null | undefined = null
     for (const mark of marks) {
       const pages = new Map<number, PageRect[]>()
       for (const rect of mark.rects) pages.set(rect.page, [...(pages.get(rect.page) ?? []), rect])
       const all = [...pages.keys()].sort((a, b) => a - b)
-      for (const page of all) {
-        let rects = pages.get(page)!
-        const text = runs.current.get(page)
-        /* Each page's rectangles against that page's words. A mark that
-           crosses a page break starts on its first page and ends on its last. */
-        if (mark.source && text) {
-          const part = all.length === 1 ? 'whole' : page === all[0] ? 'head' : page === all[all.length - 1] ? 'tail' : 'body'
-          rects = tighten(rects, text, mark.source, part)
-        }
-        byPage.set(page, [...(byPage.get(page) ?? []), ...rects.map((rect) => ({ rect, foreign: mark.foreign === true }))])
+      /* A mark that is to be narrowed is not drawn until every page of it has
+         been read: drawn before, it is SyncTeX's whole lines for a moment and
+         then snaps to the words. */
+      if (mark.source && all.some((page) => !runs.current.has(page))) {
+        if (mark === marks[0]) first = undefined
+        continue
       }
+      /* Each page's rectangles against that page's words; which page a mark
+         that SyncTeX put on several starts and ends on is `tightenPages`'s. */
+      const tight = mark.source
+        ? tightenPages(all.map((page) => ({ rects: pages.get(page)!, runs: runs.current.get(page) })), mark.source)
+        : all.map((page) => pages.get(page)!)
+      all.forEach((page, index) => {
+        byPage.set(page, [...(byPage.get(page) ?? []), ...tight[index]!.map((rect) => ({ rect, foreign: mark.foreign === true }))])
+      })
+      if (mark === marks[0]) first = tight.flat()[0] ?? mark.rects[0] ?? null
     }
-    return byPage
+    return { drawn: byPage, first }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marks, version, runs.current.size])
+  /* While a new build is being opened the pages on screen are still the old
+     one's, and the marks handed in may already be the new one's: what was
+     drawn stays as it was until the swap. */
+  const settled = useRef(now)
+  if (loaded === url) settled.current = now
+  const { drawn, first } = settled.current
 
   /* Once per nonce, and not before there is a scale: a pane that is hidden
      behind the other tab has no width, and a reveal asked for then is owed
@@ -360,9 +386,10 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
   const revealed = useRef<number | null>(null)
   useEffect(() => {
     if (!reveal || revealed.current === reveal.nonce) return
-    const first = marks[0]?.rects[0]
     const node = scroller.current
-    if (!first || !node || scale <= 0) return
+    /* Nor while a new build is being opened: what is drawn is then the last
+       build's marks, and the one to go to is not among them yet. */
+    if (!first || !node || scale <= 0 || loaded !== url) return
     let top = PAD
     if (pages === null) {
       for (let n = 1; n < first.page; n += 1) top += (sizes[n - 1]?.h ?? 0) * scale + GAP
@@ -382,7 +409,7 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, pages = n
       node.scrollTo({ top: Math.max(0, y - node.clientHeight / 3), behavior: 'smooth' })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal?.nonce, scale > 0])
+  }, [reveal?.nonce, scale > 0, first === undefined, loaded === url])
 
   /* A pane behind the other tab has no width, so no scale, so its sheets have
      no height — and a scroller whose content has collapsed is at the top when
