@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { byteAt, eolOf, indexAt, lineAt, startOfLine, textOfLine, toDisk, toEditor } from '../src/lib/offsets.ts'
-import { placeWord, printedWords, tighten, wholeWords, wordAt, type Box, type Run } from '../src/pdf/words.ts'
+import { placeWord, printedWords, tighten, tightenPages, wholeWords, wordAt, type Box, type Run } from '../src/pdf/words.ts'
 
 /**
  * Bytes, characters and lines.
@@ -392,6 +392,93 @@ describe('a mark whose ends were measured', () => {
     for (const rect of tighten(late, page, selected, 'body')) {
       expect(rect.x).toBeCloseTo(70 - 1, 3)
     }
+  })
+
+  /* A paragraph typed on ONE source line, and a passage quoted out of its
+     middle — which is what a slide's citation is. SyncTeX names every printed
+     line of the paragraph. Pressed in a real host, such marks ran from the
+     paragraph's first "students" to its last "temperature". */
+  describe('a passage from the middle of a paragraph that repeats its words', () => {
+    const lines = [
+      'the rationales show most students accepting the format while some students',
+      'kept their dissatisfaction for the grader. The answer is that students',
+      'found the activity usable but not yet trustworthy. Later the students',
+      'said the activity was not trustworthy at any sampling temperature.',
+    ]
+    const para = lines.map((text, i) => run(70, 100 + i * 12, text))
+    const named = lines.map((text, i) => ({ x: 70, y: 100 + i * 12, w: text.length * 8, h: 10, page: 38 }))
+
+    test('starts where its next words follow, though the word is printed earlier — and on the line above its second word', () => {
+      const [a, b, ...rest] = tighten(named, para, 'students\nfound the activity usable but not yet trustworthy')
+      expect(rest).toEqual([])
+      expect(a!.y).toBe(112)
+      expect(a!.x).toBeCloseTo(70 + lines[1]!.lastIndexOf('students') * 8 - 1, 3)
+      expect(b!.x).toBeCloseTo(70 - 1, 3)
+      expect(b!.x + b!.w).toBeCloseTo(70 + (lines[2]!.indexOf('trustworthy') + 'trustworthy'.length) * 8 + 1, 3)
+    })
+
+    test('ends where its words lead up to, though the word is printed again further down', () => {
+      const [only, ...rest] = tighten(named, para, 'accepting the format while some students')
+      expect(rest).toEqual([])
+      expect(only!.y).toBe(100)
+      expect(only!.x + only!.w).toBeCloseTo(70 + lines[0]!.length * 8 + 1, 3)
+    })
+
+    test('with nothing to tell two places apart, the earliest start and the latest end stand: precision is lost, never coverage', () => {
+      const [a, , , d] = tighten(named, para, 'students … trustworthy')
+      expect(a!.x).toBeCloseTo(70 + lines[0]!.indexOf('students') * 8 - 1, 3)
+      expect(d!.x + d!.w).toBeCloseTo(70 + (lines[3]!.indexOf('trustworthy') + 'trustworthy'.length) * 8 + 1, 3)
+    })
+
+    test('SyncTeX put the paragraph on two pages and the passage is all on one: only that page is marked, both ends on it', () => {
+      const foot = { rects: named.slice(0, 2), runs: para.slice(0, 2) }
+      const head = { rects: named.slice(2).map((rect) => ({ ...rect, page: 39 })), runs: para.slice(2) }
+      const [first, second] = tightenPages([foot, head], 'found the activity usable but not yet trustworthy')
+      expect(first).toEqual([])
+      expect(second!.length).toBe(1)
+      expect(second![0]!.x).toBeCloseTo(70 - 1, 3)
+      expect(second![0]!.x + second![0]!.w).toBeCloseTo(70 + (lines[2]!.indexOf('trustworthy') + 'trustworthy'.length) * 8 + 1, 3)
+
+      const [top, bottom] = tightenPages([foot, head], 'accepting the format while some students')
+      expect(top!.length).toBe(1)
+      expect(top![0]!.x).toBeCloseTo(70 + lines[0]!.indexOf('accepting') * 8 - 1, 3)
+      expect(bottom).toEqual([])
+    })
+
+    test('a passage that does cross the break starts on the first page and ends on the last, and a page not read yet keeps SyncTeX’s rectangles', () => {
+      const foot = { rects: named.slice(0, 2), runs: para.slice(0, 2) }
+      const head = { rects: named.slice(2), runs: para.slice(2) }
+      const source = 'The answer is that students\nfound the activity usable'
+      const [first, second] = tightenPages([foot, head], source)
+      expect(first!.map((rect) => rect.y)).toEqual([112])
+      expect(first![0]!.x).toBeCloseTo(70 + lines[1]!.indexOf('The answer') * 8 - 1, 3)
+      expect(second!.map((rect) => rect.y)).toEqual([124])
+      expect(second![0]!.x + second![0]!.w).toBeCloseTo(70 + (lines[2]!.indexOf('usable') + 'usable'.length) * 8 + 1, 3)
+      expect(tightenPages([foot, { rects: head.rects, runs: undefined }], source)[1]).toEqual(head.rects)
+    })
+  })
+
+  test('two rectangles on one printed line — an item’s label and its text — are one row, not a row between the ends', () => {
+    const item = [run(84, 100, '1. RQ1 (perception). How do students perceive chat-based exercises, as'), run(98, 112, 'expressed in ratings and free-text rationales?')]
+    const rects = [
+      { x: 84 + 21 * 8, y: 99, w: 300, h: 12 },
+      { x: 84, y: 100, w: item[0]!.text.length * 8, h: 8 },
+      { x: 84, y: 100, w: item[0]!.text.length * 8, h: 8 },
+      { x: 98, y: 112, w: 300, h: 10 },
+    ]
+    const [a, b, ...rest] = tighten(rects, item, 'How do students perceive chat-based\n        exercises, as expressed in ratings and free-text rationales?')
+    expect(rest).toEqual([])
+    expect(a!.x).toBeCloseTo(84 + item[0]!.text.indexOf('How') * 8 - 1, 3)
+    expect(a!.x + a!.w).toBeCloseTo(84 + item[0]!.text.length * 8 + 1, 3)
+    expect(b!.x + b!.w).toBeCloseTo(98 + item[1]!.text.length * 8 + 1, 3)
+  })
+
+  test('a row of a table ends at its last number: a decimal is a word to look for, however short', () => {
+    const cells = [run(127, 360, 'Vanilla JS'), run(230, 360, '99'), run(280, 360, '41.4'), run(340, 360, '3.51'), run(400, 360, '1.44')]
+    const [only] = tighten([{ x: 127, y: 358, w: 351, h: 13 }], cells, 'Vanilla JS & 99 & 41.4 & 3.51 & 1.44')
+    expect(only!.x).toBeCloseTo(127 - 1, 3)
+    expect(only!.x + only!.w).toBeCloseTo(400 + 4 * 8 + 1, 3)
+    expect(printedWords('at 0.7, of 50 points')).toEqual(['0.7', 'points'])
   })
 
   test('nothing to look for — maths, a command — leaves a one-page mark’s ends where SyncTeX put them', () => {

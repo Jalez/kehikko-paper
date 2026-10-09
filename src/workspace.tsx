@@ -251,8 +251,12 @@ export function Workspace({
    * without touching the selection, on the PDF in the other colour — because
    * it IS that: a place somebody else chose. What the canvas points at
    * outranks it, and going anywhere of one's own accord takes it down.
+   *
+   * Unlike a passage somebody pointed at, it does not turn the PDF to itself:
+   * nobody here asked, and the person may be reading another page. `reveal`
+   * is the exception — a change that landed because they pressed Accept.
    */
-  const [noted, setNoted] = useState<{ file: string; from: number; to: number; proposal?: string } | null>(null)
+  const [noted, setNoted] = useState<{ file: string; from: number; to: number; proposal?: string; reveal?: boolean } | null>(null)
   const notedRef = useRef(noted)
   notedRef.current = noted
   const foreign = theirs ?? noted
@@ -531,8 +535,15 @@ export function Workspace({
 
   const foreignDoc = foreign ? source.docs.get(foreign.file) : undefined
   const foreignText = foreignDoc?.text
+  /* A change is marked on the PDF only once the PDF is OF the text it is in.
+     Until the compile that follows a landing has finished, the page on screen
+     is the build before it: the new words are not there to be found, and the
+     mark was the whole source line — three printed lines — for a dozen seconds
+     and then snapped to the word. The source's mark does not wait. */
+  const behind = theirs === null && noted !== null && build?.pdf?.hashes[noted.file] !== foreignDoc?.hash
+  const turns = theirs !== null || noted?.reveal === true
   useEffect(() => {
-    if (!buildId || !foreign || foreignText === undefined || !foreignDoc) {
+    if (!buildId || !foreign || foreignText === undefined || !foreignDoc || behind) {
       setForeignRects([])
       return
     }
@@ -543,14 +554,14 @@ export function Workspace({
       .then((rects) => {
         if (stopped) return
         setForeignRects(rects)
-        if (rects.length) setReveal((was) => ({ nonce: (was?.nonce ?? 0) + 1 }))
+        if (rects.length && turns) setReveal((was) => ({ nonce: (was?.nonce ?? 0) + 1 }))
       })
       .catch(() => {})
     return () => {
       stopped = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask])
+  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, behind, turns])
 
   /* ---- What the toolbar reads out ---------------------------------------- */
 
@@ -703,17 +714,20 @@ export function Workspace({
   }, [auto, proposals, answerOne])
 
   /**
-   * Draw attention to a change: mark it, and go to it unless the person is typing.
+   * Draw attention to a change: mark it, and take the EDITOR to it unless the person is typing.
    *
    * The tab is never changed. With the PDF in front the change is marked on
    * the page and the Source tab says how many suggestions are waiting; with
    * the source in front the editor is scrolled to it and the selection is left
    * alone. A person in the middle of a sentence is not scrolled away from it:
    * the mark is made, the line at the bottom says so, and the editor stays.
+   *
+   * The PDF is not scrolled at all, unless `at.reveal` — see `noted`. Pressing
+   * a suggestion's file name is how its place on the page is asked for.
    */
   const editorBox = useRef<HTMLDivElement>(null)
   const attend = useCallback(
-    (at: { file: string; from: number; to: number; proposal?: string }, words: string) => {
+    (at: { file: string; from: number; to: number; proposal?: string; reveal?: boolean }, words: string) => {
       setNoted(at)
       const typing = editorBox.current !== null && editorBox.current.contains(document.activeElement)
       if (typing) {
@@ -759,12 +773,16 @@ export function Workspace({
      save — is shown too: where it changed, marked, and on the PDF once the
      compile that follows has caught up. */
   const landedChange = source.changed
+  /* Set by a press on Accept: what lands next was asked for, and the PDF may turn to it. */
+  const accepted = useRef(false)
   useEffect(() => {
     if (!landedChange) return
     const held = source.docs.get(landedChange.file)
     if (!held) return
+    const reveal = accepted.current
+    accepted.current = false
     attend(
-      { file: landedChange.file, from: byteAt(held.text, landedChange.from, held.eol), to: byteAt(held.text, landedChange.to, held.eol) },
+      { file: landedChange.file, from: byteAt(held.text, landedChange.from, held.eol), to: byteAt(held.text, landedChange.to, held.eol), reveal },
       `${landedChange.file} changed on disk. What changed is marked.`,
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -970,8 +988,14 @@ export function Workspace({
             busy={busy}
             auto={auto}
             onAuto={changeAuto}
-            onDecide={(id, decision) => void answerOne(id, decision)}
-            onAcceptAll={() => void acceptAll()}
+            onDecide={(id, decision) => {
+              if (decision === 'accept') accepted.current = true
+              void answerOne(id, decision)
+            }}
+            onAcceptAll={() => {
+              accepted.current = true
+              void acceptAll()
+            }}
             onShow={showProposal}
           />
           {openOutside && (

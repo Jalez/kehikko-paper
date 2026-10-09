@@ -159,8 +159,15 @@ export function printedWords(source: string): string[] {
     .replace(/\\(?:cite|ref|label|autoref|eqref|cref|Cref|pageref|input|include|includegraphics|usepackage|bibliography|bibliographystyle|begin|end)\*?(?:\[[^\]]*\])*\{[^}]*\}/g, ' ')
     .replace(/\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?/g, ' ')
     .replace(/\\./g, ' ')
-  return plain.match(/[\p{L}\p{N}]{3,}/gu) ?? []
+  return plain.match(new RegExp(WORD, 'gu')) ?? []
 }
+
+/**
+ * A word worth looking for: three letters or digits — or a number with a
+ * decimal point, however short. A row of a table is mostly those, and without
+ * them a cited row was marked as its first cell and nothing else.
+ */
+const WORD = '[\\p{L}\\p{N}]{3,}|\\p{N}+[.,]\\p{N}+'
 
 /**
  * A stretch of source, carried out to the ends of the words it begins and ends
@@ -231,7 +238,7 @@ export function tighten<B extends Box>(rects: readonly B[], runs: readonly Run[]
   const out = rects.map((rect) => ({ ...rect }))
   const words = printedWords(source)
   if (!out.length) return out
-  if (out.some((rect) => on(runs, rect).some(measured))) return byMeasure(out, runs, source, words, part)
+  if (out.some((rect) => on(runs, rect).some(measured))) return byMeasure(rows(out), runs, source, words, part)
   /* Unmeasured, the old rule: and it only knows a mark that is all on one page. */
   if (!words.length || part !== 'whole') return out
 
@@ -302,13 +309,9 @@ function on(runs: readonly Run[], rect: Box): Run[] {
   })
 }
 
-/** The next word of three letters or more in `text` from `from`, and the last one before `to`. */
+/** The next word of three letters or more in `text` from `from`. */
 function wordAfter(text: string, from: number): string | null {
-  return text.slice(from).match(/[\p{L}\p{N}]{3,}/u)?.[0] ?? null
-}
-function wordBefore(text: string, to: number): string | null {
-  const all = text.slice(0, to).match(/[\p{L}\p{N}]{3,}/gu)
-  return all ? all[all.length - 1]! : null
+  return text.slice(from).match(new RegExp(WORD, 'u'))?.[0] ?? null
 }
 
 /** Every place `word` is printed, as a whole word, in the measured runs among `among`. */
@@ -343,10 +346,10 @@ function places(among: readonly Run[], word: string): Span[] {
  *    long word's width — and, failing that, at the very end of the printed
  *    line above, which is where a source line's first word goes when TeX broke
  *    the line right after it. That line is then marked too.
- *  - **The word that follows decides between two candidates.** The selection's
- *    second word printed right after one of them is the difference between
- *    this "the" and the one a few words earlier; when a command stands
- *    between them and nothing can be told, the old order stands.
+ *  - **The words that follow decide between two candidates.** The selection's
+ *    next words printed right after one of them is the difference between
+ *    this "the" and the one a few lines earlier — see `agreement`; when a
+ *    command stands between them and nothing can be told, the old order stands.
  *  - **Every row but the ends is its whole printed line.** A contiguous
  *    passage of source prints as contiguous text: from its first word to the
  *    end of that line, whole lines, and the last line up to its last word.
@@ -367,48 +370,8 @@ function byMeasure<B extends Box>(out: B[], runs: readonly Run[], source: string
   const endsHere = tailHere && words.length > 0
   const first = words[0] ?? ''
   const last = words[words.length - 1] ?? ''
-  const second = words.length > 1 ? words[1]! : null
-  const penultimate = words.length > 1 ? words[words.length - 2]! : null
-  const follows = (span: Span) => second !== null && wordAfter(span.run.text, span.at + first.length) === second
-  const precedes = (span: Span) => penultimate !== null && wordBefore(span.run.text, span.at) === penultimate
-
-  /* ---- Where it starts ---- */
-  let start: { index: number; span: Span } | null = null
-  for (let index = 0; startsHere && index < out.length && !start; index += 1) {
-    const rect = out[index]!
-    const reach = index === 0 ? LATE : 1
-    const near = places(on(runs, rect), first).filter((span) => span.to >= rect.x - reach * span.per && span.from <= rect.x + rect.w + span.per)
-    near.sort((a, b) => a.from - b.from)
-    const inside = near.filter((span) => span.to >= rect.x - span.per)
-    /* Confirmed by the word after it; else the first one inside, as before;
-       else the nearest one to the left, which is the late start itself. */
-    const span = near.find(follows) ?? inside[0] ?? near[near.length - 1] ?? null
-    if (span) start = { index, span }
-    else if (index === 0) {
-      /* Broken off onto the line above: its last word, and nothing after it. */
-      const above = { x: rect.x, y: rect.y - (out[1] ? Math.abs(out[1].y - rect.y) : rect.h * 1.4), w: rect.w, h: rect.h }
-      const line = lineOf(runs, above, null)
-      const tail = places(on(runs, above), first)
-        .filter((one) => one.to <= line.right + 1 && one.from >= line.left - 1 && wordAfter(one.run.text, one.at + first.length) === null)
-        .sort((a, b) => b.from - a.from)[0]
-      if (tail) {
-        out.unshift({ ...rect, x: tail.from, y: tail.run.y, w: tail.run.x + tail.run.w - tail.from, h: tail.run.h })
-        start = { index: 0, span: tail }
-      }
-    }
-  }
-
-  /* ---- Where it ends ---- */
-  let end: { index: number; span: Span } | null = null
-  for (let index = out.length - 1; endsHere && index >= (start?.index ?? 0) && !end; index -= 1) {
-    const rect = out[index]!
-    const near = places(on(runs, rect), last)
-      .filter((span) => span.to >= rect.x - span.per && span.from <= rect.x + rect.w + span.per)
-      .filter((span) => !start || index > start.index || span.to > start.span.from)
-    near.sort((a, b) => b.to - a.to)
-    const span = near.find(precedes) ?? near[0] ?? null
-    if (span) end = { index, span }
-  }
+  const start = startsHere ? startOf(out, runs, words) : null
+  const end = endsHere ? endOf(out, runs, words, start) : null
 
   const s = start?.index ?? 0
   const e = end?.index ?? out.length - 1
@@ -440,6 +403,167 @@ function byMeasure<B extends Box>(out: B[], runs: readonly Run[], source: string
     rect.w = Math.max(to - x, 2)
   })
   return kept
+}
+
+/** One end of a mark as found on the page: the row it is in, the word, and how many of its neighbours agreed. */
+interface End {
+  index: number
+  span: Span
+  score: number
+}
+
+/**
+ * SyncTeX's rectangles as rows: those on one printed line made one.
+ *
+ * An `\item` is answered with a rectangle for its label and another for its
+ * text, on the same baseline. Left apart, the second was "a row between the
+ * ends" and was widened to its whole line — label, heading and all — beside a
+ * first row that had been narrowed correctly.
+ */
+function rows<B extends Box>(rects: readonly B[]): B[] {
+  const out: B[] = []
+  for (const rect of rects) {
+    const middle = rect.y + rect.h / 2
+    /* Each one's middle inside the other: a tall rectangle over two lines is not either of them. */
+    const same = out.find((row) => middle >= row.y && middle <= row.y + row.h && row.y + row.h / 2 >= rect.y && row.y + row.h / 2 <= rect.y + rect.h)
+    if (!same) {
+      out.push(rect)
+      continue
+    }
+    const right = Math.max(same.x + same.w, rect.x + rect.w)
+    same.x = Math.min(same.x, rect.x)
+    same.w = right - same.x
+  }
+  return out
+}
+
+/** Every word the page prints on the rectangles' lines, in reading order. */
+function reading(runs: readonly Run[], rects: readonly Box[]): { text: string; run: Run; at: number }[] {
+  const seen = new Set<Run>()
+  const out: { text: string; run: Run; at: number }[] = []
+  for (const rect of rects) {
+    const row = on(runs, rect).filter((run) => !seen.has(run)).sort((a, b) => a.x - b.x)
+    for (const run of row) {
+      seen.add(run)
+      for (const found of run.text.matchAll(new RegExp(WORD, 'gu'))) out.push({ text: found[0], run, at: found.index })
+    }
+  }
+  return out
+}
+
+/**
+ * How many of the selection's next words the page prints straight after a
+ * place its first word is printed — or, with `back`, how many of the words
+ * before its last. Counted across runs and across lines.
+ *
+ * This is what tells one "the" from another. A passage quoted out of a long
+ * paragraph begins with a word the paragraph has used before and ends with one
+ * it uses again, and taking the earliest and the latest marked everything from
+ * the first "students" to the last "temperature": every line SyncTeX had named.
+ */
+function agreement(read: readonly { text: string; run: Run; at: number }[], span: Span, words: readonly string[], back: boolean): number {
+  const at = read.findIndex((word) => word.run === span.run && word.at === span.at)
+  if (at === -1) return 0
+  let n = 0
+  if (back) while (n + 1 < words.length && read[at - n - 1]?.text === words[words.length - 2 - n]) n += 1
+  else while (n + 1 < words.length && read[at + n + 1]?.text === words[n + 1]) n += 1
+  return n
+}
+
+/** Where a selection starts among the rows. May add the line above to `out` — see `byMeasure`. */
+function startOf<B extends Box>(out: B[], runs: readonly Run[], words: readonly string[]): End | null {
+  const first = words[0]!
+  const read = reading(runs, out)
+  const rowsOf = out.map((rect, index) => {
+    const reach = index === 0 ? LATE : 1
+    return places(on(runs, rect), first)
+      .filter((span) => span.to >= rect.x - reach * span.per && span.from <= rect.x + rect.w + span.per)
+      .sort((a, b) => a.from - b.from)
+  })
+  /* The place the selection's next words follow, wherever it is… */
+  let best: End | null = null
+  for (let index = 0; index < out.length; index += 1) {
+    for (const span of rowsOf[index]!) {
+      const score = agreement(read, span, words, false)
+      if (score > (best?.score ?? 0)) best = { index, span, score }
+    }
+  }
+  if (best) return best
+  /* …else the first one inside the first row that has one, as before; else
+     the nearest one to the left, which is the late start itself. */
+  for (let index = 0; index < out.length; index += 1) {
+    const rect = out[index]!
+    const near = rowsOf[index]!
+    const span = near.find((one) => one.to >= rect.x - one.per) ?? near[near.length - 1] ?? null
+    if (span) return { index, span, score: 0 }
+    if (index > 0) continue
+    /* Broken off onto the line above: its last word, and nothing after it. */
+    const above = { x: rect.x, y: rect.y - (out[1] ? Math.abs(out[1].y - rect.y) : rect.h * 1.4), w: rect.w, h: rect.h }
+    const line = lineOf(runs, above, null)
+    const tail = places(on(runs, above), first)
+      .filter((one) => one.to <= line.right + 1 && one.from >= line.left - 1 && wordAfter(one.run.text, one.at + first.length) === null)
+      .sort((a, b) => b.from - a.from)[0]
+    if (tail) {
+      out.unshift({ ...rect, x: tail.from, y: tail.run.y, w: tail.run.x + tail.run.w - tail.from, h: tail.run.h })
+      return { index: 0, span: tail, score: 0 }
+    }
+  }
+  return null
+}
+
+/** Where a selection ends among the rows, at or after where it starts. */
+function endOf<B extends Box>(out: readonly B[], runs: readonly Run[], words: readonly string[], start: End | null): End | null {
+  const last = words[words.length - 1]!
+  const read = reading(runs, out)
+  let best: End | null = null
+  let latest: End | null = null
+  for (let index = out.length - 1; index >= (start?.index ?? 0); index -= 1) {
+    const rect = out[index]!
+    const near = places(on(runs, rect), last)
+      .filter((span) => span.to >= rect.x - span.per && span.from <= rect.x + rect.w + span.per)
+      .filter((span) => !start || index > start.index || span.to > start.span.from)
+      .sort((a, b) => b.to - a.to)
+    for (const span of near) {
+      const score = agreement(read, span, words, true)
+      if (score > (best?.score ?? 0)) best = { index, span, score }
+      latest ??= { index, span, score: 0 }
+    }
+  }
+  /* The place the selection's words lead up to; else the latest, as before. */
+  return best ?? latest
+}
+
+/**
+ * A mark's rectangles on every page SyncTeX put them on, each page narrowed
+ * against its own words. `runs` is undefined for a page not read yet.
+ *
+ * SyncTeX answers for source LINES, and a paragraph typed on one line that
+ * runs over a page break is answered on both pages whatever part of it was
+ * meant. So the pages are not taken as "starts on the first, ends on the
+ * last": the page whose words agree with how the passage begins is where it
+ * starts, likewise where it ends, and a page outside those is not marked at
+ * all. With nothing to tell by, the first and the last stand.
+ */
+export function tightenPages<B extends Box>(pages: readonly { rects: readonly B[]; runs: readonly Run[] | undefined }[], source: string): B[][] {
+  const words = printedWords(source)
+  let first = 0
+  let last = pages.length - 1
+  if (pages.length > 1 && words.length > 1 && pages.every((page) => page.runs && page.rects.some((rect) => on(page.runs!, rect).some(measured)))) {
+    const ends = pages.map((page) => {
+      const lines = rows(page.rects.map((rect) => ({ ...rect })))
+      const start = startOf(lines, page.runs!, words)
+      return { start: start?.score ?? 0, end: endOf(lines, page.runs!, words, start)?.score ?? 0 }
+    })
+    ends.forEach((one, index) => {
+      if (one.start > ends[first]!.start) first = index
+    })
+    for (let index = pages.length - 1; index >= first; index -= 1) if (ends[index]!.end > ends[last]!.end) last = index
+  }
+  return pages.map((page, index) => {
+    if (index < first || index > last) return []
+    if (!page.runs) return [...page.rects]
+    return tighten(page.rects, page.runs, source, first === last ? 'whole' : index === first ? 'head' : index === last ? 'tail' : 'body')
+  })
 }
 
 /**

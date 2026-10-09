@@ -46,6 +46,10 @@ let calls: Call[]
 let proposals: Record<string, unknown>[]
 let engine: string | null
 let built: string | null
+/** What the PDF on screen was built from, when that is not the disk as it is now. */
+let builtFrom: string | null
+/** Set, a compile does not answer until it resolves: the dozen seconds an engine takes. */
+let compiling: Promise<void> | null
 let lastPreview: PreviewProps | null
 let lastEditor: EditorProps | null
 /** Which page the fake SyncTeX says a line came out on. The page MAP says 2 for every line. */
@@ -75,7 +79,7 @@ const buildNow = () => ({
   how: engine ? '' : 'No LaTeX engine is installed on this machine. brew install tectonic',
   running: false,
   last: built ? { ok: true, at: 1, ms: 2100, engine, timedOut: false, problems: [], tail: '' } : null,
-  pdf: built ? { id: built, at: 1, pages: 3, hashes: { 'main.tex': hashOf(disk['main.tex']!) }, map: { 'main.tex': [{ page: 2, from: 1, to: 99 }] } } : null,
+  pdf: built ? { id: built, at: 1, pages: 3, hashes: { 'main.tex': hashOf(builtFrom ?? disk['main.tex']!) }, map: { 'main.tex': [{ page: 2, from: 1, to: 99 }] } } : null,
 })
 
 function serve(method: string, path: string, query: URLSearchParams, body: Record<string, unknown> | null): [number, unknown] {
@@ -84,6 +88,7 @@ function serve(method: string, path: string, query: URLSearchParams, body: Recor
   if (path === '/api/build') return [200, { ok: true, build: buildNow() }]
   if (path === '/api/compile') {
     built = `build-${calls.filter((one) => one.path === '/api/compile').length}`
+    builtFrom = disk['main.tex']!
     return [200, { ok: true, build: buildNow() }]
   }
   if (path === '/api/proposals') return [200, { ok: true, proposals, said: '' }]
@@ -134,6 +139,8 @@ beforeEach(() => {
   proposals = []
   engine = 'tectonic'
   built = null
+  builtFrom = null
+  compiling = null
   lastPreview = null
   lastEditor = null
   rectPage = 2
@@ -144,6 +151,7 @@ beforeEach(() => {
     const method = (init?.method ?? 'GET').toUpperCase()
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null
     calls.push({ method, path: url.pathname, query: url.searchParams, body })
+    if (url.pathname === '/api/compile' && compiling) await compiling
     const [status, answer] = serve(method, url.pathname, url.searchParams, body)
     return new Response(JSON.stringify(answer), { status, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
@@ -393,6 +401,70 @@ describe('a change that arrives', () => {
     wake()
     await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 'mistake'.length}`))
     expect(await screen.findByText(/main\.tex changed on disk/)).toBeDefined()
+  })
+
+  const orange = () => lastPreview!.marks.some((mark) => mark.foreign)
+  const shownPdf = () => waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+
+  test('text that lands is not marked on a PDF built before it: the mark is drawn when the build that has it is on screen', async () => {
+    built = 'kept'
+    builtFrom = MAIN
+    await open()
+    await shownPdf()
+    let finish = () => {}
+    compiling = new Promise((done) => (finish = done))
+    disk['main.tex'] = MAIN.replace('tpyo', 'mistake')
+    wake()
+    /* In the source at once… */
+    await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 'mistake'.length}`))
+    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+    await new Promise((done) => setTimeout(done, 40))
+    /* …and not on the old build, where those words are not printed. */
+    expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept')
+    expect(orange()).toBe(false)
+    finish()
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-1'))
+    await waitFor(() => expect(orange()).toBe(true))
+  })
+
+  test('a suggestion that arrives is marked on the PDF and does not scroll it; pressing its file name does', async () => {
+    built = 'kept'
+    await open()
+    await shownPdf()
+    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    const was = lastPreview!.reveal?.nonce
+    proposals = [suggestion()]
+    wake()
+    await waitFor(() => expect(orange()).toBe(true))
+    await new Promise((done) => setTimeout(done, 40))
+    expect(lastPreview!.reveal?.nonce).toBe(was)
+    /* The editor is still taken there: it is behind the PDF, and nobody is typing in it. */
+    expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`)
+    /* Its file name selects it in the source — the real editor reports that
+       selection, as here — and a selection is followed on the PDF. */
+    fireEvent.click(screen.getByRole('button', { name: 'main.tex' }))
+    act(() => lastEditor!.onSelect({ from: at, to: at + 4 }))
+    await waitFor(() => expect(lastPreview!.reveal?.nonce).not.toBe(was))
+  })
+
+  test('a change that lands by itself does not scroll the PDF; one that lands after Accept was pressed does', async () => {
+    built = 'kept'
+    proposals = [suggestion()]
+    await open()
+    await shownPdf()
+    const was = lastPreview!.reveal?.nonce
+    disk['main.tex'] = MAIN.replace('Fin', 'The end')
+    wake()
+    await waitFor(() => expect(orange()).toBe(true))
+    await new Promise((done) => setTimeout(done, 40))
+    expect(lastPreview!.reveal?.nonce).toBe(was)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    disk['main.tex'] = disk['main.tex']!.replace('tpyo', 'typo')
+    wake()
+    await waitFor(() => expect(lastPreview!.reveal?.nonce).not.toBe(was))
+    expect(orange()).toBe(true)
   })
 })
 
