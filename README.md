@@ -405,7 +405,9 @@ Not narrowed, on purpose:
 
 - **Compilation.** The whole paper is always compiled from `main.tex`. A part
   is a way of looking at the result.
-- **What this page publishes.** `passage.set` is the same in every field.
+- **The passage this page publishes.** `passage.set` is the same in every
+  field. (What it says it is SHOWING does follow the ticks — see "What other
+  modules are told".)
 - **The MCP door.** `list_papers`, `list_sections`, `read_paper` and
   `read_source` answer about the whole paper whatever is picked. An agent has
   no canvas and no focus; narrowing its reading by what a person happens to be
@@ -418,8 +420,9 @@ counted outside a focus rather than guessed into one).
 
 ## What other modules are told
 
-One thing, and its shape is unchanged: `passage.set`, with
-`{ path, page, from, to, quoted, section }`.
+Two things. Where the reader is — `passage.set`, with
+`{ path, page, from, to, quoted, section }`, its shape unchanged — and which
+files are on screen, `showing.set` (below).
 
 - `path` is the absolute path of the `.tex` file, `from`/`to` are byte offsets
   into it, `section` is the heading the caret is under with the title exactly
@@ -435,12 +438,25 @@ One thing, and its shape is unchanged: `passage.set`, with
   longer match under Notes' page scope; it still shows under its document and
   passage scopes.
 
-What arrives is one thing too: the passage the canvas holds. A range in one of
+`showing.set` says which FILES are on screen, since a passage names only the
+one the caret is in: `{ refs: [], documents }`, each document a file's absolute
+path with no page, range or quote. Nothing ticked is every file of the paper,
+`main.tex` first; ticked parts are the files those parts own that the paper
+includes, plus the open file when it is kept open outside them; ticked parts
+that own no file of the paper are `[]`. It is said when the ticks or the
+paper's file list change, never on a keystroke. The protocol carries sixteen
+documents per container: a paper with more says the first sixteen in its own
+order, with the open file put first if the cut would have dropped it.
+
+What arrives is one thing: the passage the canvas holds. A range in one of
 this paper's files is opened, scrolled to and marked in the source — exactly,
 since the anchor is in bytes of the very file the editor holds — and shown in
 the PDF through SyncTeX. A section with no range goes to its heading. After
 adopting somebody else's passage this page says nothing until a person touches
-it, so it cannot answer its own echo (`shouldPublish`, with tests).
+it, so it cannot answer its own echo (`shouldPublish`, with tests). A part
+ticked in the host's bar is a person touching it: the quiet ends and the
+passage of the file the tick opened is said. And the passage this page said
+before a reload is still its own after it, not somebody else's to walk to.
 
 The caret is left where it was — the passage is marked, not selected — so
 while that passage is what this page is showing, the toolbar reads out the

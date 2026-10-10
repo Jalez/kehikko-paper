@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { anchorInFocus, partsSchema, type EpicPart } from 'kehikot-module-protocol'
 
 import type { PageSpan } from '../compile/synctex.ts'
-import { fileAfterTicks, gapsBetween, headline, narrowed, notesOf, pagesSaid, pagesShown, tabsOf, ticksOf } from '../src/focus.ts'
+import { fileAfterTicks, filesShown, gapsBetween, headline, narrowed, notesOf, pagesSaid, pagesShown, tabsOf, ticksOf } from '../src/focus.ts'
 import { jumpsOf, type SectionAt } from '../src/lib/sections.ts'
 
 /**
@@ -303,6 +303,46 @@ describe('the files to switch among', () => {
     const twice = { epic: EPIC, files: ['main.tex', 'a/intro.tex', 'b/intro.tex'] }
     const both: EpicPart[] = [{ id: 'both', heading: 'Both', refs: [], picked: true, files: ['a/intro.tex', 'b/intro.tex'] }]
     expect(tabsOf(narrowed(both, twice, null), 'a/intro.tex').map((one) => one.label)).toEqual(['a/intro.tex', 'b/intro.tex'])
+  })
+})
+
+describe('the files this page says it is showing', () => {
+  const focusOn = (...picked: string[]) => narrowed(parts(...picked), paper, pdf)
+
+  test('nothing ticked is every file of the paper, main.tex first', () => {
+    expect(filesShown(null, paper.files, 'main.tex', 16)).toEqual(paper.files)
+    /* Whichever file a press on the PDF took the editor into. */
+    expect(filesShown(null, paper.files, 'chapters/results.tex', 16)).toEqual(paper.files)
+  })
+
+  test('ticked parts are their files, in the paper’s order and once each', () => {
+    expect(filesShown(focusOn('the-method'), paper.files, 'chapters/method.tex', 16)).toEqual(['chapters/method.tex'])
+    expect(filesShown(focusOn('the-results', 'the-design'), paper.files, 'chapters/results.tex', 16)).toEqual([
+      'chapters/design.tex',
+      'chapters/results.tex',
+    ])
+    /* Two parts naming one file say it once, and a file the paper does not include is not said. */
+    const twice = [
+      part('a', 'A', true, ['chapters/design.tex', 'chapters/not-there.tex']),
+      part('b', 'B', true, ['chapters/design.tex']),
+    ]
+    expect(filesShown(narrowed(twice, paper, pdf), paper.files, 'chapters/design.tex', 16)).toEqual(['chapters/design.tex'])
+  })
+
+  test('a file kept open outside the ticked parts is said too, in its place', () => {
+    expect(filesShown(focusOn('the-method'), paper.files, 'main.tex', 16)).toEqual(['main.tex', 'chapters/method.tex'])
+  })
+
+  test('ticked parts that own no file of the paper show nothing, whatever is left open', () => {
+    expect(filesShown(focusOn('the-steps'), paper.files, 'main.tex', 16)).toEqual([])
+  })
+
+  test('more files than the wire carries: as many as fit, and the open one among them', () => {
+    const many = ['main.tex', ...Array.from({ length: 20 }, (_, i) => `chapters/${i + 1}.tex`)]
+    expect(filesShown(null, many, 'main.tex', 16)).toEqual(many.slice(0, 16))
+    const far = filesShown(null, many, 'chapters/19.tex', 16)
+    expect(far).toHaveLength(16)
+    expect(far).toEqual(['chapters/19.tex', ...many.slice(0, 15)])
   })
 })
 

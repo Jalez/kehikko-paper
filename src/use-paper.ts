@@ -408,6 +408,22 @@ export function usePaper(framed: boolean) {
   }, [request])
 
   /**
+   * Say which documents this container is showing (`showing.set`), so that a
+   * neighbour can narrow to them. Said once per change — the list is compared
+   * as its paths, so a paper re-read after a save says nothing — and fire and
+   * forget like `keep`: a host that refuses, never learned the method or is
+   * not there is not a fault in this page.
+   */
+  /* `''` and not null: a container that has said nothing is showing nothing, so saying so is no news. */
+  const told = useRef('')
+  const show = useCallback((documents: Passage[]) => {
+    const key = documents.map((one) => one.path).join('\n')
+    if (told.current === key) return
+    told.current = key
+    void request('showing.set', { refs: [], documents }).catch(() => {})
+  }, [request])
+
+  /**
    * Try again, after this app's own server has answered again: a paper that
    * could not be opened is asked for once more, and one that is open has its
    * standing read now rather than at the next poll.
@@ -434,6 +450,7 @@ export function usePaper(framed: boolean) {
       goto,
       kept,
       keep,
+      show,
       start,
       setPaper,
       setProposals,
@@ -449,7 +466,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, parts, keep, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again],
   )
 }
 

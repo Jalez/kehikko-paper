@@ -63,8 +63,9 @@ import type { PageSpan } from '../compile/synctex.ts'
  * ## What this does not touch
  *
  * Compilation: the whole paper is always compiled from `main.tex`, and a part
- * is a way of LOOKING at the result. What this page publishes (`passage.set`):
- * unchanged, in every field. And the MCP door: an agent has no canvas and no
+ * is a way of LOOKING at the result. The passage this page publishes
+ * (`passage.set`): unchanged, in every field — though which FILES it says it
+ * is showing does follow the ticks (`filesShown`). And the MCP door: an agent has no canvas and no
  * focus, so `list_sections`, `read_paper`, `read_source` and `list_papers`
  * answer about the whole paper whatever is picked.
  *
@@ -335,6 +336,43 @@ export function fileOnOpening(focus: Narrowed | null, files: readonly string[], 
   if (was !== null && files.includes(was) && (focus === null || focus.files.length === 0 || focus.files.includes(was))) return was
   const first = focus?.files[0]
   return first && !focus!.files.includes(MAIN_FILE) ? first : null
+}
+
+/**
+ * The files this page says it is showing (`showing.set`), in the paper's own
+ * names and the paper's own order.
+ *
+ * ## Why the paper says it, when the host already knows the passage
+ *
+ * `passage.set` names ONE file — the one the caret is in. So with two parts
+ * ticked the canvas knew one of their files, and with nothing ticked it knew
+ * `main.tex`, which no note, question or checklist cites: a pane beside this
+ * one that shows "what the paper is showing" showed the wrong half, or
+ * nothing. The files are this page's to say, since only it knows them:
+ *
+ *  - **nothing ticked** is the whole paper — every file, `main.tex` first as
+ *    the paper lists them;
+ *  - **parts ticked** is the files those parts own that the paper includes,
+ *    once each — and the open file when it is kept open outside them (unsaved
+ *    text, a passage somebody pointed into), because it is on screen;
+ *  - **ticked parts that own no file of the paper** is nothing. The page says
+ *    so in its own line, and claiming the file left open under that line
+ *    would be claiming the focus shows what it has just said it does not.
+ *
+ * ## More files than the wire carries
+ *
+ * `limit` is the protocol's bound on one container's documents. A paper with
+ * more files than that cannot say all of them, and saying none would put the
+ * canvas back to knowing only the caret's file. So it says as many as fit, in
+ * the paper's order — with the open file first when the cut would have
+ * dropped it, since that is the one a person is looking at.
+ */
+export function filesShown(focus: Narrowed | null, files: readonly string[], open: string, limit: number): string[] {
+  const shown =
+    focus === null ? [...files] : focus.files.length === 0 ? [] : files.filter((one) => one === open || focus.files.includes(one))
+  if (shown.length <= limit) return shown
+  const kept = shown.slice(0, limit)
+  return kept.includes(open) || !shown.includes(open) ? kept : [open, ...kept.slice(0, limit - 1)]
 }
 
 /** One file in the switch above the editor. */

@@ -1,4 +1,4 @@
-import type { Passage as WirePassage } from 'kehikot-module-protocol'
+import { LIMITS, type Passage as WirePassage } from 'kehikot-module-protocol'
 import { useFocus } from 'kehikot-module-protocol/client/react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
@@ -13,17 +13,17 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import { MAIN_FILE, fileAfterTicks, fileOnOpening, headline, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
+import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, headline, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
 import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
 import { ProposalsPanel } from './proposals-panel.tsx'
-import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSpot, spotWas } from './remembered.ts'
+import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
 import type { usePaper } from './use-paper.ts'
-import { usePublishedPassage, type Highlighted, type Sheet } from './use-published-passage.ts'
+import { join, usePublishedPassage, type Highlighted, type Sheet } from './use-published-passage.ts'
 import { useSource, type Landed } from './use-source.ts'
 import { useTheme } from './use-theme.ts'
 
@@ -239,6 +239,15 @@ export function Workspace({
     const was = followed.current
     followed.current = { epic: paper.epic, ticks }
     if (!was || was.epic !== paper.epic || was.ticks === ticks) return
+    /* A tick is the person saying where they are, and it is not made in this
+       frame: no pointer, wheel or key arrives here to end the quiet a passage
+       from somebody else began (see `adopted`), and a collapsed paper can be
+       given none at all. So the tick ends it, and the passage is said again
+       whether or not the tick moved the editor — it may have been walked to
+       this very file by the passage the canvas is still holding. Before the
+       return below, for that case and for a file kept open under unsaved text. */
+    setAdopted(false)
+    sayAgain((n) => n + 1)
     const next = fileAfterTicks(focusRef.current, file, midEdit)
     if (next === null) return
     setOnPassage(false)
@@ -301,6 +310,8 @@ export function Workspace({
   notedRef.current = noted
   const foreign = theirs ?? noted
   const [adopted, setAdopted] = useState(false)
+  /** How many times the ticks in the host's bar have changed under this paper: each is a reason to say the passage again. */
+  const [again, sayAgain] = useState(0)
   /**
    * Whether what is on screen is still the passage somebody pointed at.
    *
@@ -467,16 +478,47 @@ export function Workspace({
     [doc, file, from, to, fromByte, toByte, text, eol],
   )
 
-  const mine = useRef<string | null>(null)
+  /* What this page last said, which a reload would otherwise forget while the
+     canvas goes on holding it: see `saidWas`. Read once, on mounting. */
+  const [saidBefore] = useState(() => saidWas(standingIn(), paper.epic))
+  const mine = useRef<string | null>(saidBefore)
   const { point, pointed } = wire
   const publish = useCallback(
     (passage: WirePassage | null) => {
       mine.current = passage === null ? null : keyOf(passage)
+      rememberSaid(standingIn(), paper.epic, mine.current)
       point(passage)
     },
-    [point],
+    [point, paper.epic],
   )
-  usePublishedPassage(publish, paper, sheet, highlighted, pointed, adopted)
+  usePublishedPassage(publish, paper, sheet, highlighted, pointed, adopted, again)
+
+  /* Which FILES are on screen, beside the one place the passage names: the
+     whole paper, or the picked parts' files — `filesShown` has the rule. Said
+     when the answer changes and never otherwise: the list is held as a string,
+     so the paper being re-read after every save, which rebuilds `paper.files`,
+     says nothing. Each is a document with no page, range or quote, because a
+     file being shown is not a place in it; the place is the passage's. And
+     nothing at all once this paper is no longer on screen.
+
+     Once it has held still for a moment, because a tick arrives one render
+     ahead of the editor following it: for that render the open file is still
+     the old one, which reads as a file kept open outside the new ticks, and
+     said at once it would be a second broadcast to every container of a claim
+     that was true for a frame. */
+  const { show } = wire
+  const shownFiles = filesShown(focus, paper.files, file, LIMITS.SHOWING_DOCUMENTS).join('\n')
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      show(
+        (shownFiles ? shownFiles.split('\n') : [])
+          .map((one) => ({ path: join(paper.dir, one), page: null, section: null, from: null, to: null, quoted: '' }))
+          .filter((one) => one.path.length <= LIMITS.PATH),
+      )
+    }, SHOWN_SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [show, shownFiles, paper.dir])
+  useEffect(() => () => show([]), [show])
 
   /* ---- What the canvas says to this page -------------------------------- */
 
@@ -1210,6 +1252,9 @@ export function Workspace({
 }
 
 const NONE: readonly Problem[] = []
+
+/** How long the list of files on screen has to hold still before it is said. See where it is used. */
+const SHOWN_SETTLE_MS = 60
 
 /** Added to what is said about a place this page was sent to, when no picked part owns the file it is in. */
 function outsidePassage(focus: Narrowed | null): string {
