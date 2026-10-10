@@ -6,6 +6,8 @@ import { StrictMode } from 'react'
 
 import { parseLatex } from '../latex/parse.ts'
 import { standIn } from '../src/api.ts'
+import { keyOf } from '../src/pointed.ts'
+import { rememberSaid } from '../src/remembered.ts'
 import type { EditorProps } from '../src/editor/source-editor.tsx'
 import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
 import { usePaper } from '../src/use-paper.ts'
@@ -55,6 +57,13 @@ let disk: Record<string, string>
 let calls: Call[]
 let built: string | null
 let lastPreview: PreviewProps | null
+/** Everything the page posted to its host, in order. */
+interface Asked {
+  type?: string
+  method?: string
+  params?: { passage?: Passage | null; documents?: Passage[] }
+}
+let asks: Asked[]
 const fetchWas = globalThis.fetch
 
 const hashes = () => Object.fromEntries(FILES.map((file) => [file, hashOf(disk[file]!)]))
@@ -137,7 +146,7 @@ function Framed() {
 
 /** A host, as far as a page can tell: something that greets it and sends contexts. */
 function host() {
-  const source = { postMessage: () => {} }
+  const source = { postMessage: (data: Asked) => void asks.push(data) }
   const post = (data: unknown) => {
     const event = new MessageEvent('message', { data, origin: 'http://localhost:7777' })
     Object.defineProperty(event, 'source', { value: source })
@@ -155,7 +164,8 @@ function host() {
     passage,
   })
   return {
-    greet: (parts: EpicPart[] = []) => post({ type: MESSAGE.HELLO, protocol: PROTOCOL, session: 's', context: context(parts), state: null }),
+    greet: (parts: EpicPart[] = [], passage: Passage | null = null) =>
+      post({ type: MESSAGE.HELLO, protocol: PROTOCOL, session: 's', context: context(parts, passage), state: null }),
     context: (parts: EpicPart[], passage: Passage | null = null) => post({ type: MESSAGE.CONTEXT, protocol: PROTOCOL, ...context(parts, passage) }),
   }
 }
@@ -178,11 +188,11 @@ const banner = () => document.querySelector('[data-focus]')
 const asked = (path: string) => calls.filter((one) => one.path === path).length
 const editorText = () => (screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value
 
-const framed = async (parts: EpicPart[] = []) => {
+const framed = async (parts: EpicPart[] = [], passage: Passage | null = null) => {
   built = 'kept'
   const canvas = host()
   render(<Framed />)
-  canvas.greet(parts)
+  canvas.greet(parts, passage)
   await screen.findByLabelText('LaTeX source')
   await waitFor(() => expect(lastPreview).not.toBeNull())
   return canvas
@@ -191,6 +201,7 @@ const framed = async (parts: EpicPart[] = []) => {
 beforeEach(() => {
   disk = { ...TEXT }
   calls = []
+  asks = []
   built = null
   lastPreview = null
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -542,5 +553,111 @@ describe('a press on a sheet two files share', () => {
     lastPreview!.onPoint({ page: 3, x: 1, y: 1, word: null })
     await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
     expect(document.querySelector('[data-outside-file]')!.textContent).toContain('chapters/method.tex is outside the picked part')
+  })
+})
+
+describe('what the page says to the canvas when the ticks change', () => {
+  /** The passages this page asked the host to hold, in order, by the file each names. */
+  const pointedAt = () =>
+    asks.filter((one) => one.method === 'passage.set').map((one) => one.params?.passage?.path.replace(`${DIR}/`, '') ?? null)
+  /** Each time it said which files it is showing. */
+  const shows = () =>
+    asks.filter((one) => one.method === 'showing.set').map((one) => (one.params?.documents ?? []).map((doc) => doc.path.replace(`${DIR}/`, '')))
+  const settled = () => new Promise((done) => setTimeout(done, 260))
+  /** A passage a note, a question or a slide would point at: somebody else's. */
+  const theirs = (file: string, from: number, to: number): Passage => ({ path: `${DIR}/${file}`, page: null, from, to, quoted: '', section: null })
+
+  test('a tick says the passage of the file it opened, and the files of the picked parts', async () => {
+    const canvas = await framed(PARTS())
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('main.tex'))
+    /* Nothing ticked is the whole paper, main.tex first — not the one file the caret is in. */
+    expect(shows().at(-1)).toEqual(FILES)
+    expect(asks.find((one) => one.method === 'showing.set')!.params!.documents![0]).toEqual({ path: `${DIR}/main.tex`, page: null, section: null, from: null, to: null, quoted: '' })
+
+    canvas.context(PARTS('the-design'))
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('chapters/design.tex'))
+    expect(shows().at(-1)).toEqual(['chapters/design.tex'])
+
+    /* A second part beside it does not move the editor, and the canvas is told both files. */
+    canvas.context(PARTS('the-design', 'the-method'))
+    await waitFor(() => expect(shows().at(-1)).toEqual(['chapters/design.tex', 'chapters/method.tex']))
+    expect(openFile()).toBe('chapters/design.tex')
+
+    /* A part that owns no file of the paper shows none of it. */
+    canvas.context(PARTS('the-steps'))
+    await waitFor(() => expect(shows().at(-1)).toEqual([]))
+
+    canvas.context(PARTS())
+    await waitFor(() => expect(shows().at(-1)).toEqual(FILES))
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('main.tex'))
+  })
+
+  test('quiet after somebody else’s passage, a tick ends the quiet: the new file is said', async () => {
+    const canvas = await framed(PARTS())
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('main.tex'))
+    /* A note is pressed in another container: this page walks to it and says nothing of its own. */
+    const pressed = theirs('chapters/method.tex', 17, 23)
+    canvas.context(PARTS(), pressed)
+    await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
+    await settled()
+    expect(pointedAt().at(-1)).toBe('main.tex')
+
+    /* The host goes on holding their passage; nobody touches this page; a part is ticked. */
+    canvas.context(PARTS('the-design'), pressed)
+    await waitFor(() => expect(openFile()).toBe('chapters/design.tex'))
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('chapters/design.tex'))
+    expect(asks.filter((one) => one.method === 'passage.set').at(-1)!.params!.passage).toMatchObject({ from: null, to: null, quoted: '' })
+  })
+
+  test('and when the tick leaves the editor on the file it was walked to, that file is said all the same', async () => {
+    const canvas = await framed(PARTS())
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('main.tex'))
+    const pressed = theirs('chapters/method.tex', 17, 23)
+    canvas.context(PARTS(), pressed)
+    await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
+    await settled()
+    const before = pointedAt().length
+
+    canvas.context(PARTS('the-method'), pressed)
+    await waitFor(() => expect(pointedAt().length).toBe(before + 1))
+    expect(pointedAt().at(-1)).toBe('chapters/method.tex')
+    expect(openFile()).toBe('chapters/method.tex')
+    /* Its own place — the file, with no range — in place of the note's. */
+    expect(asks.filter((one) => one.method === 'passage.set').at(-1)!.params!.passage).toMatchObject({ from: null, to: null })
+  })
+
+  test('typing and saving say nothing about which files are shown', async () => {
+    await framed(PARTS())
+    await waitFor(() => expect(shows().at(-1)).toEqual(FILES))
+    const before = shows().length
+    for (const more of ['a', 'ab', 'abc']) {
+      fireEvent.change(screen.getByLabelText('LaTeX source'), { target: { value: TEXT['main.tex']!.replace('Said in main.', `Said in main. ${more}`) } })
+      await new Promise((done) => setTimeout(done, 40))
+    }
+    await waitFor(() => expect(disk['main.tex']).toContain('Said in main. abc'))
+    await settled()
+    expect(asked('/api/file')).toBeGreaterThan(0)
+    expect(shows().length).toBe(before)
+  })
+
+  test('its own passage coming back after a reload is its own: not walked to, not marked, not a reason to go quiet', async () => {
+    /* What the page said before it was reloaded, which the host still holds and greets it with. */
+    const own: Passage = { path: `${DIR}/chapters/design.tex`, page: 2, from: null, to: null, quoted: '', section: { title: 'Design', from: 0, to: 36 } }
+    standIn(PROJECT)
+    rememberSaid(PROJECT, EPIC, keyOf(own))
+    const canvas = await framed(PARTS(), own)
+    await settled()
+    expect(openFile()).toBe('main.tex')
+    expect(screen.getByTestId('said').textContent).toBe('')
+    /* And it speaks when a tick moves it, as a page that was never reloaded does. */
+    canvas.context(PARTS('the-method'), own)
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('chapters/method.tex'))
+  })
+
+  test('the same passage from somebody else is theirs: walked to and said', async () => {
+    const section: Passage = { path: `${DIR}/chapters/design.tex`, page: null, from: null, to: null, quoted: '', section: { title: 'Design', from: null, to: null } }
+    await framed(PARTS(), section)
+    await waitFor(() => expect(openFile()).toBe('chapters/design.tex'))
+    expect(screen.getByTestId('said').textContent).toContain('Something pointed at the section “Design”')
   })
 })

@@ -37,15 +37,16 @@ describe('what this app claims about itself', () => {
     expect(MANIFEST.declares.storage).toBe(true)
   })
 
-  test('it asks to say where the reader is pointing, and to have one line kept for it, and for nothing else', () => {
+  test('it asks to say where the reader is pointing and which files are on screen, and to have one line kept for it, and for nothing else', () => {
     /* Which epic is open is not in this list because it is not a capability: it
        arrives on the greeting to every module whatever it declared. What IS
        here is the one thing this app asks permission to do to its neighbours —
        put a path, a page, a byte range and a paragraph of somebody's document
-       into the context every container on the canvas is told. `state:keep`
+       into the context every container on the canvas is told — and, beside
+       that one place, which files of the paper are on screen. `state:keep`
        touches no neighbour: it is the open file and tab, handed back to this
        module alone so a paper opens where its reader left it. */
-    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'state:keep'])
+    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep'])
     expect(MANIFEST.declares.prompt).toBe(false)
   })
 

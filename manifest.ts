@@ -92,6 +92,15 @@ export const PREFERRED_PORT = 7870
  *
  *   Declared where `epics:read` was removed, and by the same rule: a capability
  *   is declared when the program calls the method and not otherwise.
+ * - **`showing:set` — declared, beside `passage:set` and for what it cannot
+ *   say.** A passage is one place: the file the caret is in. This page shows
+ *   more than that — the whole paper, or under a focus the files of every
+ *   ticked part — and a neighbour that narrows to "what the paper is showing"
+ *   was narrowing to one chapter of two, or to `main.tex`, which nothing
+ *   cites. So the files on screen are said too (`filesShown` in
+ *   `src/focus.ts`): paths on the operator's disk, with no page, range or
+ *   quote, to every framed module. It moves nobody, and it is said when the
+ *   ticks or the paper's file list change — never on a keystroke.
  * - **`state:keep` — declared, for one line of view state.** Which file of
  *   which paper was open and which tab was in front, so that a paper opens
  *   where its reader left it after the window itself has gone. Not the
@@ -258,7 +267,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   reacts: ['passage', 'parts'],
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
-    /* Two entries, and see the essay above. What this app READS is handed to it
+    /* Three entries, and see the essay above. What this app READS is handed to it
        unbidden, on the greeting and on every context, whatever it declared —
        which epic is open, and now also `passage`, so a container that holds a note
        about a passage can turn this one to it. There has never been anything to
@@ -275,7 +284,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
 
        `state.set` changes nothing anybody else is told: the host keeps a
        string it does not read and hands it back to this module alone. */
-    uses: ['passage:set', 'state:keep'],
+    uses: ['passage:set', 'showing:set', 'state:keep'],
     storage: true,
     prompt: false,
   },

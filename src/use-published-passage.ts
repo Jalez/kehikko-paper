@@ -175,7 +175,7 @@ export function passageFor(
 }
 
 /** `dir` and a relative file, joined without pulling `node:path` into a page. */
-function join(dir: string, file: string): string {
+export function join(dir: string, file: string): string {
   return dir.endsWith('/') ? `${dir}${file}` : `${dir}/${file}`
 }
 
@@ -233,9 +233,11 @@ function sectionKey(section: Section | null | undefined): string {
  *   - **`echo`** — never send back the passage that was just received, even
  *     after a gesture has lifted `quiet`. Two modules agreeing is not an event.
  *
- * Both record what they suppressed as though it had been sent, so the next
- * genuine change is compared against what the canvas actually holds rather than
- * against the last thing this module happened to say out loud.
+ * An echo that was suppressed is recorded as though it had been sent: it IS
+ * what the canvas holds, so the next genuine change is compared against that
+ * rather than against the last thing this module happened to say out loud. A
+ * passage suppressed for `quiet` is not (see `usePublishedPassage`): the canvas
+ * holds somebody else's then, and this one was never said to anybody.
  *
  * A pure function, exported, because a loop guard that cannot be tested without
  * two containers and a stopwatch is a loop guard nobody will change with confidence.
@@ -274,6 +276,14 @@ export function usePublishedPassage(
   echo: WirePassage | null = null,
   /** Whether this container is showing somebody else's passage and nobody has touched it since. */
   quiet = false,
+  /**
+   * A count of the times a person said where they are by some other means
+   * than moving in this page — a part ticked in the host's bar. Each one is a
+   * reason to say the passage again though nothing in it moved: the tick may
+   * have left this page on the very file somebody else had walked it to, and
+   * the canvas is still holding their passage.
+   */
+  again = 0,
 ): void {
   const sent = useRef<{ was: WirePassage | null } | null>(null)
 
@@ -300,8 +310,14 @@ export function usePublishedPassage(
   useEffect(() => {
     const timer = setTimeout(() => {
       const passage = latest.current
-      const say = shouldPublish(passage, sent.current?.was ?? null, sent.current !== null, echoed.current, quietly.current)
-      /* Recorded whether or not it went out. A passage that was suppressed is
+      /* Quiet, so not said — and NOT recorded as said. It used to be, and that
+         made the quiet outlast itself: the canvas was holding somebody else's
+         passage, this one had gone to nobody, and once a person had lifted the
+         quiet the first thing worth saying was compared against it and found
+         to be no change. */
+      if (quietly.current) return
+      const say = shouldPublish(passage, sent.current?.was ?? null, sent.current !== null, echoed.current, false)
+      /* Recorded whether or not it went out. An echo that was suppressed is
          still what the canvas holds, so the next thing worth saying is the next
          thing that differs from THIS — not from the last thing this module
          happened to have said out loud. */
@@ -309,5 +325,5 @@ export function usePublishedPassage(
       if (say) tell.current(passage)
     }, SETTLE_MS)
     return () => clearTimeout(timer)
-  }, [key])
+  }, [key, again])
 }
