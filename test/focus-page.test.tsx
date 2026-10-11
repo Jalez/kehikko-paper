@@ -184,7 +184,9 @@ const tabs = () => [...document.querySelectorAll('[data-files] [role="tab"]')].m
 /** The files the section list is grouped by. */
 const jumpFiles = () => [...(screen.getByLabelText('Sections') as HTMLSelectElement).querySelectorAll('optgroup')].map((one) => one.label)
 const sectionOptions = () => [...(screen.getByLabelText('Sections') as HTMLSelectElement).options].slice(1).map((one) => one.textContent?.trim())
-const banner = () => document.querySelector('[data-focus]')
+/** The rows this page used to put above and inside the paper about the picked parts. None is drawn any more. */
+const notices = () => document.querySelectorAll('[data-focus], .paper-focus, [data-focus-note], [data-outside-file]').length
+const pagesDrawn = () => screen.getByTestId('preview').getAttribute('data-pages')
 const asked = (path: string) => calls.filter((one) => one.path === path).length
 const editorText = () => (screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value
 
@@ -232,8 +234,7 @@ describe('with nothing picked', () => {
     /* Every file is one jump away, through the section list. */
     expect(jumpFiles()).toEqual(FILES)
     expect(sectionOptions()).toEqual(['Opening', 'Design', 'Seams', 'Method'])
-    expect(banner()).toBeNull()
-    expect(document.querySelector('[data-outside-file]')).toBeNull()
+    expect(notices()).toBe(0)
     /* The preview is not handed a list of pages at all. */
     expect(lastPreview!.pages).toBeUndefined()
     expect(lastPreview!.outside).toBeUndefined()
@@ -243,7 +244,7 @@ describe('with nothing picked', () => {
     await framed([])
     expect(jumpFiles()).toEqual(FILES)
     expect(openFile()).toBe('main.tex')
-    expect(banner()).toBeNull()
+    expect(notices()).toBe(0)
     expect(lastPreview!.pages).toBeUndefined()
   })
 })
@@ -254,11 +255,11 @@ describe('a part is picked in the host’s bar', () => {
     const before = { paper: asked('/api/paper'), compile: asked('/api/compile'), build: asked('/api/build'), source: asked('/api/source') }
 
     canvas.context(PARTS('the-design'))
-    await waitFor(() => expect(banner()).not.toBeNull())
-    expect(banner()!.textContent).toBe(
-      'Only “The design” is shown: 1 of 3 files, 2 of 5 pages. 2 files and 3 pages are outside it. Parts are picked in the host’s bar.',
-    )
-    expect(screen.getByTestId('preview').getAttribute('data-pages')).toBe('2,3')
+    await waitFor(() => expect(pagesDrawn()).toBe('2,3'))
+    /* The narrowed pages are the message: no line about the pick is drawn above the paper or in it. */
+    expect(notices()).toBe(0)
+    expect(document.body.textContent).not.toContain('Parts are picked')
+    expect(document.querySelector('[data-no-pages]')).toBeNull()
     expect(asked('/api/paper')).toBe(before.paper)
     expect(asked('/api/compile')).toBe(before.compile)
     expect(asked('/api/build')).toBe(before.build)
@@ -271,11 +272,9 @@ describe('a part is picked in the host’s bar', () => {
     expect(tabs()).toEqual([])
     expect(screen.queryByRole('button', { name: 'Back to main.tex' })).toBeNull()
     expect(jumpFiles()).toEqual(['chapters/design.tex'])
-    expect(document.querySelector('[data-outside-file]')).toBeNull()
 
     /* And clearing it puts everything back: the whole paper, and main.tex in the editor. */
     canvas.context(PARTS())
-    await waitFor(() => expect(banner()).toBeNull())
     await waitFor(() => expect(openFile()).toBe('main.tex'))
     expect(editorText()).toBe(TEXT['main.tex']!)
     expect(jumpFiles()).toEqual(FILES)
@@ -325,28 +324,28 @@ describe('a part is picked in the host’s bar', () => {
     fireEvent.change(screen.getByLabelText('LaTeX source'), { target: { value: typed } })
     /* Before the save has gone out. */
     canvas.context(PARTS('the-design'))
-    await waitFor(() => expect(banner()).not.toBeNull())
+    await waitFor(() => expect(pagesDrawn()).toBe('2,3'))
 
     expect(openFile()).toBe('main.tex')
     expect(editorText()).toBe(typed)
     /* It is the tab the person is standing on: last, and marked. */
     expect(tabs()).toEqual(['design.tex', 'main.tex — outside'])
     expect(document.querySelector('[data-editing]')!.textContent).toContain('Editing main.tex')
-    const said = document.querySelector('[data-outside-file]')!
-    expect(said.textContent).toContain('main.tex is outside the picked part. It stays open, and is saved as usual, until you choose another file.')
+    /* …and that tab is all that says so: no row is put over the editor about it. */
+    expect(notices()).toBe(0)
+    expect(screen.getByRole('tab', { name: 'main.tex — outside' }).className).toContain('italic')
     await waitFor(() => expect(disk['main.tex']).toBe(typed))
 
     /* Its own sections are still offered beside the focus's, while it is open. */
     expect(sectionOptions()).toEqual(['Opening', 'Design', 'Seams'])
     expect(jumpFiles()).toEqual(['main.tex — outside the focus', 'chapters/design.tex'])
 
-    /* One press goes to the part; the file that was outside then leaves. */
-    fireEvent.click(screen.getByRole('button', { name: 'Open chapters/design.tex' }))
+    /* One press goes to the part — its tab; the file that was outside then leaves. */
+    fireEvent.click(screen.getByRole('tab', { name: 'design.tex' }))
     await waitFor(() => expect(editorText()).toBe(TEXT['chapters/design.tex']!))
     expect(tabs()).toEqual([])
     expect(openFile()).toBe('chapters/design.tex')
     expect(sectionOptions()).toEqual(['Design', 'Seams'])
-    expect(document.querySelector('[data-outside-file]')).toBeNull()
   })
 
   test('and unsaved text is not lost when the ticks change twice under it', async () => {
@@ -391,36 +390,35 @@ describe('a part is picked in the host’s bar', () => {
   test('two parts are the union, and the shared sheet is drawn once', async () => {
     await framed(PARTS('the-design', 'the-method'))
     await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-pages')).toBe('2,3,4'))
-    expect(banner()!.textContent).toContain('Only 2 parts (“The design”, “The method”) are shown: 2 of 3 files, 3 of 5 pages. 1 file and 2 pages are outside them.')
+    expect(notices()).toBe(0)
   })
 })
 
-describe('what a focus must not do in silence', () => {
-  test('picked parts that own no file: nothing of the paper is in them, and the page says so and where to fix it', async () => {
+describe('the one sentence about a pick: in the pane it emptied', () => {
+  test('picked parts that own no file: no page of the paper is in them, and the empty pane says why in one sentence', async () => {
     await framed(PARTS('the-steps'))
-    await waitFor(() => expect(banner()).not.toBeNull())
+    await waitFor(() => expect(pagesDrawn()).toBe(''))
     /* What follows is said of the page once it has come to rest, so the caret's
        own line is asked about and answered first: a mark there would put its
        page on screen, flagged, and "no page" would stop being true. The caret
        is on the preamble, which prints nothing, so there is none. */
     await waitFor(() => expect(asked('/api/sync')).toBe(1))
     await act(() => new Promise<void>((done) => setTimeout(done, 0)))
-    expect(banner()!.getAttribute('data-focus')).toBe('none')
-    expect(banner()!.textContent).toContain('that part owns no files of this paper')
-    expect(banner()!.textContent).toContain('Give the part its files in Journeys')
-    expect(document.querySelector('[data-no-pages]')!.textContent).toContain('No page of this paper is in the picked part')
-    expect(screen.getByTestId('preview').getAttribute('data-pages')).toBe('')
-    /* The source is not taken away: the file that was open is still there, and said to be outside. */
+    expect(document.querySelector('[data-no-pages]')!.textContent).toBe('No page of this paper is in the picked part: it owns none of its files.')
+    expect(notices()).toBe(0)
+    /* The source is not taken away: the file that was open is still there. */
     expect(openFile()).toBe('main.tex')
     expect(jumpFiles()).toEqual(['main.tex — outside the focus'])
-    expect(document.querySelector('[data-outside-file]')!.textContent).toContain('main.tex is outside the picked part')
     expect(editorText()).toBe(TEXT['main.tex']!)
   })
 
-  test('a picked part naming a file the paper does not include is said on screen', async () => {
-    await framed([part('the-design', 'The design', true, ['chapters/design.tex', 'chapters/desing.tex'])])
-    await waitFor(() => expect(document.querySelector('[data-focus-note]')).not.toBeNull())
-    expect(document.querySelector('[data-focus-note]')!.textContent).toContain('“The design” names chapters/desing.tex, which this paper does not include')
+  test('a picked part naming only a file the paper does not include: the empty pane names it', async () => {
+    await framed([part('the-design', 'The design', true, ['chapters/desing.tex'])])
+    await waitFor(() => expect(document.querySelector('[data-no-pages]')).not.toBeNull())
+    expect(document.querySelector('[data-no-pages]')!.textContent).toBe(
+      'No page of this paper is in the picked part: it names chapters/desing.tex, which main.tex does not include.',
+    )
+    expect(notices()).toBe(0)
   })
 })
 
@@ -516,7 +514,6 @@ describe('the whole paper, with nothing picked', () => {
     expect(openFile()).toBe('chapters/method.tex')
     expect(document.querySelector('[data-editing]')!.textContent).toBe('← main.texEditing chapters/method.texSaved')
     expect(tabs()).toEqual([])
-    expect(document.querySelector('[data-outside-file]')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to main.tex' }))
     await waitFor(() => expect(editorText()).toBe(TEXT['main.tex']!))
@@ -546,13 +543,14 @@ describe('the whole paper, with nothing picked', () => {
 })
 
 describe('a press on a sheet two files share', () => {
-  test('lands in the file it came from even when that file is outside the focus, which is then said', async () => {
+  test('lands in the file it came from even when that file is outside the focus, which its tab then says', async () => {
     await framed(PARTS('the-design'))
     await waitFor(() => expect(editorText()).toBe(TEXT['chapters/design.tex']!))
     /* Page 3 is the design's and the method's; the fake SyncTeX answers the method. */
     lastPreview!.onPoint({ page: 3, x: 1, y: 1, word: null })
     await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
-    expect(document.querySelector('[data-outside-file]')!.textContent).toContain('chapters/method.tex is outside the picked part')
+    expect(tabs()).toEqual(['design.tex', 'method.tex — outside'])
+    expect(notices()).toBe(0)
   })
 })
 
@@ -626,6 +624,18 @@ describe('what the page says to the canvas when the ticks change', () => {
     expect(asks.filter((one) => one.method === 'passage.set').at(-1)!.params!.passage).toMatchObject({ from: null, to: null })
   })
 
+  test('the file the editor is on is said first, and going to another file is one message', async () => {
+    await framed(PARTS())
+    await waitFor(() => expect(shows().at(-1)).toEqual(FILES))
+    const before = shows().length
+    /* A section of the design chapter is picked in this page's own list: the editor opens that file. */
+    fireEvent.change(screen.getByLabelText('Sections'), { target: { value: '1' } })
+    await waitFor(() => expect(openFile()).toBe('chapters/design.tex'))
+    await waitFor(() => expect(shows().at(-1)).toEqual(['chapters/design.tex', 'main.tex', 'chapters/method.tex']))
+    await settled()
+    expect(shows().length).toBe(before + 1)
+  })
+
   test('typing and saving say nothing about which files are shown', async () => {
     await framed(PARTS())
     await waitFor(() => expect(shows().at(-1)).toEqual(FILES))
@@ -659,5 +669,94 @@ describe('what the page says to the canvas when the ticks change', () => {
     await framed(PARTS(), section)
     await waitFor(() => expect(openFile()).toBe('chapters/design.tex'))
     expect(screen.getByTestId('said').textContent).toContain('Something pointed at the section “Design”')
+  })
+
+  /** Every passage this page asked the host to hold, whole. */
+  const passages = () => asks.filter((one) => one.method === 'passage.set').map((one) => one.params?.passage ?? null)
+  const mark = () => (screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).dataset.mark
+
+  test('quiet after somebody else’s passage, a wheel in the page ends it: the place on screen is said once, and their mark comes down', async () => {
+    const canvas = await framed(PARTS())
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('main.tex'))
+    const pressed = theirs('chapters/method.tex', 17, 23)
+    canvas.context(PARTS(), pressed)
+    await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
+    await waitFor(() => expect(mark()).toBe('17-23'))
+    await settled()
+    const before = passages().length
+    expect(pointedAt().at(-1)).toBe('main.tex')
+
+    /* The person scrolls. No caret moves, no file changes: nothing about this page's own passage is different. */
+    fireEvent.wheel(window)
+    await waitFor(() => expect(passages().length).toBe(before + 1))
+    /* Where the page IS — the place it was walked to, as a section and with no range — and not the caret's,
+       which the walk left at the top of the file. The page is the one the mark is drawn on. */
+    const own = passages().at(-1)!
+    expect(own).toMatchObject({ path: `${DIR}/chapters/method.tex`, page: 3, from: null, to: null, quoted: '', section: { title: 'Method' } })
+
+    /* The host holds that now and says so: the mark and the sentence about being pointed here go. */
+    canvas.context(PARTS(), own)
+    await waitFor(() => expect(mark()).toBe(''))
+    expect(screen.getByTestId('said').textContent).toBe('')
+    /* One message for the gesture, not one per wheel, and the place is not said a second time for the mark coming down. */
+    fireEvent.wheel(window)
+    fireEvent.wheel(window)
+    await settled()
+    expect(passages().length).toBe(before + 1)
+    expect(openFile()).toBe('chapters/method.tex')
+  })
+
+  test('and it is said even when it is the very place this page last said', async () => {
+    const canvas = await framed(PARTS('the-method'))
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('chapters/method.tex'))
+    const was = passages().at(-1)!
+    /* A note in the section the caret is already under: walking to it changes nothing this page would say. */
+    const pressed = theirs('chapters/method.tex', 0, 16)
+    canvas.context(PARTS('the-method'), pressed)
+    await waitFor(() => expect(mark()).toBe('0-16'))
+    await settled()
+    const before = passages().length
+
+    fireEvent.keyDown(window, { key: 'Shift' })
+    await waitFor(() => expect(passages().length).toBe(before + 1))
+    expect(passages().at(-1)).toEqual(was)
+  })
+
+  test('its own older pointing handed back after a walk — a kehikko without the neighbour — is not walked to: where it is now is said, once', async () => {
+    const canvas = await framed(PARTS('the-design'))
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('chapters/design.tex'))
+    const older = passages().at(-1)!
+    expect(older.section).toMatchObject({ title: 'Design' })
+    /* A note is pressed next door: this page walks to the method chapter and says nothing. */
+    canvas.context(PARTS('the-design'), theirs('chapters/method.tex', 17, 23))
+    await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
+    await settled()
+    const before = passages().length
+
+    /* The other kehikko: the host has only what this page last said itself. */
+    canvas.context(PARTS('the-design'), older)
+    await waitFor(() => expect(passages().length).toBe(before + 1))
+    expect(openFile()).toBe('chapters/method.tex')
+    expect(mark()).toBe('')
+    const now = passages().at(-1)!
+    expect(now).toMatchObject({ path: `${DIR}/chapters/method.tex`, from: null, to: null })
+    /* It comes back, and that is the end of it: no second message, no walk. */
+    canvas.context(PARTS('the-design'), now)
+    await settled()
+    await settled()
+    expect(passages().length).toBe(before + 1)
+    expect(openFile()).toBe('chapters/method.tex')
+  })
+
+  test('a gesture while nothing of anybody else’s is on screen says nothing', async () => {
+    await framed(PARTS())
+    await waitFor(() => expect(pointedAt().at(-1)).toBe('main.tex'))
+    await settled()
+    const before = passages().length
+    fireEvent.wheel(window)
+    fireEvent.keyDown(window, { key: 'a' })
+    fireEvent.pointerDown(window)
+    await settled()
+    expect(passages().length).toBe(before)
   })
 })

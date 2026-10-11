@@ -24,10 +24,9 @@ import type { PageSpan } from '../compile/synctex.ts'
  *  - **Otherwise only what a picked part owns is shown**: a file is anchored
  *    by its own name, `{ file }`, and `narrowToFocus` decides.
  *  - **What is in no part is OUTSIDE the focus** — `main.tex`, usually, and
- *    everything written directly in it — and it is counted (`narrowToFocus`
- *    again) and said, never dropped without a word. A paper that is shorter
- *    than it was for a reason nobody can see is the failure this is arranged
- *    against.
+ *    everything written directly in it. Nothing is said about it: the host's
+ *    bar names what is picked, and the pages left out are marked where they
+ *    would have been in the PDF.
  *
  * ## Which pages
  *
@@ -45,20 +44,12 @@ import type { PageSpan } from '../compile/synctex.ts'
  * engine opened and the walk missed has pages, and a part that names it means
  * those pages.
  *
- * ## The three things that would otherwise be a silently short paper
+ * ## What is said, and where
  *
- * Each is returned as a fact for the page to say, in `notesOf`:
- *
- *  - **A picked part names a file the paper does not include** (`missing`): a
- *    spelling, a file not yet written, an `\input` that was removed. The names
- *    are typed by hand in another module, which cannot read this folder.
- *  - **A file in the focus printed nothing** (`unprinted`): no entry in the
- *    page map. A file of nothing but macros, or one the engine never reached
- *    because the build stopped first. Its source is shown; it has no pages.
- *  - **The picked parts own no file at all** (`ownsNone`): the epic is divided
- *    for its steps and nobody has said which file is whose. Everything is
- *    outside the focus then, and the page says so and says where to fix it,
- *    rather than standing empty.
+ * One sentence, and only inside a PDF pane the pick has left with no page to
+ * draw (`emptySaid`): the picked parts own no file (`ownsNone`), they name only
+ * files the paper does not include (`missing`), or their files printed
+ * nothing. Everywhere else the narrowed paper is the message.
  *
  * ## What this does not touch
  *
@@ -77,20 +68,13 @@ export interface Narrowed {
   parts: string[]
   /** The paper's files a picked part owns, in the paper's own order. */
   files: string[]
-  /** How many files the paper has, and how many of them are outside the focus. */
-  totalFiles: number
-  outsideFiles: number
   /**
    * The pages the picked files printed on, ascending, in the PDF's own
    * numbers. Null when nothing has compiled: there are no pages to speak of.
    */
   pages: number[] | null
-  /** How many pages the PDF has, when the build said. */
-  totalPages: number | null
   /** Picked files that are not files of this paper, each with the parts naming it. */
   missing: { file: string; parts: string[] }[]
-  /** Files in the focus that the build recorded nothing for. Empty when nothing has compiled. */
-  unprinted: string[]
   /** The picked parts name no file at all. */
   ownsNone: boolean
 }
@@ -115,7 +99,7 @@ export function narrowed(parts: readonly EpicPart[], paper: NarrowablePaper, pdf
   if (!isFocused(parts)) return null
   const picked = pickedParts(parts)
   const owned = pickedFiles(parts)
-  const { shown: files, outside } = narrowToFocus(parts, paper.files, (file) => ({ file }), { epic: paper.epic })
+  const { shown: files } = narrowToFocus(parts, paper.files, (file) => ({ file }), { epic: paper.epic })
 
   const missing = owned
     .filter((file) => !paper.files.includes(file))
@@ -125,98 +109,45 @@ export function narrowed(parts: readonly EpicPart[], paper: NarrowablePaper, pdf
     }))
 
   let pages: number[] | null = null
-  let unprinted: string[] = []
   if (pdf) {
     const seen = new Set<number>()
     for (const file of owned) for (const span of pdf.map[file] ?? []) seen.add(span.page)
     pages = [...seen].sort((a, b) => a - b)
-    unprinted = files.filter((file) => !(pdf.map[file]?.length))
   }
 
   return {
     parts: picked.map((part) => part.heading || part.id),
     files,
-    totalFiles: paper.files.length,
-    outsideFiles: outside,
     pages,
-    totalPages: pdf?.pages ?? null,
     missing,
-    unprinted,
     ownsNone: owned.length === 0,
   }
 }
 
-const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
-
-/** “The design”, or — for several — “The design”, “The protocol”. */
-function named(parts: readonly string[]): string {
-  return parts.map((part) => `“${part}”`).join(', ')
-}
-
-/** “The design” is, or 2 parts (“The design”, “The protocol”) are. */
-function subject(parts: readonly string[]): string {
-  return parts.length === 1 ? named(parts) : `${parts.length} parts (${named(parts)})`
-}
-
 /**
- * The line that stands above the paper for as long as it is narrowed.
+ * The one sentence this page says about a focus, and only where the pick has
+ * left NOTHING to draw: in the PDF pane, in place of the pages.
  *
- * It says four things, because each is one a person would otherwise have to
- * work out from a paper that is suddenly shorter: WHICH parts; how much is
- * shown; how much is not (the number that makes "shown" believable); and where
- * the control is, since it is not on this page and this page offers no way
- * round it.
+ * There used to be a line above the paper for as long as it was narrowed —
+ * which parts, how many files and pages, how many were outside, where parts
+ * are picked — and more under it. It is gone: the host's bar already says what
+ * is picked, the narrowed pages are the message, and a row of prose above a
+ * paper is a row of the paper not shown. An empty pane is the exception,
+ * because with no words in it it looks broken; so it says why, in one sentence
+ * that takes no room from anything.
+ *
+ * Null whenever there is a page to draw.
  */
-export function headline(focus: Narrowed): string {
-  const where = 'Parts are picked in the host’s bar.'
+export function emptySaid(focus: Narrowed): string | null {
+  if (focus.pages === null || focus.pages.length > 0) return null
   const one = focus.parts.length === 1
-  if (focus.ownsNone) {
-    const all =
-      focus.totalPages === null
-        ? `all ${count(focus.totalFiles, 'file')} are`
-        : `all ${count(focus.totalFiles, 'file')} and ${count(focus.totalPages, 'page')} are`
-    return (
-      `The focus is on ${subject(focus.parts)}, and ${one ? 'that part owns' : 'those parts own'} no files of this paper, `
-      + `so none of the paper is in ${one ? 'it' : 'them'}: ${all} outside the focus. Give ${one ? 'the part' : 'a part'} its `
-      + 'files in Journeys — open the journey’s parts and press “files” on the part to tick them, or “make a part for '
-      + `each chapter file” to have one made for every file main.tex pulls in. ${where}`
-    )
+  const where = `the picked part${one ? '' : 's'}`
+  if (focus.ownsNone) return `No page of this paper is in ${where}: ${one ? 'it owns' : 'they own'} none of its files.`
+  if (focus.files.length === 0 && focus.missing.length) {
+    const named = focus.missing.map((missing) => missing.file).join(', ')
+    return `No page of this paper is in ${where}: ${one ? 'it names' : 'they name'} ${named}, which main.tex does not include.`
   }
-  const it = one ? 'it' : 'them'
-  const files = `${focus.files.length} of ${count(focus.totalFiles, 'file')}`
-  if (focus.pages === null) {
-    return (
-      `Only ${subject(focus.parts)} ${one ? 'is' : 'are'} shown: ${files}. Nothing has compiled, so there are no pages to count. `
-      + `${count(focus.outsideFiles, 'file')} ${focus.outsideFiles === 1 ? 'is' : 'are'} outside ${it}. ${where}`
-    )
-  }
-  const shown = focus.pages.length
-  const pages = focus.totalPages === null ? count(shown, 'page') : `${shown} of ${count(focus.totalPages, 'page')}`
-  const outsidePages = focus.totalPages === null ? null : Math.max(0, focus.totalPages - shown)
-  const outside =
-    outsidePages === null
-      ? `${count(focus.outsideFiles, 'file')} ${focus.outsideFiles === 1 ? 'is' : 'are'}`
-      : `${count(focus.outsideFiles, 'file')} and ${count(outsidePages, 'page')} are`
-  return `Only ${subject(focus.parts)} ${one ? 'is' : 'are'} shown: ${files}, ${pages}. ${outside} outside ${it}. ${where}`
-}
-
-/** What else has to be said about a focus: a file that is not there, a file that printed nothing. One sentence each. */
-export function notesOf(focus: Narrowed): string[] {
-  const out: string[] = []
-  for (const one of focus.missing) {
-    out.push(
-      `${named(one.parts)} ${one.parts.length === 1 ? 'names' : 'name'} ${one.file}, which this paper does not include: nothing `
-        + 'in main.tex pulls in a file of that name. Correct the name in Journeys, or \\input the file.',
-    )
-  }
-  if (focus.unprinted.length) {
-    const files = focus.unprinted.join(', ')
-    out.push(
-      `${files} ${focus.unprinted.length === 1 ? 'is' : 'are'} in the focus and printed no pages in this PDF. `
-        + `${focus.unprinted.length === 1 ? 'Its' : 'Their'} source is shown.`,
-    )
-  }
-  return out
+  return `No page of this PDF was printed by a file of ${where}.`
 }
 
 /**
@@ -312,7 +243,7 @@ export function ticksOf(parts: readonly EpicPart[]): string {
  * hands are in.)
  *
  * And a focus that owns no file of the paper has nowhere to go to; the open
- * file stays, and the line above the paper says why nothing is in the focus.
+ * file stays, and the empty PDF pane says why nothing is in the focus.
  */
 export function fileAfterTicks(focus: Narrowed | null, open: string, midEdit: boolean): string | null {
   if (midEdit) return null
@@ -350,8 +281,7 @@ export function fileOnOpening(focus: Narrowed | null, files: readonly string[], 
  * one that shows "what the paper is showing" showed the wrong half, or
  * nothing. The files are this page's to say, since only it knows them:
  *
- *  - **nothing ticked** is the whole paper — every file, `main.tex` first as
- *    the paper lists them;
+ *  - **nothing ticked** is the whole paper — every file;
  *  - **parts ticked** is the files those parts own that the paper includes,
  *    once each — and the open file when it is kept open outside them (unsaved
  *    text, a passage somebody pointed into), because it is on screen;
@@ -359,20 +289,47 @@ export function fileOnOpening(focus: Narrowed | null, files: readonly string[], 
  *    so in its own line, and claiming the file left open under that line
  *    would be claiming the focus shows what it has just said it does not.
  *
+ * ## The file the editor is on is said first
+ *
+ * The rest are in the paper's own order; the open file leads them. A list is
+ * read from its head — a neighbour narrowed to this container names its
+ * heading after `documents[0]` — and in the paper's order that was `main.tex`
+ * whatever chapter the editor was on. It is one rule with the cut below: the
+ * open file first, then the others, cut at the cap, so the file a person is
+ * looking at is never the one dropped. The list changes when the open file
+ * does and not otherwise: a caret, a scroll or a keystroke says nothing.
+ *
  * ## More files than the wire carries
  *
  * `limit` is the protocol's bound on one container's documents. A paper with
  * more files than that cannot say all of them, and saying none would put the
- * canvas back to knowing only the caret's file. So it says as many as fit, in
- * the paper's order — with the open file first when the cut would have
- * dropped it, since that is the one a person is looking at.
+ * canvas back to knowing only the caret's file. So it says as many as fit —
+ * and WHICH is the question, because whatever is cut is a file whose notes
+ * and questions a neighbour then calls "about documents nothing here is
+ * showing".
+ *
+ * The first sixteen in the paper's order was the answer, and it cut by
+ * accident: a thesis lists its generated tables between its chapters, so the
+ * tables were said and the last chapters were not. `owned` is every file some
+ * part of the epic owns, ticked or not — the files the work is organised
+ * around, and the ones a note or a question is about. After the open file
+ * those are said first, in the paper's order, and the rest fill what room is
+ * left. A paper that fits is said whole.
  */
-export function filesShown(focus: Narrowed | null, files: readonly string[], open: string, limit: number): string[] {
+export function filesShown(
+  focus: Narrowed | null,
+  files: readonly string[],
+  open: string,
+  limit: number,
+  owned: readonly string[] = [],
+): string[] {
   const shown =
     focus === null ? [...files] : focus.files.length === 0 ? [] : files.filter((one) => one === open || focus.files.includes(one))
-  if (shown.length <= limit) return shown
-  const kept = shown.slice(0, limit)
-  return kept.includes(open) || !shown.includes(open) ? kept : [open, ...kept.slice(0, limit - 1)]
+  /* The open file first, whatever the paper's order: see "The file the editor is on" above. */
+  const first = shown.includes(open) ? [open] : []
+  const rest = shown.filter((one) => one !== open)
+  if (shown.length <= limit) return [...first, ...rest]
+  return [...first, ...rest.filter((one) => owned.includes(one)), ...rest.filter((one) => !owned.includes(one))].slice(0, limit)
 }
 
 /** One file in the switch above the editor. */

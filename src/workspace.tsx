@@ -13,7 +13,7 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, headline, narrowed, notesOf, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
+import { MAIN_FILE, emptySaid, fileAfterTicks, fileOnOpening, filesShown, narrowed, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
@@ -87,9 +87,9 @@ import { useTheme } from './use-theme.ts'
  * **A file with unsaved text in it is never taken away.** Ticking a part
  * while a sentence in `main.tex` has not reached the disk would otherwise
  * swap the editor's file under a person mid-sentence. So that file stays
- * open, stays editable and is saved as it always is; a line above the editor
- * says it is outside the picked parts and offers the first file that is in
- * them; it is the last tab, marked. It leaves when the person leaves it.
+ * open, stays editable and is saved as it always is; it is the last tab,
+ * marked as outside, and no row is spent saying so. It leaves when the person
+ * leaves it.
  *
  * **A pointer from elsewhere still arrives.** A note, a question or a slide
  * may point at a passage in a file no picked part owns. It is opened and
@@ -98,8 +98,8 @@ import { useTheme } from './use-theme.ts'
  * as long as the mark is there. The same goes for a press on a shared sheet
  * that lands in a file outside the focus.
  *
- * **There is no "show everything" here.** The line above the paper says where
- * the focus is set, and that is where it is lifted. A second switch on this
+ * **There is no "show everything" here, and no line about the pick.** The
+ * host's bar says what is picked, and that is where it is lifted. A second switch on this
  * page would be a second place to look for why a paper is short.
  *
  * ## The editor and the preview are passed in
@@ -128,6 +128,8 @@ interface Going {
   foreign?: boolean
   /** A byte to put at the top of the editor, rather than the range in its middle: a place being put back. */
   top?: number | null
+  /** How many pixels of the row that byte is on were above the top of the editor. */
+  past?: number
 }
 
 export function Workspace({
@@ -211,8 +213,8 @@ export function Workspace({
     const spot = was && was.file === (next ?? MAIN_FILE) ? spotWas(standingIn(), paper.epic, was.file) : null
     if (!was || !spot || spot.hash !== paper.hashes[was.file]) return
     putBack.current = { file: was.file, from: spot.from, to: spot.to }
-    if (spot.top !== null) scrolled.current = { file: was.file, top: spot.top }
-    setGoing({ file: was.file, bytes: { from: spot.from, to: spot.to }, top: spot.top, select: true, focus: false })
+    if (spot.top !== null) scrolled.current = { file: was.file, top: spot.top, past: spot.past }
+    setGoing({ file: was.file, bytes: { from: spot.from, to: spot.to }, top: spot.top, past: spot.past, select: true, focus: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paper.epic])
 
@@ -286,8 +288,8 @@ export function Workspace({
   const [selection, setSelection] = useState({ from: 0, to: 0 })
   const [jump, setJump] = useState<{ from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean } | null>(null)
   const [going, setGoing] = useState<Going | null>(null)
-  /** The byte at the top of the editor, as the editor last said it, and the file it is a byte of. */
-  const scrolled = useRef<{ file: string; top: number } | null>(null)
+  /** The byte at the top of the editor, as the editor last said it, the file it is a byte of, and how far past the top its row is. */
+  const scrolled = useRef<{ file: string; top: number; past: number } | null>(null)
   /** The selection that was put back on opening: not the person selecting, so not a reason to turn the PDF to it. */
   const putBack = useRef<{ file: string; from: number; to: number } | null>(null)
   /** Somebody else's anchor, in bytes of a file of this paper. */
@@ -328,6 +330,18 @@ export function Workspace({
    * "p. 11/20" and named the file's first section.
    */
   const [onPassage, setOnPassage] = useState(false)
+  /**
+   * The place a passage from the canvas walked this page to, kept for as long
+   * as that is what is on screen (`onPassage`).
+   *
+   * `theirs` is the same place while the canvas holds their passage, and is
+   * the MARK: it goes when the canvas lets go. This outlives it, because the
+   * page does not move when the mark comes down. A person who scrolls here
+   * after a note was pressed has not gone anywhere else, and what this page
+   * then says to the canvas — and what the toolbar reads out — is this place,
+   * not wherever the caret was left before the walk.
+   */
+  const [walked, setWalked] = useState<{ file: string; from: number; to: number } | null>(null)
   /* The sentence this page said about being pointed somewhere, while it is
      the one on screen. Kept so that it can be taken down again without
      taking down whatever else has been said since — a save's answer, a
@@ -385,7 +399,7 @@ export function Workspace({
         from = to = start + (text.length - text.trimStart().length)
       }
     }
-    const top = typeof going.top === 'number' ? { top: indexAt(doc.text, going.top, doc.eol) } : {}
+    const top = typeof going.top === 'number' ? { top: indexAt(doc.text, going.top, doc.eol), past: going.past ?? 0 } : {}
     setJump((was) => ({ from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign, ...top }))
     if (tabRef.current !== 'source') unseen.current = true
     setGoing(null)
@@ -441,14 +455,14 @@ export function Workspace({
   const rememberHere = useCallback(() => {
     const now = spot.current
     if (now.hash === null) return
-    const top = scrolled.current?.file === now.file ? scrolled.current.top : null
-    rememberSpot(standingIn(), paper.epic, now.file, { from: now.from, to: now.to, top, hash: now.hash })
+    const at = scrolled.current?.file === now.file ? scrolled.current : null
+    rememberSpot(standingIn(), paper.epic, now.file, { from: now.from, to: now.to, top: at?.top ?? null, past: at?.past ?? 0, hash: now.hash })
   }, [paper.epic])
   useEffect(rememberHere, [rememberHere, file, fromByte, toByte, spot.current.hash])
   const onEditorScrolled = useCallback(
-    (top: number) => {
+    (top: number, past = 0) => {
       const now = spot.current
-      scrolled.current = { file: now.file, top: byteAt(now.text, top, now.eol) }
+      scrolled.current = { file: now.file, top: byteAt(now.text, top, now.eol), past }
       rememberHere()
     },
     [rememberHere],
@@ -467,25 +481,79 @@ export function Workspace({
     [wandered],
   )
 
+  const [foreignRects, setForeignRects] = useState<PageRect[]>([])
+  const foreignDoc = foreign ? source.docs.get(foreign.file) : undefined
+  const foreignText = foreignDoc?.text
+
+  /* ---- What the toolbar reads out ---------------------------------------- */
+
+  /* The caret's page and section — unless this page is showing a passage it
+     was pointed at, and then THAT passage's: see `onPassage`. The page is the
+     one its mark is drawn on when SyncTeX has answered, and the one the page
+     map gives its first line until then. */
+  const showing = onPassage ? (theirs ?? walked ?? noted) : null
+  const showingDoc = showing ? source.docs.get(showing.file) : undefined
+  const showingText = showingDoc?.text
+  /* The page the mark was drawn on, kept for the place after the mark has
+     come down: the same page goes on being read out and said. */
+  const markedOn = useRef<{ at: string; page: number } | null>(null)
+  const showingAt = showing ? `${showing.file}\0${showing.from}` : ''
+  if (showing && foreign === showing && foreignRects[0]) markedOn.current = { at: showingAt, page: foreignRects[0].page }
+  const marked = markedOn.current?.at === showingAt ? markedOn.current.page : null
+  const shown = useMemo(
+    () =>
+      placeShown(
+        { page, section: here?.title ?? null },
+        showing && {
+          section: sectionAt(sections, showing.file, showing.from)?.title ?? null,
+          marked,
+          mapped:
+            map && showingText !== undefined && showingDoc
+              ? pageOfLine(map, showing.file, lineAt(showingText, indexAt(showingText, showing.from, showingDoc.eol)))
+              : null,
+        },
+      ),
+    [page, here, showing, sections, marked, map, showingText, showingDoc],
+  )
+
   /* ---- What this page says to the canvas -------------------------------- */
 
+  /* Where this page is, which is what it says. The caret's place — unless a
+     passage from the canvas walked it somewhere and it is still there
+     (`walked`): then THAT place, at the precision of a section and with no
+     range, which is the very thing the toolbar is reading out. The caret was
+     left where it was by the walk, on purpose, and saying its place would be
+     saying the page is somewhere it is not showing — and would send a
+     neighbour that follows the paper off to it. */
+  const at = onPassage && walked && walked.file === file ? walked : null
+  const there = useMemo(() => (at ? sectionAt(sections, at.file, at.from) : null), [at, sections])
   const sheet = useMemo<Sheet>(
-    () => ({ page, file: doc ? file : null, section: here ? { title: here.title, from: here.from, to: here.to } : null }),
-    [page, doc, file, here],
+    () =>
+      at
+        ? { page: shown.page, file: doc ? file : null, section: there ? { title: there.title, from: there.from, to: there.to } : null }
+        : { page, file: doc ? file : null, section: here ? { title: here.title, from: here.from, to: here.to } : null },
+    [page, doc, file, here, at, there, shown.page],
   )
   const highlighted = useMemo<Highlighted | null>(
-    () => (doc && to > from ? { file, srcStart: fromByte, srcEnd: toByte, text: toDisk(text.slice(from, to), eol) } : null),
-    [doc, file, from, to, fromByte, toByte, text, eol],
+    () => (!at && doc && to > from ? { file, srcStart: fromByte, srcEnd: toByte, text: toDisk(text.slice(from, to), eol) } : null),
+    [at, doc, file, from, to, fromByte, toByte, text, eol],
   )
 
   /* What this page last said, which a reload would otherwise forget while the
      canvas goes on holding it: see `saidWas`. Read once, on mounting. */
   const [saidBefore] = useState(() => saidWas(standingIn(), paper.epic))
   const mine = useRef<string | null>(saidBefore)
+  /* The last passage this page said, exactly — section span and all — and kept
+     when somebody else's arrives, which `mine` is not. A host holds what each
+     module said, and on a kehikko where the neighbour that walked this page is
+     absent it hands back this page's own OLDER pointing. That is not somebody
+     pointing: see where it is read. */
+  const lastSaid = useRef<string | null>(null)
   const { point, pointed } = wire
   const publish = useCallback(
     (passage: WirePassage | null) => {
       mine.current = passage === null ? null : keyOf(passage)
+      lastSaid.current = passage === null ? null : exactly(passage)
       rememberSaid(standingIn(), paper.epic, mine.current)
       point(passage)
     },
@@ -507,7 +575,9 @@ export function Workspace({
      said at once it would be a second broadcast to every container of a claim
      that was true for a frame. */
   const { show } = wire
-  const shownFiles = filesShown(focus, paper.files, file, LIMITS.SHOWING_DOCUMENTS).join('\n')
+  /* Every file a part of the epic owns, ticked or not: what is said first when the paper has more files than fit. */
+  const owned = useMemo(() => ticked.parts.flatMap((part) => part.files ?? []), [ticked.parts])
+  const shownFiles = filesShown(focus, paper.files, file, LIMITS.SHOWING_DOCUMENTS, owned).join('\n')
   useEffect(() => {
     const timer = setTimeout(() => {
       show(
@@ -527,7 +597,21 @@ export function Workspace({
   const outsideRef = useRef(isOutside)
   outsideRef.current = isOutside
   useEffect(() => {
-    const { own, answer } = received(paper, pointed, mine.current)
+    const heard = received(paper, pointed, mine.current)
+    /* This page's own pointing from BEFORE somebody walked it, handed back by a
+       host that has nothing newer for this kehikko (the neighbour is not on
+       it). Recognised by every field it was said with — a neighbour's section
+       passage has no span, a note's has a range — and only without a range.
+       It is not walked to: that would take the page back to where it was
+       before the walk, mark its own old place as somebody else's and go quiet.
+       It is answered instead: where this page is NOW is said, once. */
+    const stale = !heard.own && pointed !== null && pointed.from === null && lastSaid.current !== null && exactly(pointed) === lastSaid.current
+    const own = heard.own || stale
+    const answer: typeof heard.answer = stale && heard.answer.at === 'here' ? { at: 'holding', file: heard.answer.file } : heard.answer
+    if (stale) {
+      mine.current = keyOf(pointed)
+      sayAgain((n) => n + 1)
+    }
     if (!own) mine.current = null
     if (answer.at !== 'here' || own) {
       /* Nothing to turn to — or it is this page's own selection coming back,
@@ -538,7 +622,13 @@ export function Workspace({
       /* A change being shown is not the canvas's passage, and the paper being
          re-read after it landed is no reason to stop showing it. */
       if (notedRef.current && answer.at !== 'elsewhere') return
-      setOnPassage(false)
+      /* Its own passage coming back is this page having SAID the place it is
+         showing — after a scroll, a key or a tick ended the quiet — and saying
+         where it is does not move it: the mark comes down, the place stays
+         (`walked`). Anything else is the canvas having let go or gone
+         somewhere this page is not. A person who went somewhere of their own
+         accord has already ended it, in `wandered`. */
+      if (!own) setOnPassage(false)
       /* And the sentence about the last passage goes with it — the person
          selected something of their own, or the canvas let go — unless there
          is a new one to say. */
@@ -555,6 +645,7 @@ export function Workspace({
       /* Outside the picked parts is not a reason to refuse it — somebody
          pressed a note and means that passage — but it is a thing to say. */
       notice(outsideRef.current(answer.file) ? `${answer.said} ${outsidePassage(focusRef.current)}` : answer.said)
+      setWalked({ file: answer.file, from: answer.from, to: answer.to })
       setOnPassage(true)
     }
     /* Everything this page does next is a consequence of that passage and is
@@ -562,9 +653,20 @@ export function Workspace({
     setAdopted(true)
   }, [paper, pointed, go, notice])
 
+  /* A gesture in this frame ends the quiet — and is a reason to SAY where this
+     page is, once, when it has settled. It used to only lift the quiet, and a
+     wheel or a key that moved no caret then changed nothing there was to say:
+     the canvas went on holding the note's passage and this page went on
+     drawing its mark, however far the person had scrolled from it. One
+     message for the gesture that ends the quiet, not one per scroll: the
+     listeners come off with `adopted`, and a gesture that also moves the
+     caret restarts the same settle. */
   useEffect(() => {
     if (!adopted) return
-    const woke = () => setAdopted(false)
+    const woke = () => {
+      setAdopted(false)
+      sayAgain((n) => n + 1)
+    }
     const kinds = ['pointerdown', 'wheel', 'keydown'] as const
     for (const kind of kinds) window.addEventListener(kind, woke, { passive: true, capture: true })
     return () => {
@@ -609,7 +711,6 @@ export function Workspace({
 
   const buildId = build?.pdf?.id ?? null
   const [ownRects, setOwnRects] = useState<PageRect[]>([])
-  const [foreignRects, setForeignRects] = useState<PageRect[]>([])
   const [reveal, setReveal] = useState<{ nonce: number } | null>(null)
   /* Set by "Show in PDF": reveal even though only a caret is placed. */
   const wanted = useRef(false)
@@ -658,8 +759,6 @@ export function Workspace({
     }
   }, [buildId, doc === null, file, fromLine, toLine, selecting, ask, settle, asked])
 
-  const foreignDoc = foreign ? source.docs.get(foreign.file) : undefined
-  const foreignText = foreignDoc?.text
   /* A change is marked on the PDF only once the PDF is OF the text it is in.
      Until the compile that follows a landing has finished, the page on screen
      is the build before it: the new words are not there to be found, and the
@@ -687,29 +786,6 @@ export function Workspace({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, behind, turns])
-
-  /* ---- What the toolbar reads out ---------------------------------------- */
-
-  /* The caret's page and section — unless this page is showing a passage it
-     was pointed at, and then THAT passage's: see `onPassage`. The page is the
-     one its mark is drawn on when SyncTeX has answered, and the one the page
-     map gives its first line until then. */
-  const showing = onPassage ? foreign : null
-  const shown = useMemo(
-    () =>
-      placeShown(
-        { page, section: here?.title ?? null },
-        showing && {
-          section: sectionAt(sections, showing.file, showing.from)?.title ?? null,
-          marked: foreignRects[0]?.page ?? null,
-          mapped:
-            map && foreignText !== undefined && foreignDoc
-              ? pageOfLine(map, showing.file, lineAt(foreignText, indexAt(foreignText, showing.from, foreignDoc.eol)))
-              : null,
-        },
-      ),
-    [page, here, showing, sections, foreignRects, map, foreignText, foreignDoc],
-  )
 
   const marks = useMemo<PdfMark[]>(() => {
     const out: PdfMark[] = []
@@ -860,6 +936,7 @@ export function Workspace({
         return
       }
       go({ file: at.file, bytes: { from: at.from, to: at.to }, foreign: true })
+      setWalked(null)
       setOnPassage(true)
       notice(outsideRef.current(at.file) ? `${words} ${outsidePassage(focusRef.current)}` : words)
     },
@@ -928,8 +1005,6 @@ export function Workspace({
     () => (focus ? paper.files.filter((one) => one === file || !isOutside(one)) : paper.files),
     [focus, paper.files, file, isOutside],
   )
-  const openOutside = focus !== null && isOutside(file)
-  const firstInFocus = focus?.files[0] ?? null
   /* The files to switch among: the picked parts' own, and nothing when
      nothing is picked. One file is not a switch. See `tabsOf`. */
   const tabs = useMemo(() => tabsOf(focus, file), [focus, file])
@@ -1041,17 +1116,6 @@ export function Workspace({
         )}
       </header>
 
-      {focus && (
-        <div role="status" className="paper-focus shrink-0 border-b px-2 py-1 text-[0.72rem] leading-snug" data-focus={focus.ownsNone ? 'none' : 'some'}>
-          <p>{headline(focus)}</p>
-          {notesOf(focus).map((note, i) => (
-            <p key={i} className="mt-0.5" data-focus-note>
-              {note}
-            </p>
-          ))}
-        </div>
-      )}
-
       {source.conflict && (
         <div role="alert" className="bg-muted/60 flex shrink-0 flex-wrap items-center gap-2 border-b px-2 py-1 text-[0.72rem]">
           <span className="min-w-0 flex-1">
@@ -1123,25 +1187,6 @@ export function Workspace({
             }}
             onShow={showProposal}
           />
-          {openOutside && (
-            <div role="status" className="bg-muted/60 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-2 py-1 text-[0.72rem] leading-snug" data-outside-file={file}>
-              <span className="min-w-0 flex-[1_1_11rem]">
-                {file} is outside {outsideSaid}. It stays open, and is saved as usual, until you choose another file.
-              </span>
-              {firstInFocus && (
-                <Button
-                  variant="outline"
-                  size="container"
-                  onClick={() => {
-                    wandered()
-                    source.open(firstInFocus)
-                  }}
-                >
-                  Open {firstInFocus}
-                </Button>
-              )}
-            </div>
-          )}
           <div ref={editorBox} className="min-h-0 flex-1">
             {doc ? (
               <EditorPane
@@ -1209,11 +1254,10 @@ export function Workspace({
                biber that has just arrived is a reason to compile at once. */
             <CompilerOffer build={build} onInstalled={(what, complete) => void (what === 'compiler' ? refresh() : complete ? compile() : undefined)} />
           )}
-          {pdfUrl && sheets && sheets.pages.length === 0 && (
-            <p className="text-muted-foreground shrink-0 border-b px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
-              {focus?.ownsNone
-                ? `No page of this paper is in ${outsideSaid}, because ${focus.parts.length === 1 ? 'it owns' : 'they own'} no files of it. The line above says how to give ${focus.parts.length === 1 ? 'it' : 'them'} some.`
-                : `No page of this PDF was printed by a file of ${outsideSaid}.`}
+          {/* The one thing said about a focus, and only when it has left this pane empty: `emptySaid`. */}
+          {pdfUrl && sheets && sheets.pages.length === 0 && focus && emptySaid(focus) && (
+            <p className="text-muted-foreground shrink-0 px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
+              {emptySaid(focus)}
             </p>
           )}
           <div className="relative min-h-0 flex-1">
@@ -1255,6 +1299,11 @@ const NONE: readonly Problem[] = []
 
 /** How long the list of files on screen has to hold still before it is said. See where it is used. */
 const SHOWN_SETTLE_MS = 60
+
+/** One passage with every field it was said with: `keyOf` and the section's span. */
+function exactly(passage: WirePassage): string {
+  return `${keyOf(passage)}\0${passage.section?.from ?? ''}\0${passage.section?.to ?? ''}`
+}
 
 /** Added to what is said about a place this page was sent to, when no picked part owns the file it is in. */
 function outsidePassage(focus: Narrowed | null): string {

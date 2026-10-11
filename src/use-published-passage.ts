@@ -304,6 +304,14 @@ export function usePublishedPassage(
      settled passage and not about when it settles. */
   const quietly = useRef(quiet)
   quietly.current = quiet
+  /* Whether this page has been quiet since it last spoke. The canvas is then
+     holding somebody else's passage, and what this page said before is not
+     what there is to compare with: the place it is in now may be the very one
+     it last said — a note pressed in the section the caret was already under
+     — and it is still owed to a canvas that has since been told otherwise.
+     The echo guard still stands, so nothing is said back that was just heard. */
+  const owed = useRef(false)
+  if (quiet) owed.current = true
   const echoed = useRef(echo)
   echoed.current = echo
 
@@ -316,7 +324,9 @@ export function usePublishedPassage(
          quiet the first thing worth saying was compared against it and found
          to be no change. */
       if (quietly.current) return
-      const say = shouldPublish(passage, sent.current?.was ?? null, sent.current !== null, echoed.current, false)
+      const insist = owed.current
+      owed.current = false
+      const say = shouldPublish(passage, insist ? null : (sent.current?.was ?? null), !insist && sent.current !== null, echoed.current, false)
       /* Recorded whether or not it went out. An echo that was suppressed is
          still what the canvas holds, so the next thing worth saying is the next
          thing that differs from THIS — not from the last thing this module

@@ -156,7 +156,7 @@ async function wander() {
   await waitFor(() => expect(editorText()).toBe(TEXT['chapters/design.tex']!))
   const at = TEXT['chapters/design.tex']!.indexOf('design is')
   act(() => lastEditor!.onSelect({ from: at, to: at + 6 }))
-  act(() => lastEditor!.onScrolled!(TEXT['chapters/design.tex']!.indexOf('The design')))
+  act(() => lastEditor!.onScrolled!(TEXT['chapters/design.tex']!.indexOf('The design'), 7))
   act(() => lastPreview!.onScrolled!(1234.5))
   fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
   await waitFor(() => expect(JSON.parse(kept ?? '{}')).toEqual({ project: PROJECT, epic: 'a-paper', file: 'chapters/design.tex', tab: 'pdf' }))
@@ -197,6 +197,8 @@ describe('a page that is loaded again', () => {
        of the editor goes back to the top, and the caret is not taken from
        wherever the person's hands now are. */
     await waitFor(() => expect(lastEditor!.jump).toMatchObject({ from: at, to: at + 6, select: true, focus: false, top: TEXT['chapters/design.tex']!.indexOf('The design') }))
+    /* …and as far past the top as it was: the row was cut by seven pixels, and comes back cut by seven. */
+    expect(lastEditor!.jump!.past).toBe(7)
     expect(lastPreview!.from).toBe(1234.5)
     /* And the PDF is not then turned to that selection: it was put back to
        where IT was, and nobody has selected anything since. */
@@ -251,7 +253,6 @@ describe('a page that is loaded again', () => {
     await load({ parts: PARTS('the-method'), strict: true })
     await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
     expect(openFile()).toBe('chapters/method.tex')
-    expect(document.querySelector('[data-outside-file]')).toBeNull()
     /* The PDF was scrolled with nothing picked: those points are down other sheets. */
     expect(lastPreview!.from).toBe(0)
 
@@ -325,5 +326,22 @@ describe('the rule, and what is read first', () => {
     expect(placeWas(PROJECT, 'a-paper', line)).toEqual({ file: 'chapters/method.tex', tab: 'source' })
     /* No project, no record: nothing is filed under a slug alone. */
     expect(keptPlace(null, 'a-paper', { file: 'main.tex', tab: 'source' })).toBeNull()
+  })
+})
+
+describe('the spot that is kept', () => {
+  test('is the byte at the top with how far past the top its row was, and one kept before that existed is the row’s top', async () => {
+    const { rememberSpot, spotWas } = await import('../src/remembered.ts')
+    rememberSpot(PROJECT, 'a-paper', 'main.tex', { from: 3, to: 9, top: 40, past: 11, hash: 'h' })
+    expect(spotWas(PROJECT, 'a-paper', 'main.tex')).toEqual({ from: 3, to: 9, top: 40, past: 11, hash: 'h' })
+    /* As an older page wrote it, and as something that is no remainder of a row. */
+    const key = Object.keys(window.sessionStorage).find((one) => one.includes('file') && one.includes('main.tex'))!
+    window.sessionStorage.setItem(key, JSON.stringify({ from: 3, to: 9, top: 40, hash: 'h' }))
+    expect(spotWas(PROJECT, 'a-paper', 'main.tex')!.past).toBe(0)
+    window.sessionStorage.setItem(key, JSON.stringify({ from: 3, to: 9, top: 40, past: 90000, hash: 'h' }))
+    expect(spotWas(PROJECT, 'a-paper', 'main.tex')!.past).toBe(0)
+    /* No scroll was ever said: nothing to be past. */
+    window.sessionStorage.setItem(key, JSON.stringify({ from: 3, to: 9, top: null, past: 5, hash: 'h' }))
+    expect(spotWas(PROJECT, 'a-paper', 'main.tex')).toMatchObject({ top: null, past: 0 })
   })
 })

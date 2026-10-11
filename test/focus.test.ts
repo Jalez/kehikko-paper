@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { anchorInFocus, partsSchema, type EpicPart } from 'kehikot-module-protocol'
 
 import type { PageSpan } from '../compile/synctex.ts'
-import { fileAfterTicks, filesShown, gapsBetween, headline, narrowed, notesOf, pagesSaid, pagesShown, tabsOf, ticksOf } from '../src/focus.ts'
+import { fileAfterTicks, emptySaid, filesShown, gapsBetween, narrowed, pagesSaid, pagesShown, tabsOf, ticksOf } from '../src/focus.ts'
 import { jumpsOf, type SectionAt } from '../src/lib/sections.ts'
 
 /**
@@ -75,11 +75,9 @@ describe('nothing picked', () => {
 describe('one part picked', () => {
   const focus = narrowed(parts('the-design'), paper, pdf)!
 
-  test('only its files, in the paper’s own order, and the rest counted', () => {
+  test('only its files, in the paper’s own order', () => {
     expect(focus.parts).toEqual(['The design'])
     expect(focus.files).toEqual(['chapters/design.tex'])
-    expect(focus.totalFiles).toBe(4)
-    expect(focus.outsideFiles).toBe(3)
     /* `main.tex` is in no part, so it is outside every focus. */
     expect(anchorInFocus(parts('the-design'), { file: 'main.tex' }, paper.epic)).toBe(false)
     expect(anchorInFocus(parts('the-design'), { file: 'chapters/design.tex' }, paper.epic)).toBe(true)
@@ -88,15 +86,10 @@ describe('one part picked', () => {
   test('the pages its file printed on, by their real numbers — the shared sheet included', () => {
     /* Page 4 holds the end of the design and the start of the method. */
     expect(focus.pages).toEqual([2, 3, 4])
-    expect(focus.totalPages).toBe(12)
   })
 
-  test('and the line above the paper says which part, how much, how much is outside, and where it is set', () => {
-    expect(headline(focus)).toBe(
-      'Only “The design” is shown: 1 of 4 files, 3 of 12 pages. 3 files and 9 pages are outside it. '
-        + 'Parts are picked in the host’s bar.',
-    )
-    expect(notesOf(focus)).toEqual([])
+  test('and nothing is said about it: there are pages to draw, and they are the message', () => {
+    expect(emptySaid(focus)).toBeNull()
   })
 
   test('a file is compared by the protocol, so an absolute path of THIS paper is in focus and another epic’s is not', () => {
@@ -111,10 +104,7 @@ describe('several parts picked', () => {
     const focus = narrowed(parts('the-design', 'the-method'), paper, pdf)!
     expect(focus.files).toEqual(['chapters/design.tex', 'chapters/method.tex'])
     expect(focus.pages).toEqual([2, 3, 4, 5])
-    expect(headline(focus)).toBe(
-      'Only 2 parts (“The design”, “The method”) are shown: 2 of 4 files, 4 of 12 pages. 2 files and 8 pages are '
-        + 'outside them. Parts are picked in the host’s bar.',
-    )
+    expect(emptySaid(focus)).toBeNull()
   })
 
   test('a file two picked parts both own is one file', () => {
@@ -123,11 +113,6 @@ describe('several parts picked', () => {
     expect(focus.files).toEqual(['chapters/design.tex', 'chapters/method.tex'])
     expect(focus.pages).toEqual([2, 3, 4, 5])
   })
-
-  test('singular where it is one', () => {
-    const three = narrowed(parts('the-design', 'the-method', 'the-results'), paper, pdf)!
-    expect(headline(three)).toContain('3 of 4 files, 10 of 12 pages. 1 file and 2 pages are outside them.')
-  })
 })
 
 describe('before anything has compiled', () => {
@@ -135,43 +120,35 @@ describe('before anything has compiled', () => {
     const focus = narrowed(parts('the-design'), paper, null)!
     expect(focus.files).toEqual(['chapters/design.tex'])
     expect(focus.pages).toBeNull()
-    expect(focus.unprinted).toEqual([])
-    expect(headline(focus)).toBe(
-      'Only “The design” is shown: 1 of 4 files. Nothing has compiled, so there are no pages to count. 3 files are '
-        + 'outside it. Parts are picked in the host’s bar.',
-    )
-  })
-
-  test('a build that could not count its pages says how many are shown and not out of how many', () => {
-    const focus = narrowed(parts('the-design'), paper, { pages: null, map })!
-    expect(headline(focus)).toBe(
-      'Only “The design” is shown: 1 of 4 files, 3 pages. 3 files are outside it. Parts are picked in the host’s bar.',
-    )
+    /* No PDF, so no pane that the pick emptied: nothing to say. */
+    expect(emptySaid(focus)).toBeNull()
   })
 })
 
-describe('the ways a focus could leave the paper short without saying', () => {
-  test('a picked part that names a file the paper does not include is said, by part and by name', () => {
+describe('the one sentence, said only where the pick left no page to draw', () => {
+  test('a picked part that names a file the paper does not include: its other files are shown and nothing is said', () => {
     const typo = [part('the-design', 'The design', true, ['chapters/design.tex', 'chapters/desing.tex'])]
     const focus = narrowed(typo, paper, pdf)!
     expect(focus.files).toEqual(['chapters/design.tex'])
     expect(focus.missing).toEqual([{ file: 'chapters/desing.tex', parts: ['The design'] }])
-    expect(notesOf(focus)).toEqual([
-      '“The design” names chapters/desing.tex, which this paper does not include: nothing in main.tex pulls in a file '
-        + 'of that name. Correct the name in Journeys, or \\input the file.',
-    ])
+    expect(emptySaid(focus)).toBeNull()
+    /* Naming ONLY a file the paper does not include leaves nothing, and that is said with the name. */
+    const only = narrowed([part('the-design', 'The design', true, ['chapters/desing.tex'])], paper, pdf)!
+    expect(emptySaid(only)).toBe('No page of this paper is in the picked part: it names chapters/desing.tex, which main.tex does not include.')
     /* A part that is NOT picked and names a missing file is nobody's problem now. */
     expect(narrowed([...typo.map((one) => ({ ...one, picked: false })), part('b', 'B', true, ['chapters/method.tex'])], paper, pdf)!.missing).toEqual([])
   })
 
-  test('a file in the focus that the build recorded nothing for: its source is shown, and it is said to have printed no pages', () => {
+  test('a file in the focus that the build recorded nothing for: its source is shown, and its pane says so only if no page is left', () => {
     const macros = { ...paper, files: [...paper.files, 'chapters/macros.tex'] }
     const picked = [part('the-design', 'The design', true, ['chapters/design.tex', 'chapters/macros.tex'])]
     const focus = narrowed(picked, macros, pdf)!
     expect(focus.files).toEqual(['chapters/design.tex', 'chapters/macros.tex'])
-    expect(focus.unprinted).toEqual(['chapters/macros.tex'])
     expect(focus.pages).toEqual([2, 3, 4])
-    expect(notesOf(focus)).toEqual(['chapters/macros.tex is in the focus and printed no pages in this PDF. Its source is shown.'])
+    expect(emptySaid(focus)).toBeNull()
+    const alone = narrowed([part('m', 'Macros', true, ['chapters/macros.tex'])], macros, pdf)!
+    expect(alone.pages).toEqual([])
+    expect(emptySaid(alone)).toBe('No page of this PDF was printed by a file of the picked part.')
   })
 
   test('picked parts that own no file at all do not blank the paper in silence', () => {
@@ -179,12 +156,9 @@ describe('the ways a focus could leave the paper short without saying', () => {
     expect(focus.ownsNone).toBe(true)
     expect(focus.files).toEqual([])
     expect(focus.pages).toEqual([])
-    expect(focus.outsideFiles).toBe(4)
-    expect(headline(focus)).toBe(
-      'The focus is on “Steps only”, and that part owns no files of this paper, so none of the paper is in it: all 4 '
-        + 'files and 12 pages are outside the focus. Give the part its files in Journeys — open the journey’s parts '
-        + 'and press “files” on the part to tick them, or “make a part for each chapter file” to have one made for '
-        + 'every file main.tex pulls in. Parts are picked in the host’s bar.',
+    expect(emptySaid(focus)).toBe('No page of this paper is in the picked part: it owns none of its files.')
+    expect(emptySaid(narrowed([part('a', 'A', true, []), part('b', 'B', true, [])], paper, pdf)!)).toBe(
+      'No page of this paper is in the picked parts: they own none of its files.',
     )
   })
 
@@ -309,17 +283,24 @@ describe('the files to switch among', () => {
 describe('the files this page says it is showing', () => {
   const focusOn = (...picked: string[]) => narrowed(parts(...picked), paper, pdf)
 
-  test('nothing ticked is every file of the paper, main.tex first', () => {
+  test('nothing ticked is every file of the paper, the one the editor is on first', () => {
     expect(filesShown(null, paper.files, 'main.tex', 16)).toEqual(paper.files)
-    /* Whichever file a press on the PDF took the editor into. */
-    expect(filesShown(null, paper.files, 'chapters/results.tex', 16)).toEqual(paper.files)
+    /* Whichever file a press on the PDF took the editor into leads, and the rest keep the paper's order. */
+    const on = filesShown(null, paper.files, 'chapters/results.tex', 16)
+    expect(on).toEqual(['chapters/results.tex', ...paper.files.filter((one) => one !== 'chapters/results.tex')])
+    expect([...on].sort()).toEqual([...paper.files].sort())
   })
 
   test('ticked parts are their files, in the paper’s order and once each', () => {
     expect(filesShown(focusOn('the-method'), paper.files, 'chapters/method.tex', 16)).toEqual(['chapters/method.tex'])
-    expect(filesShown(focusOn('the-results', 'the-design'), paper.files, 'chapters/results.tex', 16)).toEqual([
+    expect(filesShown(focusOn('the-results', 'the-design'), paper.files, 'chapters/design.tex', 16)).toEqual([
       'chapters/design.tex',
       'chapters/results.tex',
+    ])
+    /* The open one of the two leads. */
+    expect(filesShown(focusOn('the-results', 'the-design'), paper.files, 'chapters/results.tex', 16)).toEqual([
+      'chapters/results.tex',
+      'chapters/design.tex',
     ])
     /* Two parts naming one file say it once, and a file the paper does not include is not said. */
     const twice = [
@@ -343,6 +324,34 @@ describe('the files this page says it is showing', () => {
     const far = filesShown(null, many, 'chapters/19.tex', 16)
     expect(far).toHaveLength(16)
     expect(far).toEqual(['chapters/19.tex', ...many.slice(0, 15)])
+  })
+
+  test('and of those, the files a part of the epic owns are said before the ones none does', () => {
+    /* A thesis: main, six chapters with three generated tables listed among them, an appendix, then eight more. */
+    const thesis = [
+      'main.tex', 'chapters/1.tex', 'chapters/2.tex', 'chapters/3.tex', 'chapters/4.tex', 'generated/a.tex', 'generated/b.tex', 'generated/c.tex',
+      'chapters/5.tex', 'chapters/6.tex', 'chapters/appendix.tex', 'generated/d.tex', 'generated/e.tex',
+      ...Array.from({ length: 8 }, (_, i) => `chapters/x${i + 1}.tex`),
+    ]
+    const owned = ['chapters/1.tex', 'chapters/2.tex', 'chapters/3.tex', 'chapters/4.tex', 'chapters/5.tex', 'chapters/6.tex', 'chapters/appendix.tex', 'chapters/x8.tex', 'not/in/the/paper.tex']
+    expect(thesis).toHaveLength(21)
+    /* In the paper's order alone the twenty-first file is cut, and it is a part's. */
+    expect(filesShown(null, thesis, 'main.tex', 16)).not.toContain('chapters/x8.tex')
+    const said = filesShown(null, thesis, 'main.tex', 16, owned)
+    expect(said).toHaveLength(16)
+    /* The open file, then the parts' files in the paper's order… */
+    expect(said.slice(0, 9)).toEqual(['main.tex', 'chapters/1.tex', 'chapters/2.tex', 'chapters/3.tex', 'chapters/4.tex', 'chapters/5.tex', 'chapters/6.tex', 'chapters/appendix.tex', 'chapters/x8.tex'])
+    /* …and the rest fill the room, in the paper's order. */
+    expect(said.slice(9)).toEqual(['generated/a.tex', 'generated/b.tex', 'generated/c.tex', 'generated/d.tex', 'generated/e.tex', 'chapters/x1.tex', 'chapters/x2.tex'])
+    /* An open file the cut would drop goes first, and costs the last of the others its place. */
+    const far = filesShown(null, thesis, 'chapters/x5.tex', 16, owned)
+    expect(far[0]).toBe('chapters/x5.tex')
+    expect(far).toHaveLength(16)
+    expect(far).toContain('chapters/x8.tex')
+    expect(far).toContain('main.tex')
+    expect(far).not.toContain('chapters/x2.tex')
+    /* A paper that fits is said whole and in its own order, whoever owns what. */
+    expect(filesShown(null, thesis.slice(0, 16), 'main.tex', 16, owned)).toEqual(thesis.slice(0, 16))
   })
 })
 
