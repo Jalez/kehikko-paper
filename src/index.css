@@ -346,21 +346,6 @@
 
   /* ---- Narrowed to the picked parts of the epic ----------------------- */
 
-  /* The line above the paper while it is narrowed. The pencil's blue, as a
-     bar and a wash: it is navigation — where you are looking — and not a
-     warning. It becomes the amber "this wants the author" only when the focus
-     shows NOTHING of the paper, which does want somebody. Never colour alone:
-     the sentence in it says everything the colour does. */
-  .paper-focus {
-    background: color-mix(in oklch, var(--pencil) 9%, transparent);
-    box-shadow: inset 3px 0 0 var(--pencil);
-  }
-
-  .paper-focus[data-focus='none'] {
-    background: color-mix(in oklch, var(--mark) 14%, transparent);
-    box-shadow: inset 3px 0 0 var(--mark);
-  }
-
   /* ---- The PDF under a focus: which sheet this is, and what is left out --
 
      Drawn only while the canvas is narrowed to some of the epic's parts. The

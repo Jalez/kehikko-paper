@@ -1,6 +1,6 @@
 import { StreamLanguage } from '@codemirror/language'
 import { stex } from '@codemirror/legacy-modes/mode/stex'
-import { Prec, StateEffect, StateField, type Extension } from '@codemirror/state'
+import { EditorSelection, Prec, StateEffect, StateField, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { useEffect, useMemo, useRef, type ComponentType } from 'react'
@@ -49,9 +49,19 @@ export interface EditorProps {
   /** Go there, once per new `nonce`: scroll it into view and put the caret (or, with `select`, the selection) on it. */
   /** With `keep`, only scroll there: the caret and selection are the person's and stay where they put them. */
   /** With `top`, that offset is put at the top of the editor instead of the range in its middle: a place being put back. */
-  jump: { from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean; top?: number } | null
-  /** The editor was scrolled: the offset now at its top. Never said by an editor that is not laid out. */
-  onScrolled?(top: number): void
+  /** And with `past`, the row it is on is put that many pixels above the top, as it was: see `onScrolled`. */
+  jump: { from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean; top?: number; past?: number } | null
+  /**
+   * The editor was scrolled: the offset now at its top, and how many pixels of
+   * the row that offset is on are above the top. Never said by an editor that
+   * is not laid out.
+   *
+   * The second number is what makes a place put back the SAME place. An offset
+   * names a row, and a scroll rarely stops on a row's edge: put back by the
+   * offset alone, the editor came back with that row whole — up to a row's
+   * height short of where it had been, every time.
+   */
+  onScrolled?(top: number, past: number): void
   /** A range somebody ELSE pointed at — a note's anchor, a question's — drawn without touching the selection. */
   mark: { from: number; to: number } | null
   /** One-based lines the engine complained about. */
@@ -155,7 +165,12 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     const end = Math.min(Math.max(to.to, from), length)
     view.dispatch({
       ...(to.keep ? {} : { selection: to.select ? { anchor: from, head: end } : { anchor: from } }),
-      effects: to.top === undefined ? EditorView.scrollIntoView(from, { y: 'center' }) : EditorView.scrollIntoView(Math.min(to.top, length), { y: 'start', yMargin: 0 }),
+      effects:
+        to.top === undefined
+          ? EditorView.scrollIntoView(from, { y: 'center' })
+          : /* The row that STARTS at the offset (`assoc` 1): at a soft wrap the same offset is also the end of
+               the row above. A negative margin is that many pixels of the row above the top. */
+            EditorView.scrollIntoView(EditorSelection.cursor(Math.min(to.top, length), 1), { y: 'start', yMargin: -Math.max(0, to.past ?? 0) }),
     })
     if (to.focus) view.focus()
   }
@@ -194,7 +209,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
             const box = view.scrollDOM.getBoundingClientRect()
             if (box.height === 0) return
             const top = view.posAtCoords({ x: view.contentDOM.getBoundingClientRect().left + 1, y: box.top + 1 }, false)
-            scrolled.current?.(top)
+            const row = view.coordsAtPos(top, 1)
+            scrolled.current?.(top, row ? Math.max(0, Math.round(box.top - row.top)) : 0)
           },
           { passive: true },
         )

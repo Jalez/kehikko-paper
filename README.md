@@ -363,31 +363,32 @@ With some picked (`reacts: ['parts']`; the rule is the protocol's
   carries its real number (`p. 7 of 20`) and each run left out is said where it
   would have been (`pp. 8–20 · outside the picked part`), because other
   modules store page numbers and page 7 must stay page 7.
-- **A line above the paper**, for as long as it is narrowed: which parts, how
-  many files and pages are shown, how many are outside, and that parts are
-  picked in the host's bar. There is no "show everything" on this page; the
+- **No line about the pick.** The host's bar says which parts are picked, and
+  the narrowed pages and files are the message; a row of prose above a paper is
+  a row of the paper not shown. There is no "show everything" on this page; the
   focus is lifted where it was set.
 
 Text written directly in `main.tex`, and any file no part names, belongs to the
-epic as a whole and is outside every focus — counted in that line, not dropped.
+epic as a whole and is outside every focus.
 
-What the page says rather than standing short:
+The one sentence, and where: when the pick leaves the PDF pane with no page to
+draw, the pane says why — inside itself, where there is nothing else
+(`emptySaid` in `src/focus.ts`):
 
-- **A picked part names a file the paper does not include** — a spelling, a
-  file not yet pulled in. Said by part and by name.
-- **A file in the focus printed no pages** — nothing in the page map for it.
-  Its source is shown, and that is said.
-- **The picked parts own no file at all.** None of the paper is in them, so the
-  line says exactly that, counts everything as outside, and says where a part
-  is given its files.
+- the picked parts own no file — `No page of this paper is in the picked part:
+  it owns none of its files.`
+- they name only files the paper does not include — `… it names
+  chapters/desing.tex, which main.tex does not include.`
+- their files printed nothing — `No page of this PDF was printed by a file of
+  the picked part.`
 
 Three decisions that are this module's own:
 
 - **A file with unsaved text in it is never taken away by a change of focus.**
   The editor follows the ticks, except out from under somebody typing: a file
   whose text has not reached the disk stays open and editable, and is saved as
-  it always is; it is the last tab, marked as outside, and a line above the
-  editor says so and offers the first file that is in the focus. It leaves when
+  it always is; it is the last tab, marked as outside (`main.tex — outside`,
+  in italics), and the tab of a file in the focus is the way back. It leaves when
   the person leaves it. (Nothing typed is lost either way — every file's text
   is kept and saved whichever is on screen.) A file that is already in the new
   focus is left open too: ticking a second part must not move the reader.
@@ -440,13 +441,14 @@ files are on screen, `showing.set` (below).
 
 `showing.set` says which FILES are on screen, since a passage names only the
 one the caret is in: `{ refs: [], documents }`, each document a file's absolute
-path with no page, range or quote. Nothing ticked is every file of the paper,
-`main.tex` first; ticked parts are the files those parts own that the paper
+path with no page, range or quote. The file the editor is on is first, since a
+list is read from its head, and the rest are in the paper's order. Nothing
+ticked is every file of the paper; ticked parts are the files those parts own that the paper
 includes, plus the open file when it is kept open outside them; ticked parts
-that own no file of the paper are `[]`. It is said when the ticks or the
+that own no file of the paper are `[]`. It is said when the ticks, the open file or the
 paper's file list change, never on a keystroke. The protocol carries sixteen
-documents per container: a paper with more says the first sixteen in its own
-order, with the open file put first if the cut would have dropped it.
+documents per container: a paper with more says the files some part of the epic
+owns after the open one, in its own order, then as many of the rest as fit.
 
 What arrives is one thing: the passage the canvas holds. A range in one of
 this paper's files is opened, scrolled to and marked in the source — exactly,
