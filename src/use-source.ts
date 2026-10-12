@@ -67,6 +67,8 @@ export interface Landed {
   paper?: Paper
   proposals?: Proposal[]
   said?: string
+  /** What this module publishes for the epic's parts changed with this save (`chapters.ts`). */
+  published?: boolean
 }
 
 const MAIN = 'main.tex'

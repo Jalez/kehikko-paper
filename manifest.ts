@@ -107,6 +107,19 @@ export const PREFERRED_PORT = 7870
  *   auto-approve tick, which is a permission and stays in this browser;
  *   `src/remembered.ts` argues both. A host that keeps nothing costs a reader
  *   nothing they had before.
+ * - **`parts:set` — declared, for one press.** The list of an epic's parts is
+ *   the host's and this module never writes it. But a paper already knows
+ *   what its chapters are, and an epic with a paper and no parts is one press
+ *   from having a part to each: "a part for each chapter" asks the host to add
+ *   them (`parts.set`, `src/use-chapters.ts`). Asked on a person's press and
+ *   never otherwise — and once per paper about an id no part has, which
+ *   changes nothing, to learn whether this host keeps parts at all before
+ *   either control is drawn.
+ * - **`content:report` — declared, beside it.** Which chapter is which part's
+ *   is this module's to keep (`chapters.ts`), and what it holds for a part is
+ *   published where every module's is. When that changes the canvas is told
+ *   (`content.changed`), which is the host's cue to read it again: a notes
+ *   container beside this one then narrows by a chapter set here.
  * - **`steps:read` — not declared.** A paper is prose. It argues for an
  *   arrangement; it does not track work, and a reader that drew a step rail
  *   beside the argument would be a second, worse Journeys.
@@ -253,11 +266,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
    * What this page MOVES for, in the protocol's own words for it.
    *
    * `parts`, because a person pointing the canvas at some of the epic's parts
-   * moves this page: only the files a picked part owns are listed, only the
-   * pages those files printed are drawn, and a line above the paper says
-   * which parts, how much is shown and how much is outside them. See
-   * `src/focus.ts`. With nothing picked the page is exactly what it was. It
-   * sets nothing: the picking is the host's own control.
+   * moves this page: only the files a picked part has are listed, only the
+   * pages those files printed are drawn, and nothing is said about the pick
+   * but one sentence in a pane it left empty. The rule is the protocol's
+   * (`useFocus().narrow`); `src/focus.ts` has what a file's anchor is. With
+   * nothing picked the page is exactly what it was. It sets nothing: the
+   * picking is the host's own control.
    *
    * `passage`, because it always has: a passage another module points at is
    * opened, scrolled to and marked here (`src/pointed.ts`). It was not
@@ -267,7 +281,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   reacts: ['passage', 'parts'],
   declares: {
     protocol: `>=${PROTOCOL} <${PROTOCOL + 1}`,
-    /* Three entries, and see the essay above. What this app READS is handed to it
+    /* Five entries, and see the essay above. What this app READS is handed to it
        unbidden, on the greeting and on every context, whatever it declared —
        which epic is open, and now also `passage`, so a container that holds a note
        about a passage can turn this one to it. There has never been anything to
@@ -283,8 +297,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
        it.
 
        `state.set` changes nothing anybody else is told: the host keeps a
-       string it does not read and hands it back to this module alone. */
-    uses: ['passage:set', 'showing:set', 'state:keep'],
+       string it does not read and hands it back to this module alone.
+
+       `parts.set` and `content.changed` are for the chapters: a part to each
+       chapter, on a press, and saying that what this module holds for the
+       parts has changed. */
+    uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report'],
     storage: true,
     prompt: false,
   },

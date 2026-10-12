@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 
 import type { PageRect } from '../../compile/synctex.ts'
-import { gapsBetween, pagesSaid } from '../focus.ts'
 import { locate, read, type Text } from './find.ts'
 import { spanOf } from './printed.ts'
 import { wordAt, type Run } from './words.ts'
@@ -41,12 +40,10 @@ import { wordAt, type Run } from './words.ts'
  *
  * `pages` is the pages to draw, in the PDF's own numbers; absent or null is
  * all of them, and this component is then exactly what it was. With a list,
- * the others are not drawn, and three things are added so that a short PDF is
- * never mistaken for the whole one: every sheet carries its REAL number
- * (sheet 7 is "p. 7 of 20" with six sheets missing above it — other modules
- * store these numbers), each run of sheets left out is said where it would
- * have been, and a sheet named in `outside` — drawn because something is marked
- * on it although no picked part printed it — says so on its label.
+ * the others are not drawn, and every sheet carries its REAL number (sheet 7
+ * is "p. 7 of 20" with six sheets not drawn above it — other modules store
+ * these numbers). Nothing else is said: no rule where sheets were left out,
+ * and nothing on a sheet about why it is there.
  *
  * Which pages those are is not decided here. See `src/focus.ts`.
  *
@@ -55,8 +52,7 @@ import { wordAt, type Run } from './words.ts'
  * The picked parts' files may have been compiled on their own, and that PDF
  * has fewer sheets than the paper: its ninth is the paper's seventeenth.
  * `numbers` then says, sheet by sheet, which page of the paper each one is,
- * and everything this component SAYS about a sheet — its label, the runs left
- * out — is said in those. Everything it is ASKED and everything it answers
+ * and what this component SAYS about a sheet — its label — is said in those. Everything it is ASKED and everything it answers
  * about a place (`pages`, a mark's rectangle, a press) stays in the sheets of
  * the PDF it is drawing, since that is the document those places are in.
  *
@@ -108,10 +104,6 @@ export interface PreviewProps {
   total?: number | null
   /** The pages to draw, ascending, in the PDF's own numbers. Absent or null draws every page, unlabelled, as always. */
   pages?: readonly number[] | null
-  /** Those of `pages` no picked part printed on: drawn because a mark is on them, and labelled as outside. */
-  outside?: readonly number[]
-  /** What the pages left out are outside OF, for the line that stands where they would be: “the picked part”. */
-  outsideOf?: string
 }
 
 export type Preview = ComponentType<PreviewProps>
@@ -260,8 +252,6 @@ export function PdfView({
   from = 0,
   onScrolled,
   pages: asked = null,
-  outside: flagged,
-  outsideOf = 'the picked parts',
   kind = '',
   numbers = null,
   total = null,
@@ -506,11 +496,11 @@ export function PdfView({
      the pages SyncTeX put the passage on; where its words turned out to be is
      only known here, and now and then that is a page earlier — a passage whose
      first words are the foot of the page before. */
-  const { pages, outside } = useMemo(() => {
+  const pages = useMemo(() => {
     const more = asked === null ? [] : [...drawn.keys()].filter((page) => !asked.includes(page))
-    if (asked === null || !more.length) return { pages: asked, outside: flagged }
-    return { pages: [...asked, ...more].sort((a, b) => a - b), outside: [...(flagged ?? []), ...more] }
-  }, [asked, flagged, drawn])
+    if (asked === null || !more.length) return asked
+    return [...asked, ...more].sort((a, b) => a - b)
+  }, [asked, drawn])
 
   /* Once per nonce, and not before there is a scale: a pane that is hidden
      behind the other tab has no width, and a reveal asked for then is owed
@@ -614,12 +604,6 @@ export function PdfView({
      whole paper — the page of the paper it is. */
   const paperOf = useCallback((sheet: number): number | null => (numbers ? (numbers[sheet - 1] ?? null) : sheet), [numbers])
   const count = numbers ? total : sizes.length || null
-  /* The runs of pages a focus leaves out, said where they would have been. */
-  const gaps = useMemo(
-    () => (pages === null ? null : gapsBetween(pages.map(paperOf).filter((page): page is number => page !== null), count)),
-    [pages, paperOf, count],
-  )
-  const after = count === null ? null : (gaps?.get(count + 1) ?? null)
 
   const step = (by: 1 | -1) => {
     const at = ZOOMS.indexOf(zoom)
@@ -645,8 +629,8 @@ export function PdfView({
       <div ref={scroller} className="pdf-scroller min-h-0 flex-1 overflow-auto" onScroll={onScroll} style={{ padding: PAD }}>
         {trouble && <p className="text-muted-foreground p-2 text-xs">{trouble}</p>}
         {/* Under a focus the first thing in the pane is words — a sheet's
-            number, or the sheets left out above it — and the zoom control
-            sits over that corner. Room for it, so neither covers the other. */}
+            number — and the zoom control sits over that corner. Room for
+            it, so neither covers the other. */}
         {doc && pages !== null && <div className="h-6" aria-hidden />}
         {doc
           && scale > 0
@@ -671,28 +655,15 @@ export function PdfView({
             )
             if (pages === null) return sheet
             const called = paperOf(number)
-            const before = called === null ? undefined : gaps?.get(called)
-            const isOutside = outside?.includes(number) === true
             return (
               <div key={i} className="pdf-sheet">
-                {before && (
-                  <p className="pdf-gap" data-gap={`${before.from}-${before.to}`}>
-                    {pagesSaid(before)} · outside {outsideOf}
-                  </p>
-                )}
-                <p className={isOutside ? 'pdf-number pdf-number-outside' : 'pdf-number'} style={{ width: size.w * scale }} data-outside={isOutside ? '' : undefined}>
+                <p className="pdf-number" style={{ width: size.w * scale }}>
                   {called !== null && (count === null ? `p. ${called}` : `p. ${called} of ${count}`)}
-                  {isOutside && `${called === null ? '' : ' · '}outside ${outsideOf}, shown for what is marked on it`}
                 </p>
                 {sheet}
               </div>
             )
           })}
-        {doc && scale > 0 && after && (
-          <p className="pdf-gap" data-gap={`${after.from}-${after.to}`}>
-            {pagesSaid(after)} · outside {outsideOf}
-          </p>
-        )}
       </div>
     </div>
   )

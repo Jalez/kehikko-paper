@@ -37,7 +37,7 @@ describe('what this app claims about itself', () => {
     expect(MANIFEST.declares.storage).toBe(true)
   })
 
-  test('it asks to say where the reader is pointing and which files are on screen, and to have one line kept for it, and for nothing else', () => {
+  test('it asks to say where the reader is pointing and which files are on screen, to have one line kept for it, and for the two things a chapter per part needs — and for nothing else', () => {
     /* Which epic is open is not in this list because it is not a capability: it
        arrives on the greeting to every module whatever it declared. What IS
        here is the one thing this app asks permission to do to its neighbours —
@@ -45,8 +45,11 @@ describe('what this app claims about itself', () => {
        into the context every container on the canvas is told — and, beside
        that one place, which files of the paper are on screen. `state:keep`
        touches no neighbour: it is the open file and tab, handed back to this
-       module alone so a paper opens where its reader left it. */
-    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep'])
+       module alone so a paper opens where its reader left it. `parts:set` is
+       one press, "a part for each chapter", asked of the host that keeps the
+       list; `content:report` says that what this module holds for the parts
+       changed, so the host reads it again. */
+    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report'])
     expect(MANIFEST.declares.prompt).toBe(false)
   })
 
@@ -62,13 +65,14 @@ describe('what this app claims about itself', () => {
     expect(MANIFEST.declares.uses).not.toContain('selection:set')
   })
 
-  test('it says it moves for the picked parts of the epic, and for a passage, and sets neither of them itself', () => {
+  test('it says it moves for the picked parts of the epic, and for a passage, and sets neither the pick nor the passage it is shown', () => {
     /* `parts`: the page narrows to the files and pages of the parts a person
        picked in the host's bar. `passage`: it always turned to one, and this
        manifest had no `reacts` to say so. Neither is a capability — picking a
-       part is the host's own control, and reading a context needs no leave. */
+       part is the host's own control, and reading a context needs no leave.
+       (`parts:set` edits the epic's LIST of parts, through the host; nothing
+       sets which of them are picked.) */
     expect(MANIFEST.reacts).toEqual(['passage', 'parts'])
-    expect(MANIFEST.declares.uses).not.toContain('parts:set')
   })
 
   test('the id is the one the registration file has to be named after', () => {

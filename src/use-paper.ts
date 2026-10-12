@@ -44,9 +44,9 @@ import { json, post, standIn, standingIn } from './api.ts'
  * part is exactly a context in which the epic did not move. And it is held as
  * its own piece of state, apart from the paper: a change of focus is a change
  * in what is SHOWN of a paper this page already has, so it redraws the lists
- * and the pages and asks the server nothing — no `/api/paper`, no compile, and
- * the editor is not rebuilt under somebody's hands. `src/focus.ts` has the
- * rule; this only carries the list.
+ * and the pages and does not read the paper again — no `/api/paper`, and the
+ * editor is not rebuilt under somebody's hands. `src/focus.ts` has what a
+ * file's anchor is; the rule is the protocol's, and this only carries the list.
  */
 
 export type Sight =
@@ -446,6 +446,8 @@ export function usePaper(framed: boolean) {
       resize,
       point,
       pointed,
+      /** Ask the host something: `parts.set`, `content.changed`. Rejects when it refuses or is not there. */
+      request,
       parts,
       goto,
       kept,
@@ -466,7 +468,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again],
   )
 }
 

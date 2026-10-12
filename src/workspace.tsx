@@ -15,23 +15,7 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import {
-  MAIN_FILE,
-  coveredBy,
-  emptySaid,
-  fileAfterTicks,
-  fileOnOpening,
-  filesShown,
-  narrowed,
-  pageOfSheet,
-  pagesOfSheets,
-  pagesShown,
-  partOf,
-  sheetsOf,
-  tabsOf,
-  ticksOf,
-  type Narrowed,
-} from './focus.ts'
+import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, heldBy, narrowed, noPage, pageOfSheet, pagesDrawn, pagesOfSheets, partOf, tabsOf, ticksOf } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import { pdfIsOf } from './pdf/of.ts'
@@ -41,6 +25,7 @@ import { keyOf, received } from './pointed.ts'
 import { ProposalsPanel } from './proposals-panel.tsx'
 import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
+import { useChapters } from './use-chapters.ts'
 import type { usePaper } from './use-paper.ts'
 import { join, usePublishedPassage, type Highlighted, type Sheet } from './use-published-passage.ts'
 import { useSource, type Landed } from './use-source.ts'
@@ -76,19 +61,15 @@ import { useTheme } from './use-theme.ts'
  * ## Narrowed to the picked parts of the epic
  *
  * When a person has picked some of the epic's parts in the host's bar, this
- * screen shows only what those parts own: their files, the sections of those
- * files, and the pages those files printed. `src/focus.ts` has the rule and
- * the arithmetic; four decisions are this screen's.
+ * screen shows only what those parts have: their files, the sections of those
+ * files, and the pages those files printed. The rule is the protocol's, asked
+ * through `useFocus(context).narrow`; `src/focus.ts` has what a file's anchor
+ * is and the arithmetic. What is this screen's:
  *
- * **There is no chapter picker here.** This screen had a dropdown of the
- * paper's files, and under a focus it listed the picked parts' own — so a
- * person ticked a chapter in the host's bar and then chose it again here.
- * That second choice was the complaint: "in the paper you are able to pick to
- * show a specific chapter, but that's not what was promised". The dropdown
- * is gone. What is shown follows the ticks, and `fileAfterTicks` is how:
- * nothing ticked is the whole paper with `main.tex` in the editor; one part
- * ticked opens that part's file; several ticked are tabs, of those files and
- * no others.
+ * **There is no chapter picker here.** What is shown follows the ticks, and
+ * `fileAfterTicks` is how: nothing ticked is the whole paper with `main.tex`
+ * in the editor; one part ticked opens that part's chapter; several ticked
+ * are tabs, of those chapters and no others.
  *
  * Every file is still reachable, by the two ways that are about the PAPER
  * and not about a list of its files: a press on the PDF opens the file that
@@ -97,39 +78,39 @@ import { useTheme } from './use-theme.ts'
  * taken the editor away from `main.tex` with nothing ticked, one small press
  * beside the file's name goes back.
  *
- * **The line above the editor names the file an edit is saved to.** With no
- * dropdown showing the open file there has to be something that does, and
- * it has to be unmistakable, because the editor now changes file when a tick
- * changes. "Editing chapters/3_methods.tex" stands directly over the text,
- * with whether it is saved beside it, in both panes' narrow form.
+ * **The line above the editor names the file an edit is saved to**, directly
+ * over the text, with whether it is saved beside it.
  *
- * **A file with unsaved text in it is never taken away.** Ticking a part
- * while a sentence in `main.tex` has not reached the disk would otherwise
- * swap the editor's file under a person mid-sentence. So that file stays
- * open, stays editable and is saved as it always is; it is the last tab,
- * marked as outside, and no row is spent saying so. It leaves when the person
- * leaves it.
- *
- * **A pointer from elsewhere still arrives.** A note, a question or a slide
- * may point at a passage in a file no picked part owns. It is opened and
- * marked exactly as before, the sentence about it says it is outside the
- * picked parts, and the whole paper is shown at that place for as long as the
- * mark is there — see "Which PDF is on screen", in the body.
+ * **The file in hand is kept, and nothing marks it.** Ticking a part while a
+ * sentence in `main.tex` has not reached the disk would otherwise swap the
+ * editor's file under a person mid-sentence; a note, a question or a slide may
+ * point at a passage in a file no picked part has. Either way that file is the
+ * one the person is in: it is passed to the rule as `keep`, stays open,
+ * editable and saved, has its tab, and leaves when the person leaves it. No
+ * word on the tab, in the section list or in the sentence about the passage
+ * says it is "outside": the host's bar says what is picked.
  *
  * **The PDF is the picked files compiled on their own**, when the paper pulls
  * them in with `\include` (`compile/part.ts`): a second PDF, with fewer
  * sheets than the paper, its own SyncTeX table and its own record of which
- * text it is of. Three things follow, and each is kept in one place here.
- * Whatever is asked about a place on screen is asked of the PDF on screen
- * (`screen`, `buildId`). Whatever is SAID about a place — to the canvas, in
- * the toolbar, on a sheet — is a page of the paper and never a sheet of the
- * part's PDF (`pageAt`, `partNumbers`). And a save compiles the part alone;
- * the whole paper is compiled when the person leaves the part (`recompile`,
- * and the effects beside it).
+ * text it is of. Whatever is asked about a place on screen is asked of the
+ * PDF on screen (`screen`, `buildId`). Whatever is SAID about a place — to
+ * the canvas, in the toolbar, on a sheet — is a page of the paper and never a
+ * sheet of the part's PDF (`pageAt`, `partNumbers`). A save compiles the part
+ * alone; the whole paper is compiled when the person leaves the part
+ * (`recompile`, and the effects beside it). Only the sheets the picked files
+ * printed are drawn: what `main.tex` writes around them — a title page, the
+ * bibliography — is no part's. And nothing is drawn where sheets were left
+ * out: no rule, no count. A sheet's own number says which page it is.
  *
- * **There is no "show everything" here, and no line about the pick.** The
- * host's bar says what is picked, and that is where it is lifted. A second switch on this
- * page would be a second place to look for why a paper is short.
+ * **There is no "show everything" here, and no line about the pick.** One
+ * sentence, inside a PDF pane the pick left with no page, is all this screen
+ * ever says about it.
+ *
+ * **Which chapter is a part's is set here**, in the line that names the file:
+ * "chapter of <part>". It is this module's to keep (`chapters.ts`), and the
+ * epic's list of parts is the host's — so "a part for each chapter", for an
+ * epic that has none, asks the host. See `use-chapters.ts`.
  *
  * ## The editor and the preview are passed in
  *
@@ -180,7 +161,7 @@ export function Workspace({
 }) {
   const theme = useTheme()
   const { build, part, compiling, compile, compilePart, seePart, refresh } = useBuild(paper.epic)
-  const { setPaper, setProposals, setSaid } = wire
+  const { setPaper, setProposals, setSaid, request } = wire
   /* What "compile" means just now: the whole paper, or — with parts picked
      whose files can be compiled on their own — those files. Decided further
      down, where the pick is known, and reached from here through a ref because
@@ -192,23 +173,29 @@ export function Workspace({
       if (landed.paper) setPaper(landed.paper)
       if (Array.isArray(landed.proposals)) setProposals(landed.proposals)
       if (landed.said) setSaid(landed.said)
+      /* A chapter now pulls in another file, so what this module holds for a
+         part changed: the canvas is told, and the host reads it again. */
+      if (landed.published === true) void request('content.changed', { epic: paper.epic }).catch(() => {})
       /* The save reached the disk, so the PDF on screen is now of older text. */
       recompile.current()
     },
-    [setPaper, setProposals, setSaid],
+    [setPaper, setProposals, setSaid, request, paper.epic],
   )
   const source = useSource({ paper, disk: wire.disk, onLanded, saveDelay })
   const { file, doc, fresh } = source
 
   /* ---- The parts the canvas is pointed at ------------------------------- */
 
-  const ticked = useFocus({ parts: wire.parts, epic: paper.epic })
+  /* The one rule, asked of the protocol: `ticked.narrow` over this paper's
+     files, each anchored by `anchorOf`, keeping the file in hand. It reads a
+     part's `documents` and, from a host older than those, its `files`. */
+  const ticked = useFocus({ parts: wire.parts, epic: paper.epic, projectPath: wire.projectPath })
   const parts = ticked.parts
   const pdf = build?.pdf ?? null
   const focus = useMemo(
-    () => narrowed(parts, paper, pdf),
+    () => narrowed(ticked, paper, pdf, file),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [parts, paper.epic, paper.files, pdf?.id],
+    [ticked, paper.epic, paper.files, paper.pulls, pdf?.id, file],
   )
   const focusRef = useRef(focus)
   focusRef.current = focus
@@ -223,9 +210,8 @@ export function Workspace({
   const cannot = plan?.cannot ?? null
   const onlyKey = plan?.only ? plan.only.join('\n') : null
   const pickedKey = onlyKey !== null && focus ? focus.files.join('\n') : null
-  /* Every file the part's own PDF is of: the picked ones and what they pull in. */
-  const coveredKey = pickedKey !== null && focus ? coveredBy(focus.files, paper).join('\n') : ''
-  const covered = useMemo(() => (coveredKey ? coveredKey.split('\n') : NO_FILES), [coveredKey])
+  /* Every file the part's own PDF is of: the picked ones and what they pull in, which is what the rule already answered. */
+  const covered = useMemo(() => (pickedKey ? pickedKey.split('\n') : NO_FILES), [pickedKey])
   /* What the server last said about THIS selection. */
   const heard = part !== null && part.files === pickedKey ? part : null
   const own = heard?.status ?? null
@@ -256,10 +242,6 @@ export function Workspace({
     return () => clearTimeout(timer)
   }, [paper.epic, pickedKey, seePart, compilePart])
 
-  /** Whether a file is outside what is picked. Never, when nothing is. */
-  const isOutside = useCallback((name: string) => !ticked.inFocus({ file: name }), [ticked])
-  const outsideSaid = focus ? `the picked part${focus.parts.length === 1 ? '' : 's'}` : ''
-
   /* A paper OPENED goes back to where its reader was — the file, the tab, and
      the caret and scroll in that file — and, with nothing remembered or the
      file no longer in what is shown, starts under a focus on a file that is in
@@ -274,7 +256,7 @@ export function Workspace({
      it runs after it EVERY time that one runs. StrictMode, which is how the
      page is mounted, runs both twice; a ref that let this run once left the
      second "starts on main.tex" standing, and a reload with a part ticked
-     opened `main.tex`, marked outside. Nothing is REMEMBERED before a file's
+     opened `main.tex`. Nothing is REMEMBERED before a file's
      text is on screen (below), so the second run reads what the first did.
 
      Before the effect that walks to a passage the canvas holds, so that one
@@ -504,6 +486,16 @@ export function Workspace({
   /* ---- Where the caret is, in the three currencies ---------------------- */
 
   const sections = useMemo(() => sectionsOf(paper), [paper])
+  /* Which chapter is which part's: this module's to keep, set in the line that names the file. */
+  const chapters = useChapters({
+    paper,
+    parts,
+    projectPath: wire.projectPath,
+    hosted: wire.where === 'hosted',
+    request,
+    say: setSaid,
+    sections,
+  })
   const text = doc?.text ?? ''
   const eol = doc?.eol ?? '\n'
   const from = Math.min(selection.from, text.length)
@@ -749,9 +741,13 @@ export function Workspace({
      said at once it would be a second broadcast to every container of a claim
      that was true for a frame. */
   const { show } = wire
-  /* Every file a part of the epic owns, ticked or not: what is said first when the paper has more files than fit. */
-  const owned = useMemo(() => ticked.parts.flatMap((part) => part.files ?? []), [ticked.parts])
-  const shownFiles = filesShown(focus, paper.files, file, LIMITS.SHOWING_DOCUMENTS, owned).join('\n')
+  /* Every file a part of the epic has, ticked or not: what is said first when the paper has more files than fit. */
+  const inParts = useMemo(
+    () => heldBy(ticked.parts, paper, wire.projectPath),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ticked.parts, paper.epic, paper.files, wire.projectPath],
+  )
+  const shownFiles = filesShown(focus, paper.files, file, LIMITS.SHOWING_DOCUMENTS, inParts).join('\n')
   useEffect(() => {
     const timer = setTimeout(() => {
       show(
@@ -767,9 +763,6 @@ export function Workspace({
   /* ---- What the canvas says to this page -------------------------------- */
 
   const walkedFor = useRef<string | null>(null)
-  /* Read through a ref: a change of focus must not re-run the walk below. */
-  const outsideRef = useRef(isOutside)
-  outsideRef.current = isOutside
   useEffect(() => {
     const heard = received(paper, pointed, mine.current)
     /* This page's own pointing from BEFORE somebody walked it, handed back by a
@@ -816,9 +809,10 @@ export function Workspace({
     if (walkedFor.current !== stamp) {
       walkedFor.current = stamp
       go({ file: answer.file, bytes: { from: answer.from, to: answer.to }, foreign: true })
-      /* Outside the picked parts is not a reason to refuse it — somebody
-         pressed a note and means that passage — but it is a thing to say. */
-      notice(outsideRef.current(answer.file) ? `${answer.said} ${outsidePassage(focusRef.current)}` : answer.said)
+      /* In a file no picked part has, as often as not. It is opened all the
+         same — somebody pressed a note and means that passage — and is then
+         the file in hand; nothing is said about the pick. */
+      notice(answer.said)
       setWalked({ file: answer.file, from: answer.from, to: answer.to })
       setOnPassage(true)
     }
@@ -871,10 +865,7 @@ export function Workspace({
         if (!saysOf(block).toLowerCase().includes(needle)) continue
         go({ file: block.file, bytes: { from: block.srcStart, to: block.srcEnd }, focus: false })
         answer(true)
-        setSaid(
-          `${message.ref ?? 'That reference'} is named in this paper, in ${block.file}.`
-            + (outsideRef.current(block.file) ? ` ${outsidePassage(focusRef.current)}` : ''),
-        )
+        setSaid(`${message.ref ?? 'That reference'} is named in this paper, in ${block.file}.`)
         return
       }
       answer(false, `This paper does not name ${message.ref ?? 'that'}.`)
@@ -1019,22 +1010,26 @@ export function Workspace({
     return out
   }, [foreign, foreignRects, foreignText, foreignDoc, behind, theirs, ownRects, selecting, text, from, to, fromLine])
 
-  /* The pages drawn under a focus: the picked parts' own, and — flagged —
-     any a mark is on, so that nothing this page points at is ever on a sheet
-     that is not there. Null when nothing is picked: every page, as always. */
+  /* The pages drawn under a focus: the rule again, over the sheets of the PDF
+     on screen — each about the files that printed on it — keeping any a mark
+     is on, so that nothing this page points at is ever on a sheet that is not
+     there. Null when nothing is picked: every page, as always. */
+  const wholeMap = pdf?.map
   const sheets = useMemo(() => {
     /* Called onto the screen for a mark outside the part: the whole paper, whole. */
-    if (!focus || focus.pages === null || called) return null
-    return pagesShown(focus, marks.flatMap((mark) => mark.rects.map((rect) => rect.page)))
-  }, [focus, marks, called])
+    if (!focus || !wholeMap || called) return null
+    return pagesDrawn(ticked, paper, wholeMap, marks.flatMap((mark) => mark.rects.map((rect) => rect.page)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, ticked, wholeMap, marks, called])
   /* The same for the part's own PDF, in ITS sheets: the ones its files
-     printed — its title page and bibliography are `main.tex`'s, and are left
-     out as they are from the whole paper — and what page of the paper each
-     sheet is, for everything said about one. */
+     printed — its title page and bibliography are `main.tex`'s, which is in
+     no part — and what page of the paper each sheet is, for everything said
+     about one. */
   const partSheets = useMemo(() => {
     if (!onPart || !focus || partDrawn.pdf.pages === null) return null
-    return pagesShown({ ...focus, pages: sheetsOf(partDrawn.covered, partDrawn.pdf.map) }, marks.flatMap((mark) => mark.rects.map((rect) => rect.page)))
-  }, [onPart, partDrawn, focus, marks])
+    return pagesDrawn(ticked, paper, partDrawn.pdf.map, marks.flatMap((mark) => mark.rects.map((rect) => rect.page)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onPart, partDrawn, focus, ticked, marks])
   const partNumbers = useMemo(
     () => (partDrawn && partDrawn.pdf.pages !== null && map ? pagesOfSheets(partDrawn.pdf.pages, partDrawn.pdf.map, map, partDrawn.covered) : null),
     [partDrawn, map],
@@ -1199,7 +1194,7 @@ export function Workspace({
       go({ file: at.file, bytes: { from: at.from, to: at.to }, foreign: true })
       setWalked(null)
       setOnPassage(true)
-      notice(outsideRef.current(at.file) ? `${words} ${outsidePassage(focusRef.current)}` : words)
+      notice(words)
     },
     [go, notice],
   )
@@ -1260,15 +1255,16 @@ export function Workspace({
     [go, wandered],
   )
 
-  /* The files offered: all of them, or under a focus the picked parts' own —
-     and the one that is open, whatever it is, because it is open. */
-  const listed = useMemo(
-    () => (focus ? paper.files.filter((one) => one === file || !isOutside(one)) : paper.files),
-    [focus, paper.files, file, isOutside],
-  )
-  /* The files to switch among: the picked parts' own, and nothing when
+  /* The files offered: all of them, or under a focus what the rule left —
+     the picked parts' own, and the one in hand. */
+  const listed = focus ? focus.shown : paper.files
+  /* The files to switch among: the picked parts' chapters, and nothing when
      nothing is picked. One file is not a switch. See `tabsOf`. */
-  const tabs = useMemo(() => tabsOf(focus, file), [focus, file])
+  const tabs = useMemo(
+    () => tabsOf(focus, file, paper),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [focus, file, paper.pulls],
+  )
   /* The section list, file by file, limited to what is shown. */
   const jumps = useMemo(() => jumpsOf(listed, sections), [listed, sections])
   /* The way back, drawn only where it is the way back: nothing is picked, and
@@ -1304,8 +1300,8 @@ export function Workspace({
                 aria-selected={one.file === file}
                 variant={one.file === file ? 'outline' : 'ghost'}
                 size="container"
-                className={cn('shrink-0 font-mono', one.outside && 'italic')}
-                title={one.outside ? `${one.file} — outside ${outsideSaid}, and open` : one.file}
+                className="shrink-0 font-mono"
+                title={one.file}
                 data-file={one.file}
                 onClick={() => {
                   if (one.file === file) return
@@ -1313,7 +1309,7 @@ export function Workspace({
                   source.open(one.file)
                 }}
               >
-                {one.outside ? `${one.label} — outside` : one.label}
+                {one.label}
               </Button>
             ))}
           </div>
@@ -1341,7 +1337,7 @@ export function Workspace({
           >
             <option value="">{shown.section ?? 'Sections'}</option>
             {jumps.map((group) => (
-              <optgroup key={group.file} label={focus && isOutside(group.file) ? `${group.file} — outside the focus` : group.file}>
+              <optgroup key={group.file} label={group.file}>
                 {group.sections.length === 0 ? (
                   <option value={`f:${group.file}`}>(no headings) top of the file</option>
                 ) : (
@@ -1444,6 +1440,47 @@ export function Workspace({
             <span className={cn('text-muted-foreground', source.state === 'failed' && 'text-(--gone)')} aria-live="polite" data-save={source.state}>
               {saved}
             </span>
+            {/* Which part this file is the chapter of, said and set in the
+                line that already names the file: no row of its own. Only for
+                a file `main.tex` pulls in itself, in an epic that has parts,
+                on a host that keeps them. As tall as the words beside it, and
+                it takes the room that is left rather than a line of its own:
+                in a very narrow container that is the arrow alone. */}
+            {chapters.settable(file) && (
+              <label className="text-muted-foreground ml-auto flex max-w-[13rem] min-w-0 flex-[1_1_0%] items-center justify-end" title={`The part of the epic ${file} is the chapter of`}>
+                <select
+                  className="hover:text-foreground w-full min-w-0 cursor-pointer appearance-none truncate bg-transparent p-0 text-right underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-1"
+                  aria-label="The part this file is the chapter of"
+                  data-chapter-of={chapters.partOf(file) ?? ''}
+                  value={chapters.partOf(file) ?? ''}
+                  disabled={chapters.busy}
+                  onChange={(event) => void chapters.set(event.target.value || null, file)}
+                >
+                  <option value="">chapter of no part</option>
+                  {parts.map((part) => (
+                    <option key={part.id} value={part.id}>
+                      chapter of {part.heading || part.id}
+                    </option>
+                  ))}
+                </select>
+                <span aria-hidden className="shrink-0 pl-0.5">
+                  ▾
+                </span>
+              </label>
+            )}
+            {/* An epic with a paper and no parts: one press asks the host for a part to each chapter. */}
+            {chapters.offer && (
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-foreground ml-auto underline underline-offset-2"
+                disabled={chapters.busy}
+                title="Add a part to this epic for each chapter main.tex pulls in"
+                data-parts-each
+                onClick={() => void chapters.each()}
+              >
+                A part for each chapter
+              </button>
+            )}
           </div>
           <ProposalsPanel
             proposals={proposals}
@@ -1527,15 +1564,10 @@ export function Workspace({
                biber that has just arrived is a reason to compile at once. */
             <CompilerOffer build={build} onInstalled={(what, complete) => void (what === 'compiler' ? refresh() : complete ? compile() : undefined)} />
           )}
-          {/* The one thing said about a focus, and only when it has left this pane empty: `emptySaid`. */}
-          {wholeShown && sheets && sheets.pages.length === 0 && focus && emptySaid(focus) && (
+          {/* The one thing said about a focus, and only when it has left this pane empty: `noPage`. */}
+          {((wholeShown && sheets && sheets.pages.length === 0) || (onPart && partSheets && partSheets.pages.length === 0)) && focus && (
             <p className="text-muted-foreground shrink-0 px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
-              {emptySaid(focus)}
-            </p>
-          )}
-          {onPart && partSheets && partSheets.pages.length === 0 && focus && (
-            <p className="text-muted-foreground shrink-0 px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
-              {emptySaid({ ...focus, pages: [] })}
+              {noPage(focus)}
             </p>
           )}
           {/* And the one sentence for a pick that cannot be compiled on its own, where its pages would have been. */}
@@ -1562,7 +1594,7 @@ export function Workspace({
                   onScrolled={onPartScrolled}
                   numbers={partNumbers}
                   total={build?.pdf?.pages ?? null}
-                  {...(partSheets ? { pages: partSheets.pages, outside: partSheets.outside, outsideOf: outsideSaid } : {})}
+                  {...(partSheets ? { pages: partSheets.pages } : {})}
                 />
               </div>
             )}
@@ -1576,7 +1608,7 @@ export function Workspace({
                   onOpen={() => setTab('source')}
                   from={pdfFrom}
                   onScrolled={onPdfScrolled}
-                  {...(sheets ? { pages: sheets.pages, outside: sheets.outside, outsideOf: outsideSaid } : {})}
+                  {...(sheets ? { pages: sheets.pages } : {})}
                 />
               </div>
             ) : (
@@ -1630,11 +1662,6 @@ const SHOWN_SETTLE_MS = 60
 /** One passage with every field it was said with: `keyOf` and the section's span. */
 function exactly(passage: WirePassage): string {
   return `${keyOf(passage)}\0${passage.section?.from ?? ''}\0${passage.section?.to ?? ''}`
-}
-
-/** Added to what is said about a place this page was sent to, when no picked part owns the file it is in. */
-function outsidePassage(focus: Narrowed | null): string {
-  return `It is outside the picked part${focus?.parts.length === 1 ? '' : 's'}, and is shown anyway.`
 }
 
 /**

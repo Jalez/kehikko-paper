@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { MESSAGE, PROTOCOL, type EpicPart, type Passage } from 'kehikot-module-protocol'
+import { useFocus } from 'kehikot-module-protocol/client/react'
 import { createHash } from 'node:crypto'
 import { StrictMode } from 'react'
 
@@ -301,7 +302,7 @@ describe('a page that is loaded again', () => {
 
 describe('the rule, and what is read first', () => {
   const paper = { epic: 'a-paper', files: FILES } as unknown as Paper
-  const focus = narrowed(PARTS('the-method'), paper, null)
+  const focus = narrowed(renderHook(() => useFocus({ parts: PARTS('the-method'), epic: 'a-paper', projectPath: PROJECT })).result.current, paper, null)
 
   test('the remembered file opens when it is still in the paper and in what is picked', () => {
     expect(fileOnOpening(null, FILES, 'chapters/design.tex')).toBe('chapters/design.tex')
