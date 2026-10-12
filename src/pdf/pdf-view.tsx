@@ -50,6 +50,20 @@ import { wordAt, type Run } from './words.ts'
  *
  * Which pages those are is not decided here. See `src/focus.ts`.
  *
+ * ## A PDF that is not the whole paper
+ *
+ * The picked parts' files may have been compiled on their own, and that PDF
+ * has fewer sheets than the paper: its ninth is the paper's seventeenth.
+ * `numbers` then says, sheet by sheet, which page of the paper each one is,
+ * and everything this component SAYS about a sheet — its label, the runs left
+ * out — is said in those. Everything it is ASKED and everything it answers
+ * about a place (`pages`, a mark's rectangle, a press) stays in the sheets of
+ * the PDF it is drawing, since that is the document those places are in.
+ *
+ * `kind` names which PDF `url` is one of. A new build of the same kind is
+ * swapped in under the reader and the scroll does not move; a PDF of another
+ * kind is another document, and it opens at `from`.
+ *
  * ## Units
  *
  * Everything crossing this component's boundary is in PDF points from the
@@ -84,8 +98,14 @@ export interface PreviewProps {
   onPage?(page: number): void
   /** How far down to start, in PDF points of what is drawn. Read once, when this is first shown. */
   from?: number
-  /** It was scrolled: how far down, in the same points. Never said by a pane that is not laid out. */
-  onScrolled?(top: number): void
+  /** It was scrolled: how far down, in the same points, and in which kind of PDF. Never said by a pane that is not laid out. */
+  onScrolled?(top: number, kind?: string): void
+  /** Which PDF this is one of: empty for the whole paper, the selection for a part's own. A change of it opens at `from`. */
+  kind?: string
+  /** Sheet by sheet, the page of the paper each one is; null for a sheet that is not a page anybody numbers. Absent: the sheets are the paper's pages. */
+  numbers?: readonly (number | null)[] | null
+  /** How many pages the paper has, when `numbers` is given. */
+  total?: number | null
   /** The pages to draw, ascending, in the PDF's own numbers. Absent or null draws every page, unlabelled, as always. */
   pages?: readonly number[] | null
   /** Those of `pages` no picked part printed on: drawn because a mark is on them, and labelled as outside. */
@@ -230,7 +250,22 @@ const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const GAP = 10
 const PAD = 8
 
-export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0, onScrolled, pages: asked = null, outside: flagged, outsideOf = 'the picked parts' }: PreviewProps) {
+export function PdfView({
+  url,
+  marks,
+  reveal,
+  onPoint,
+  onOpen,
+  onPage,
+  from = 0,
+  onScrolled,
+  pages: asked = null,
+  outside: flagged,
+  outsideOf = 'the picked parts',
+  kind = '',
+  numbers = null,
+  total = null,
+}: PreviewProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<PdfDocument | null>(null)
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([])
@@ -250,6 +285,13 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0,
   const held = useRef<PdfTask | null>(null)
   /** Counts up when pages the marks were waiting for have been read. */
   const [read_, setRead] = useState(0)
+  /** The kind of the document on screen, and where one of another kind is to open. */
+  const shownKind = useRef(kind)
+  const kindNow = useRef(kind)
+  kindNow.current = kind
+  const fromNow = useRef(from)
+  fromNow.current = from
+  const moved = useRef(false)
 
   /* Load the new document beside the old one; swap when it has opened. */
   useEffect(() => {
@@ -274,6 +316,13 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0,
         runs.current = new Map()
         measured.current = new Set()
         texts.current = new Map()
+        /* Another document, not a newer build of this one: where the reader
+           was in the old one is nowhere in this. It opens where it was left. */
+        if (shownKind.current !== kindNow.current) {
+          shownKind.current = kindNow.current
+          kept.current = fromNow.current
+          moved.current = true
+        }
         setSizes(sized)
         const old = held.current
         held.current = task
@@ -513,11 +562,22 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scale > 0])
 
+  /* A PDF of another kind was swapped in: put it where that one was left. */
+  useLayoutEffect(() => {
+    if (!moved.current || scale <= 0) return
+    moved.current = false
+    const node = scroller.current
+    if (node) node.scrollTop = kept.current * scale
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, scale > 0])
+
   const onScroll = useCallback(() => {
     const node = scroller.current
-    if (node && scale > 0 && node.clientHeight > 0) {
+    /* Not between a swap and its scroll being put back: a shorter document
+       clamps the scroll, and that is nobody scrolling. */
+    if (node && scale > 0 && node.clientHeight > 0 && !moved.current) {
       kept.current = node.scrollTop / scale
-      onScrolled?.(kept.current)
+      onScrolled?.(kept.current, shownKind.current)
     }
     /* Under a focus the sheets are not a plain stack, and nothing asks. */
     if (!node || !onPage || scale <= 0 || pages !== null) return
@@ -550,9 +610,16 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0,
     [onPoint, scale, measure],
   )
 
-  /* The runs of sheets a focus leaves out, said where they would have been. */
-  const gaps = useMemo(() => (pages === null ? null : gapsBetween(pages, sizes.length || null)), [pages, sizes.length])
-  const after = gaps?.get(sizes.length + 1) ?? null
+  /* What a sheet is called: its own number, or — in a PDF that is not the
+     whole paper — the page of the paper it is. */
+  const paperOf = useCallback((sheet: number): number | null => (numbers ? (numbers[sheet - 1] ?? null) : sheet), [numbers])
+  const count = numbers ? total : sizes.length || null
+  /* The runs of pages a focus leaves out, said where they would have been. */
+  const gaps = useMemo(
+    () => (pages === null ? null : gapsBetween(pages.map(paperOf).filter((page): page is number => page !== null), count)),
+    [pages, paperOf, count],
+  )
+  const after = count === null ? null : (gaps?.get(count + 1) ?? null)
 
   const step = (by: 1 | -1) => {
     const at = ZOOMS.indexOf(zoom)
@@ -603,7 +670,8 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0,
               />
             )
             if (pages === null) return sheet
-            const before = gaps?.get(number)
+            const called = paperOf(number)
+            const before = called === null ? undefined : gaps?.get(called)
             const isOutside = outside?.includes(number) === true
             return (
               <div key={i} className="pdf-sheet">
@@ -613,8 +681,8 @@ export function PdfView({ url, marks, reveal, onPoint, onOpen, onPage, from = 0,
                   </p>
                 )}
                 <p className={isOutside ? 'pdf-number pdf-number-outside' : 'pdf-number'} style={{ width: size.w * scale }} data-outside={isOutside ? '' : undefined}>
-                  p. {number} of {sizes.length}
-                  {isOutside && ` · outside ${outsideOf}, shown for what is marked on it`}
+                  {called !== null && (count === null ? `p. ${called}` : `p. ${called} of ${count}`)}
+                  {isOutside && `${called === null ? '' : ' · '}outside ${outsideOf}, shown for what is marked on it`}
                 </p>
                 {sheet}
               </div>

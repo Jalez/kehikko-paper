@@ -1,5 +1,6 @@
 import { isFocused, narrowToFocus, pickedFiles, pickedParts, type EpicPart } from 'kehikot-module-protocol'
 
+import { planOf, type Plan, type Pullable } from '../compile/part.ts'
 import type { PageSpan } from '../compile/synctex.ts'
 
 /**
@@ -51,10 +52,28 @@ import type { PageSpan } from '../compile/synctex.ts'
  * files the paper does not include (`missing`), or their files printed
  * nothing. Everywhere else the narrowed paper is the message.
  *
+ * ## A part compiled on its own
+ *
+ * When the picked files are ones `main.tex` pulls in with `\include`, the
+ * PDF in the pane is those chapters compiled alone, with `\includeonly`
+ * given from outside the paper (`compile/part.ts`, `partOf` here). That PDF
+ * still opens with whatever `main.tex` writes in its own body — a title page,
+ * a table of contents — and ends with its bibliography, so the page map does
+ * the same work on it: only the sheets the picked files printed are drawn.
+ *
+ * It has FEWER SHEETS than the paper, and that is the one thing to be careful
+ * with. Sheet 9 of a part's PDF is page 17 of the paper, and other modules
+ * store pages of the paper. So a sheet number never leaves this module: what
+ * is said to the canvas, read out in the toolbar and written on a sheet is the
+ * page of the paper, through `pageOfSheet`, and `sheetOfPage` goes back.
+ *
+ * A file pulled in with `\input` cannot be compiled alone. The pane then
+ * says so, in the one sentence `partOf` answers, and draws no page: the
+ * sheets of the whole paper that file printed on are mostly its neighbours'.
+ *
  * ## What this does not touch
  *
- * Compilation: the whole paper is always compiled from `main.tex`, and a part
- * is a way of LOOKING at the result. The passage this page publishes
+ * The passage this page publishes
  * (`passage.set`): unchanged, in every field — though which FILES it says it
  * is showing does follow the ticks (`filesShown`). And the MCP door: an agent has no canvas and no
  * focus, so `list_sections`, `read_paper`, `read_source` and `list_papers`
@@ -365,4 +384,89 @@ export function tabsOf(focus: Narrowed | null, open: string): FileTab[] {
     label: names.indexOf(names[i]!) === names.lastIndexOf(names[i]!) ? names[i]! : file,
     outside: !focus.files.includes(file),
   }))
+}
+
+/* ---- A part compiled on its own ------------------------------------------- */
+
+/**
+ * How the picked parts' files are compiled on their own — or the sentence the
+ * pane shows because they cannot be. Null when nothing is picked, when the
+ * picked parts own no file of the paper (`emptySaid` has those sentences), and
+ * for a paper that does not say how its files are pulled in: one read by a
+ * server older than this page, which is narrowed by its pages as it always was.
+ */
+export function partOf(focus: Narrowed | null, paper: Pullable): Plan | null {
+  if (!focus || paper.pulls === undefined) return null
+  return planOf(focus.files, paper, `the picked part${focus.parts.length === 1 ? '' : 's'}`)
+}
+
+/**
+ * Every file a part's own PDF is OF: the picked files, and whatever they pull
+ * in — a chapter's tables, a section split into a file of its own.
+ *
+ * Wider than the picked files on purpose. Those decide the tabs and the
+ * section list; this decides which sheets of the part's PDF are drawn, and a
+ * chapter compiled alone with the three sheets its own table printed left out
+ * would be a chapter with a hole in it.
+ */
+export function coveredBy(picked: readonly string[], paper: Pullable): string[] {
+  const pulls = paper.pulls ?? {}
+  return paper.files.filter((file) => {
+    let at = file
+    for (let depth = 0; depth < 16; depth += 1) {
+      if (picked.includes(at)) return true
+      const above = pulls[at]?.by
+      if (above === undefined) return false
+      at = above
+    }
+    return false
+  })
+}
+
+/** The sheets of a PDF that any of some files printed on, ascending. */
+export function sheetsOf(files: readonly string[], map: Record<string, PageSpan[]>): number[] {
+  const seen = new Set<number>()
+  for (const file of files) for (const span of map[file] ?? []) seen.add(span.page)
+  return [...seen].sort((a, b) => a - b)
+}
+
+/**
+ * The page of the PAPER that a sheet of a part's own PDF is — or null when
+ * that sheet is none of `files`' (the title page, the bibliography) or the
+ * paper has never been compiled with that file in it.
+ *
+ * `part` and `whole` are the two builds' page maps. A file starts on some
+ * sheet of each, and from there its sheets follow one another in both — which
+ * is exact for a file pulled in with `\include`, since it starts a sheet of
+ * its own, and for whatever that file pulls in. So the page is the file's
+ * first page in the paper plus how far into the file the sheet is. Counted
+ * from the first sheet rather than looked up line by line, because the part
+ * is the newer of the two while somebody types: the paper's map may not have
+ * the line at all yet.
+ */
+export function pageOfSheet(sheet: number, part: Record<string, PageSpan[]>, whole: Record<string, PageSpan[]>, files: readonly string[]): number | null {
+  for (const file of files) {
+    const here = part[file]
+    const there = whole[file]
+    if (!here?.length || !there?.length || !here.some((span) => span.page === sheet)) continue
+    return there[0]!.page + (sheet - here[0]!.page)
+  }
+  return null
+}
+
+/** The other way: the sheet of a part's own PDF that a page of the paper is on, or null when the part's PDF has no such sheet. */
+export function sheetOfPage(page: number, part: Record<string, PageSpan[]>, whole: Record<string, PageSpan[]>, files: readonly string[]): number | null {
+  for (const file of files) {
+    const here = part[file]
+    const there = whole[file]
+    if (!here?.length || !there?.length) continue
+    const sheet = here[0]!.page + (page - there[0]!.page)
+    if (here.some((span) => span.page === sheet)) return sheet
+  }
+  return null
+}
+
+/** Every sheet of a part's own PDF as the page of the paper it is, sheet 1 first; null for a sheet that is no picked file's. */
+export function pagesOfSheets(count: number, part: Record<string, PageSpan[]>, whole: Record<string, PageSpan[]>, files: readonly string[]): (number | null)[] {
+  return Array.from({ length: count }, (_, i) => pageOfSheet(i + 1, part, whole, files))
 }

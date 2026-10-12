@@ -769,6 +769,24 @@ export interface Paper {
   hashes: Record<string, string>
   /** Every `\includegraphics` target the paper names, in document order. */
   figures: string[]
+  /**
+   * How each file but `main.tex` is pulled in: by which file, with which
+   * command, and under the name that command was given.
+   *
+   * It is what decides whether a picked part can be compiled on its own:
+   * LaTeX's `\includeonly` filters the files `main.tex` pulls in with
+   * `\include`, and no others (`compile/part.ts`). `as` is the argument as it
+   * was written, because `\includeonly` matches it letter for letter.
+   */
+  pulls: Record<string, Pull>
+  /** `main.tex` narrows itself with an `\includeonly` of its own, which would overrule one given from outside. */
+  narrowsItself: boolean
+}
+
+export interface Pull {
+  by: string
+  with: string
+  as: string
 }
 
 /**
@@ -896,6 +914,9 @@ interface Walked {
   files: string[]
   /** What each of those files was when it was opened. The same keys as `files`. */
   hashes: Record<string, string>
+  /** How each file but `main.tex` was pulled in. See `Paper.pulls`. */
+  pulls: Record<string, Pull>
+  narrowsItself: boolean
 }
 
 /**
@@ -997,12 +1018,17 @@ function walk(root: string): Walked | null {
   const files: string[] = [MAIN]
 
   const seen = new Set<string>([MAIN])
+  const pulls: Record<string, Pull> = {}
+  let narrowsItself = false
   const fold = (from: readonly Block[], file: string, depth: number): void => {
     for (const block of from) {
       if (block.kind !== 'include') {
         blocks.push({ ...block, file })
         continue
       }
+      /* The parser reports `\includeonly{…}` as an include too. Read as it
+         always was; that the paper has one is worth knowing. */
+      if (block.via === 'includeonly' && file === MAIN) narrowsItself = true
       const relative = block.target.endsWith('.tex') ? block.target : `${block.target}.tex`
       const child = depth < MAX_INCLUDE_DEPTH && !seen.has(relative) ? confine(root, relative) : null
       let chapter: ParsedDocument | null = null
@@ -1030,6 +1056,7 @@ function walk(root: string): Walked | null {
       }
       seen.add(relative)
       files.push(relative)
+      pulls[relative] = { by: file, with: block.via ?? 'input', as: block.target }
       /* A chapter file has no preamble of its own; when the parser reports one
          it is because the file opens with a comment run before any command, and
          folding that away would drop the provenance note the author wrote at
@@ -1040,7 +1067,7 @@ function walk(root: string): Walked | null {
   }
   fold(parsed.blocks, MAIN, 0)
 
-  return { source, bytes: size, blocks, files, hashes }
+  return { source, bytes: size, blocks, files, hashes, pulls, narrowsItself }
 }
 
 /**
@@ -1064,7 +1091,7 @@ export function readPaper(epic: string, project: string | null): Paper | null {
   if (!root) return null
   const walked = walk(root)
   if (!walked) return null
-  const { source, blocks, files, hashes } = walked
+  const { source, blocks, files, hashes, pulls, narrowsItself } = walked
 
   /*
    * Every `\ref` and every `\cite` in the paper, rewritten from its placeholder
@@ -1130,6 +1157,8 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     files,
     hashes,
     figures,
+    pulls,
+    narrowsItself,
   }
 }
 

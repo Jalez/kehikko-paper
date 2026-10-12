@@ -238,7 +238,7 @@ describe('which engine, now that one may be fetched', () => {
 
   test('the fetched Tectonic is told exactly what the person’s own is: untrusted, cached first', () => {
     const runs = runsFor(fetched, 'main.tex', '/o')
-    expect(runs[0]!.argv).toEqual([fetched.path, '-X', 'compile', '--untrusted', '--synctex', '--keep-logs', '--outdir', '/o', '--only-cached', 'main.tex'])
+    expect(runs[0]!.argv).toEqual([fetched.path, '-X', 'compile', '--untrusted', '--synctex', '--keep-logs', '--keep-intermediates', '--outdir', '/o', '--only-cached', 'main.tex'])
     expect(runs[1]!.argv).toContain('--untrusted')
   })
 })
