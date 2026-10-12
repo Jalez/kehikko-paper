@@ -361,7 +361,7 @@ describe('this app’s own server, stopped', () => {
 })
 
 describe('between the source and the PDF', () => {
-  test('a selection asks where its LINES came out and hands the rectangles, with its words, to the preview', async () => {
+  test('a selection asks where its LINES came out and hands the rectangles, with the passage they are a hint for, to the preview', async () => {
     built = 'kept'
     await open()
     await waitFor(() => expect(lastEditor).not.toBeNull())
@@ -372,8 +372,21 @@ describe('between the source and the PDF', () => {
     expect(asked.query.get('file')).toBe('main.tex')
     expect(asked.query.get('to')).toBe('4')
     await waitFor(() => expect(lastPreview!.marks).toHaveLength(1))
-    expect(lastPreview!.marks[0]).toMatchObject({ source: 'tpyo', rects: [{ page: 2, x: 10, y: 20, w: 30, h: 8 }] })
+    expect(lastPreview!.marks[0]).toMatchObject({ source: { text: MAIN, from, to: from + 4 }, rects: [{ page: 2, x: 10, y: 20, w: 30, h: 8 }] })
     expect(lastPreview!.reveal).not.toBeNull()
+  })
+
+  test('with only a caret, the passage is the line it is on', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastEditor).not.toBeNull())
+    const at = MAIN.indexOf('tpyo')
+    lastEditor!.onSelect({ from: at, to: at })
+    await waitFor(() => expect(lastPreview!.marks).toHaveLength(1))
+    const passage = lastPreview!.marks[0]!.source!
+    expect(passage.text).toBe(MAIN)
+    expect(MAIN.slice(passage.from, passage.to)).toBe(MAIN.split('\n')[3]!)
+    expect(MAIN.slice(passage.from, passage.to)).toContain('tpyo')
   })
 
   test('a press on the PDF asks which line it came from and takes the editor to the word', async () => {

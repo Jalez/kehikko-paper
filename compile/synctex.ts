@@ -26,7 +26,10 @@
  *
  *  - **Line, not column.** A record names a line. There is no column in what
  *    Tectonic or pdfTeX write. Finer than a line is somebody else's job: the
- *    page matches the words against the PDF's own text (see `src/pdf/words.ts`).
+ *    page reads the PDF's own text. A pressed word is looked for in the line
+ *    named here (`src/pdf/words.ts`); and a passage of source is looked for on
+ *    the page itself, with what `forward` answers as the hint and the fallback
+ *    rather than as the mark (`src/pdf/find.ts`).
  *  - **Inside a paragraph it is good to the space.** A source line's words end
  *    at the glue typed after them, so the extent of one source line on one
  *    printed line is the run between the last glue of the line before it and
@@ -322,8 +325,8 @@ export function forward(
        BEFORE its last word, and what follows it in the box is only the
        line's closing skip, out at the right edge. Stopping at the last leaf
        there would cut the final word off every paragraph. On a short last
-       line this reaches past the text into white space; the page trims that
-       against the PDF's own words where it can. */
+       line this reaches past the text into white space, which is one more
+       reason the page does not draw these as they are. */
     const after = table.leaves[run.last + 1]
     const more = after !== undefined && after.box === boxIndex && after.x < box.x + box.w - 2
     const end = more ? last.x + last.w : box.x + box.w

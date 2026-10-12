@@ -795,14 +795,15 @@ export function Workspace({
       const whole = foreignText !== undefined && foreignDoc
         ? wholeWords(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol), indexAt(foreignText, foreign.to, foreignDoc.eol))
         : null
-      out.push({ rects: foreignRects, source: whole, foreign: true })
+      out.push({ rects: foreignRects, source: whole && foreignText !== undefined ? { text: foreignText, ...whole } : null, foreign: true })
     }
-    /* With only a caret, the line's own text is what the rectangles are for,
-       and tightening to it trims a paragraph's last line back to its words. */
-    if (ownRects.length) out.push({ rects: ownRects, source: selecting ? text.slice(from, to) : textOfLine(text, fromLine) })
+    /* With only a caret, the passage is the line it is on: what that line prints is what is marked. */
+    if (ownRects.length) {
+      const start = startOfLine(text, fromLine)
+      out.push({ rects: ownRects, source: selecting ? { text, from, to } : { text, from: start, to: start + textOfLine(text, fromLine).length } })
+    }
     return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [foreign, foreignRects, ownRects, selecting, selecting ? text.slice(from, to) : textOfLine(text, fromLine)])
+  }, [foreign, foreignRects, foreignText, foreignDoc, ownRects, selecting, text, from, to, fromLine])
 
   /* The pages drawn under a focus: the picked parts' own, and — flagged —
      any a mark is on, so that nothing this page points at is ever on a sheet
