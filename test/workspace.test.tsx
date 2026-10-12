@@ -53,6 +53,8 @@ let compiling: Promise<void> | null
 /** The next compiles fail: the last good PDF stays, and `last` says the build did not make one. */
 let failing: boolean
 let failed: boolean
+/** What the last run says of itself: kept to the paper's places, not, or — an older server — nothing. */
+let confined: boolean | undefined
 let lastPreview: PreviewProps | null
 let lastEditor: EditorProps | null
 /** Which page the fake SyncTeX says a line came out on. The page MAP says 2 for every line. */
@@ -81,7 +83,7 @@ const buildNow = () => ({
   engines: engine ? [engine] : [],
   how: engine ? '' : 'No LaTeX engine is installed on this machine. brew install tectonic',
   running: false,
-  last: built ? { ok: !failed, at: 1, ms: 2100, engine, timedOut: false, problems: [], tail: '' } : null,
+  last: built ? { ok: !failed, at: 1, ms: 2100, engine, timedOut: false, problems: [], tail: '', ...(confined === undefined ? {} : { confined }) } : null,
   pdf: built ? { id: built, at: 1, pages: 3, hashes: { 'main.tex': hashOf(builtFrom ?? disk['main.tex']!) }, map: { 'main.tex': [{ page: 2, from: 1, to: 99 }] } } : null,
 })
 
@@ -191,6 +193,25 @@ describe('opening a paper', () => {
     await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
     await new Promise((done) => setTimeout(done, 40))
     expect(posted('/api/compile')).toHaveLength(0)
+  })
+
+  test('an engine that ran with nothing to confine it says so on the status line, and in no row of its own', async () => {
+    built = 'kept'
+    confined = false
+    await open()
+    await waitFor(() => expect(document.querySelector('[data-build]')?.getAttribute('data-confined')).toBe('false'))
+    const status = document.querySelector('[data-build]')!
+    expect(status.getAttribute('title')).toContain('Not confined')
+    expect(status.textContent).toContain('Compiled')
+    expect(document.body.textContent).not.toContain('Not confined')
+  })
+
+  test('an engine that was confined says nothing about it', async () => {
+    built = 'kept'
+    confined = true
+    await open()
+    await waitFor(() => expect(document.querySelector('[data-build]')?.getAttribute('data-confined')).toBe('true'))
+    expect(document.querySelector('[data-build]')!.getAttribute('title')).toBeNull()
   })
 
   test('no engine: the source is still editable and the page says how to get one', async () => {
