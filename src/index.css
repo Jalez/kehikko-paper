@@ -395,6 +395,17 @@
     outline-color: rgb(215 150 0 / 60%);
   }
 
+  /* The printed lines a passage is on, when its words were not found on the
+     page: about here, and drawn as no more than that. */
+  .pdf-mark-coarse {
+    background: rgb(70 110 255 / 14%);
+    outline: none;
+  }
+
+  .pdf-mark-foreign.pdf-mark-coarse {
+    background: rgb(255 190 40 / 22%);
+  }
+
   /* ---- A suggested change, as a diff of the source -------------------- */
 
   .proposal-diff {
