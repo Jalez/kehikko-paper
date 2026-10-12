@@ -767,8 +767,11 @@ export function Workspace({
 
      A passage from the canvas waits the same way. Its lines are counted in
      the text as it is now and asked of the build's table: with lines added
-     above it since that build, the table answers for other words. */
-  const behind = foreign !== null && build?.pdf?.hashes[foreign.file] !== foreignDoc?.hash
+     above it since that build, the table answers for other words. The hash
+     is of the last read or save, so text typed and not yet saved is behind
+     as well: the build, the disk and the editor have to agree. */
+  const behind =
+    foreign !== null && (build?.pdf?.hashes[foreign.file] !== foreignDoc?.hash || foreignDoc?.text !== foreignDoc?.saved)
   const turns = theirs !== null || noted?.reveal === true
   useEffect(() => {
     if (!buildId || !foreign || foreignText === undefined || !foreignDoc || behind) {

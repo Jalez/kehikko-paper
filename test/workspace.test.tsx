@@ -720,6 +720,37 @@ describe('a passage another module pointed at', () => {
     await waitFor(() => expect(toolbar()).toContain('p. 3/3'))
   })
 
+  test('it is not marked while lines typed above it are unsaved: the build and the disk still agree, and the editor does not', async () => {
+    built = 'kept'
+    render(<Framed />)
+    const editor = await screen.findByLabelText('LaTeX source')
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    const typed = MAIN.replace('\\section{End}', 'One.\nTwo.\nThree.\n\\section{End}')
+    let land = () => {}
+    const landing = new Promise<void>((done) => (land = done))
+    const answering = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/api/file')) await landing
+      return answering(input, init)
+    }) as typeof fetch
+    fireEvent.change(editor, { target: { value: typed } })
+    await waitFor(() => expect(document.querySelector('[data-save]')?.getAttribute('data-save')).toBe('saving'))
+    rectPage = 3
+    const bytes = Buffer.from(typed).indexOf('Fin')
+    act(() => pointAt({ ...there, from: bytes, to: bytes + 3 }))
+    const at = typed.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 3}`))
+    await new Promise((done) => setTimeout(done, 40))
+    /* The save has not landed, so the hash is still the build's: only the text says the table is old. */
+    expect(disk['main.tex']).toBe(MAIN)
+    expect(orange()).toBe(false)
+    expect(askedLine(9)).toBe(false)
+    land()
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-1'))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(9)).toBe(true)
+  })
+
   test('placeShown: the passage wins outright while it is shown', () => {
     const caret = { page: 11, section: 'Introduction' }
     expect(placeShown(caret, null)).toEqual(caret)
