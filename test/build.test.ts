@@ -206,10 +206,10 @@ describe('the doors in front of it', () => {
     expect(status.headers.get(BUILD_HEADER)).toBe(buildStamp(BUILD))
 
     /* A write carries the ticket in the header every module uses; without it the refusal is marked. */
-    const refused = (await at('/api/compile', { method: 'POST', body: '{}' }))!
+    const refused = (await at('/api/compile', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } }))!
     expect(refused.status).toBe(403)
     expect(await refused.json()).toMatchObject({ ok: false, refused: 'ticket' })
-    expect((await at('/api/compile', { method: 'POST', body: '{}', headers: { [TICKET_HEADER]: TICKET } }))!.status).toBe(200)
+    expect((await at('/api/compile', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', [TICKET_HEADER]: TICKET } }))!.status).toBe(200)
 
     const page = await (await through(new Request('http://127.0.0.1/app')))!.text()
     expect(page).toContain(`<script id="ticket" type="application/json">${JSON.stringify(TICKET)}</script>`)
