@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   accessSync,
@@ -18,10 +18,10 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
-import { MAIN, hashesOf, paperRoot, readPaper } from '../store.ts'
+import { MAIN, hashesOf, paperRoot, projectOf, readPaper } from '../store.ts'
 import {
   HOW_TO_INSTALL,
   chooseEngine,
@@ -38,6 +38,21 @@ import {
   type EngineName,
   type Run,
 } from './engine.ts'
+import {
+  BWRAP,
+  SANDBOX_EXEC,
+  TREE_VARS,
+  cacheFolders,
+  confinedEnv,
+  linuxArgv,
+  macArgv,
+  notFound,
+  opened,
+  outsideSaid,
+  readable,
+  texTrees,
+  type Places,
+} from './confine.ts'
 import { canFetchBiber, managed } from './install.ts'
 import { biberAbsent, biberAdvice, biberMismatch, biberOffer, noBiber, problemsFrom, tailOf, type BiberMismatch, type Problem } from './log.ts'
 import { DRIVER, KEPT_PARTS, driverText, isIntermediate, onlyLine, planOf, toEvict, unresolved, type Plan } from './part.ts'
@@ -102,6 +117,14 @@ import {
  * not take the last good PDF off the screen.** The engine never writes into
  * `good/`; a successful run's files are renamed into it, each atomically, and a
  * failed run leaves it exactly as it was.
+ *
+ * ## What the engine can reach
+ *
+ * An engine, and every program it starts, reads only the paper (and
+ * the project it is in), this build folder and the TeX installation, and
+ * writes only here and to `cacheDir()`: `confine.ts` has what and why. Where a
+ * machine has nothing to do that with, the engine runs as it did before and
+ * the run says `confined: false`, which the page shows on the status line.
  *
  * ## One compile at a time per paper, and the latest save wins
  *
@@ -229,6 +252,12 @@ export interface BuildStatus {
      * the page offers that in place of advice.
      */
     biber?: (BiberMismatch & { fetchable: boolean }) | null
+    /**
+     * Whether the engine was kept to the paper, the build folder and the TeX
+     * installation (`confine.ts`). False when it ran on a machine with
+     * nothing to confine it. Absent when no engine ran.
+     */
+    confined?: boolean
   } | null
   /** The last PDF that compiled. Stays through any number of failures. */
   pdf: {
@@ -413,10 +442,10 @@ async function once(
     return failed(engine, started, `The build folder ${dir} could not be made: ${(error as Error).message}`)
   }
 
-  const went = await runAll(runsFor(engine, MAIN, work), root, engine, started, job, superseded)
+  const went = await runAll(runsFor(engine, MAIN, work), root, engine, started, job, superseded, { root, project, biber: needsBiber(source) })
   if (went === 'superseded') return job.last
   if ('error' in went) return failed(engine, started, `${engine.name} could not be started: ${went.error}`)
-  const { output, timedOut, code, fetching } = went
+  const { output, timedOut, code, fetching, places, confined } = went
 
   const resolve = (name: string): string | null => {
     const files = paper?.files ?? [MAIN]
@@ -452,6 +481,7 @@ async function once(
 
   const made = join(work, PDF)
   const ok = !timedOut && code === 0 && existsSync(made)
+  if (!ok && places) problems.unshift(...outside([output, log, logOf(join(work, 'main.blg'))].join('\n'), root, places))
   if (ok) {
     try {
       const pdf = readFileSync(made)
@@ -501,6 +531,7 @@ async function once(
     problems,
     tail: tailOf(output),
     biber: !ok && mismatch ? { ...mismatch, fetchable } : null,
+    confined,
   }
 }
 
@@ -518,14 +549,32 @@ async function runAll(
   started: number,
   job: Job,
   superseded: () => boolean,
-): Promise<'superseded' | { error: string } | { output: string; timedOut: boolean; code: number | null; fetching: boolean }> {
+  paper: { root: string; project: string | null; biber: boolean },
+): Promise<
+  | 'superseded'
+  | { error: string }
+  | { output: string; timedOut: boolean; code: number | null; fetching: boolean; places: Places | null; confined: boolean }
+> {
   let output = ''
   let timedOut = false
   let code: number | null = null
   let fetching = false
   /* Decided once per compile: which biber Tectonic finds, and that a TeX Live
      engine finds its own siblings. See `pathFirst`. */
-  const env = envFor(process.env, pathFirst(engine, managed().biberDir), texLive())
+  const first = pathFirst(engine, managed().biberDir)
+  const plain = envFor(process.env, first, texLive())
+  /* An engine is kept to the paper, the build folder and the TeX
+     installation where the machine can do that; where it cannot, the engine
+     runs as it always has and the status says so. See `confine.ts`. */
+  const guard = confinement(engine, paper.root, paper.project, cwd, plain, first)
+  const confined = guard !== null
+  let env = plain
+  if (guard) {
+    const unpacked = await biberReady(guard.places, plain, TIMEOUT_MS - (Date.now() - started), job, paper.biber)
+    if (superseded()) return 'superseded'
+    env = confinedEnv(plain, guard.places, unpacked, engine.name)
+  }
+  let mended = false
   for (let i = 0; i < runs.length; i += 1) {
     const run = runs[i]!
     const left = TIMEOUT_MS - (Date.now() - started)
@@ -534,8 +583,24 @@ async function runAll(
       break
     }
     fetching = engine.name === 'tectonic' && !run.cachedOnly
-    const ran = await spawned(run.argv, cwd, left, job, env)
+    const ran = await spawned(guard ? guard.wrap(run.argv, fetching) : run.argv, cwd, left, job, env)
     if (superseded()) return 'superseded'
+    /* A biber that was not unpacked beforehand — the paper did not look like
+       one that runs it — or whose unpacked files have since lost one, stops
+       with its own words for that. Unpacked, once, and the run made again. */
+    const broken = unpackedBroken(ran.output)
+    if (guard && !mended && !ran.timedOut && ran.code !== 0 && (broken || notUnpacked(ran.output))) {
+      mended = true
+      if (broken) forgetUnpacked(guard.places)
+      /* `latexmk` remembers that biber failed and would not run it again. */
+      const out = run.argv.find((arg) => arg.startsWith('-outdir='))?.slice('-outdir='.length)
+      if (out) for (const name of names(out)) if (name.endsWith('.fdb_latexmk')) rmSync(join(out, name), { force: true })
+      const unpacked = await biberReady(guard.places, plain, TIMEOUT_MS - (Date.now() - started), job, true)
+      if (superseded()) return 'superseded'
+      env = confinedEnv(plain, guard.places, unpacked, engine.name)
+      i -= 1
+      continue
+    }
     output = ran.output
     timedOut = ran.timedOut
     code = ran.code
@@ -552,7 +617,244 @@ async function runAll(
     }
     if (code !== 0) break
   }
-  return { output, timedOut, code, fetching }
+  return { output, timedOut, code, fetching, places: guard?.places ?? null, confined }
+}
+
+/**
+ * The folder the engines' own caches are kept in, for every paper.
+ *
+ * In the temporary directory beside the build folders, and derived like them:
+ * the fonts an engine generated, LuaTeX's font cache, and what biber unpacks.
+ * A confined engine cannot write to the TeX trees those would otherwise go to.
+ */
+export function cacheDir(): string {
+  return join(tmpdir(), 'kehikot-paper', 'tex-cache')
+}
+
+function real(path: string): string | null {
+  try {
+    return realpathSync(path)
+  } catch {
+    return null
+  }
+}
+
+const treesFound = new Map<string, string[]>()
+
+/**
+ * The folders of the TeX installation an engine belongs to, as real paths.
+ *
+ * Asked of the `kpsewhich` beside the engine, once per engine and per setting
+ * of the person's trees — it is the installation's own answer, whatever its
+ * layout. Where there is no `kpsewhich`, the folder the engine is in and the
+ * folder it really is in are what there is.
+ */
+function treesOf(engine: Engine, env: Record<string, string>, home: string | null): string[] {
+  const key = [engine.path, env.TEXMFHOME ?? '', env.TEXMFVAR ?? '', env.HOME ?? ''].join('\0')
+  const known = treesFound.get(key)
+  if (known) return known
+  const dir = dirname(engine.path)
+  const more = [dir]
+  const at = real(engine.path)
+  if (at) more.push(dirname(at))
+  let said = ''
+  let asked = false
+  const kpsewhich = join(dir, 'kpsewhich')
+  if (engine.name === 'tectonic') {
+    /* No trees: what Tectonic reads besides itself is its own settings and the packages it fetched (`tectonicKeeps`). */
+    if (home) more.push(join(home, 'Library', 'Application Support', 'Tectonic'), join(home, '.config', 'Tectonic'))
+    asked = true
+  } else if (executable(kpsewhich)) {
+    try {
+      const ran = spawnSync(kpsewhich, [`--expand-var=${TREE_VARS}`], { cwd: tmpdir(), env, shell: false, encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
+      if (ran.status === 0 && typeof ran.stdout === 'string') {
+        said = ran.stdout.slice(0, 20_000)
+        asked = true
+      }
+    } catch {
+      /* Then the two folders above. */
+    }
+  }
+  const found = texTrees('', texTrees(said, more, home).flatMap((tree) => real(tree) ?? []), home)
+  /* Kept only when the installation answered: one that did not may yet. */
+  if (asked) treesFound.set(key, found)
+  return found
+}
+
+/** The wrappers that have been seen to work in this process, by what they were given. */
+const applied = new Set<string>()
+
+/**
+ * How to run this paper's engine confined, or null where this machine cannot.
+ *
+ * Null is not an error: the engine then runs as it did before there was any
+ * of this, and the run's status carries `confined: false`. It is null when the
+ * platform has no such tool, when a place cannot be named to it, and when the
+ * tool itself will not start here — tried once with a program that does
+ * nothing, because a wrapper that fails would otherwise be every compile
+ * failing for a reason that is not in the paper.
+ */
+function confinement(
+  engine: Engine,
+  root: string,
+  project: string | null,
+  cwd: string,
+  env: Record<string, string>,
+  beside: readonly string[],
+): { places: Places; wrap: (argv: string[], network: boolean) => string[] } | null {
+  const tool = process.platform === 'darwin' ? (executable(SANDBOX_EXEC) ? SANDBOX_EXEC : null) : process.platform === 'linux' ? (BWRAP.find(executable) ?? null) : null
+  if (!tool) return null
+  try {
+    const home = env.HOME ? real(env.HOME) : null
+    const paper = real(root)
+    const build = real(buildDir(root))
+    if (!paper || !build) return null
+    const cache = cacheDir()
+    mkdirSync(cache, { recursive: true })
+    const places: Places = {
+      paper,
+      project: opened(projectOf(project), paper, home),
+      build,
+      cache: realpathSync(cache),
+      /* `beside`: the folders put first on the engine's `PATH` (`pathFirst`), whose programs it runs by name. */
+      tex: texTrees('', [...treesOf(engine, env, home), ...beside.flatMap((dir) => real(dir) ?? [])], home),
+      kept: engine.name === 'tectonic' ? tectonicKeeps(env, home) : [],
+      home,
+    }
+    for (const dir of cacheFolders(places)) mkdirSync(dir, { recursive: true })
+    const wrap = (argv: string[], network = false): string[] | null =>
+      tool === SANDBOX_EXEC ? macArgv(places, argv, network) : linuxArgv(tool, places, argv, cwd, network)
+    const probe = wrap(['/usr/bin/true'])
+    if (!probe) return null
+    const key = JSON.stringify(probe)
+    if (!applied.has(key)) {
+      const ran = spawnSync(probe[0]!, probe.slice(1), { cwd, env: { PATH: '/usr/bin:/bin' }, shell: false, timeout: 10_000, stdio: 'ignore' })
+      if (ran.status !== 0) return null
+      applied.add(key)
+    }
+    return { places, wrap: (argv, network) => wrap(argv, network) ?? argv }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Where Tectonic keeps the packages it fetched: read and written by it.
+ *
+ * Its own choice of place, said the way it says it — `TECTONIC_CACHE_DIR`, or
+ * the platform's cache folder. Named even when it is not there yet, since the
+ * first run is what makes it.
+ */
+function tectonicKeeps(env: Record<string, string>, home: string | null): string[] {
+  const said = env.TECTONIC_CACHE_DIR
+  const at = said ? said : !home ? null : process.platform === 'darwin' ? join(home, 'Library', 'Caches', 'Tectonic') : join(env.XDG_CACHE_HOME || join(home, '.cache'), 'Tectonic')
+  if (!at || !isAbsolute(at)) return []
+  const whole = real(at)
+  if (whole) return [whole]
+  const parent = real(dirname(at))
+  return parent ? [join(parent, at.slice(dirname(at).length + 1))] : []
+}
+
+/**
+ * The biber an engine would run, unpacked, where the confined engine finds it.
+ *
+ * biber is a packed program: it unpacks itself into the temporary folder the
+ * first time and runs from there afterwards. On a Mac it is, further, one file
+ * for two processors, and starts every time by asking the system's developer
+ * tools to take out this machine's half — which a confined program has no
+ * business reaching. So it is run once here, by this module and with no paper
+ * anywhere near it (`--version`), to unpack into the cache; and the half it
+ * took out, which is a whole biber, is linked from a folder of the cache's
+ * `bin` that goes first on the confined engine's `PATH`. Twelve seconds, once;
+ * and a biber that then starts faster than the one it came from, having
+ * nothing to take out.
+ *
+ * The folder is named for which biber it is of — its path, size and date — so
+ * an updated TeX Live gets a fresh one, and Tectonic's biber and TeX Live's
+ * each have theirs. Answers that folder, or null: where biber is not such a
+ * file (a distribution's own package, any Linux) there is nothing to link and
+ * the engine runs the one on its `PATH`.
+ *
+ * @param unpack whether to unpack one that is not: only for a paper that will run it
+ */
+async function biberReady(places: Places, env: Record<string, string>, left: number, job: Job, unpack: boolean): Promise<string | null> {
+  if (process.platform !== 'darwin') return null
+  try {
+    const found = (env.PATH ?? '').split(':').map((dir) => join(dir, 'biber')).find(executable)
+    const theirs = found ? real(found) : null
+    if (!theirs) return null
+    const is = statSync(theirs)
+    const dir = join(places.cache, 'bin', createHash('sha256').update(`${theirs}\n${is.size}\n${is.mtimeMs}`).digest('hex').slice(0, 16))
+    const link = join(dir, 'biber')
+    if (executable(link)) return dir
+    if (existsSync(join(dir, NOT_PACKED))) return null
+    if (!unpack || left <= 0) return null
+    const tmp = join(places.cache, 'tmp')
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    const ran = await spawned([theirs, '--version'], tmp, left, job, { HOME: env.HOME ?? '', PATH: `${dirname(theirs)}:/usr/bin:/bin`, TMPDIR: tmp })
+    if (ran.code !== 0) return null
+    const halves = names(tmp)
+      .filter((name) => name.startsWith('par-'))
+      .flatMap((user) => names(join(tmp, user)).map((cache) => join(tmp, user, cache, 'thin', 'biber')))
+      .filter(executable)
+      .map((path) => ({ path, at: statSync(path).mtimeMs }))
+      .sort((a, b) => b.at - a.at)
+    /* The one just taken out is the newest: every start takes it out again. */
+    if (halves[0] && Date.now() - halves[0].at < 120_000) {
+      symlinkSync(halves[0].path, link)
+      return dir
+    }
+    writeFileSync(join(dir, NOT_PACKED), '')
+    return null
+  } catch {
+    /* Then the engine runs the biber on its `PATH`, and says what it says. */
+    return null
+  }
+}
+
+const NOT_PACKED = 'not-packed'
+
+/** Forget every unpacked biber: what it unpacked is no longer whole, and the next `biberReady` unpacks again. */
+function forgetUnpacked(places: Places): void {
+  rmSync(join(places.cache, 'bin'), { recursive: true, force: true })
+  mkdirSync(join(places.cache, 'bin'), { recursive: true })
+  const tmp = join(places.cache, 'tmp')
+  for (const name of names(tmp)) if (name.startsWith('par-')) rmSync(join(tmp, name), { recursive: true, force: true })
+}
+
+/** Whether biber stopped at taking its own half out of itself, which a confined one cannot: `biberReady`. */
+function notUnpacked(output: string): boolean {
+  return /extracting \S+ binary with lipo failed|cannot find \/usr\/bin\/lipo/.test(output)
+}
+
+/** Whether a tool that unpacks itself stopped because what it unpacked is no longer whole. */
+function unpackedBroken(output: string): boolean {
+  return /par-[0-9a-f]+\/cache-[0-9a-f]+/.test(output) && /Can't locate \S+ in @INC|Compilation failed in require|BEGIN failed--compilation aborted/.test(output)
+}
+
+/** Extensions an engine adds to a name by itself, for telling a file that is not there from one that is out of reach. */
+const TRIED = ['', '.tex', '.pdf', '.png', '.jpg', '.jpeg', '.eps', '.bib', '.sty', '.cls']
+
+/**
+ * What to say about files the engine could not find that ARE there.
+ *
+ * A confined engine is told "no such file" for a file outside what it may
+ * read, and says "not found" — the sentence for a misspelt name. A person who
+ * can see the file in their own folder deserves the other sentence.
+ */
+function outside(output: string, root: string, places: Places): Problem[] {
+  const out: Problem[] = []
+  for (const name of notFound(output)) {
+    const base = isAbsolute(name) ? name : join(root, name)
+    for (const ext of TRIED) {
+      const at = real(base + ext)
+      if (at === null) continue
+      if (!readable(at, places)) out.push({ severity: 'error', file: null, line: null, message: outsideSaid(name, places.project !== null) })
+      break
+    }
+  }
+  return out
 }
 
 function logOf(path: string): string {
@@ -655,6 +957,12 @@ function stop(child: ChildProcess | null): void {
  * `detached` makes the engine the leader of its own process group so that
  * `stop` can end all of it; it is still this process's child, still piped, and
  * is not unref'd — the server waits for it like any other.
+ *
+ * `argv` is the engine's own argument list, or — on a machine that can —
+ * that list behind the program that keeps it to the paper,
+ * the build folder and the TeX installation (`confinement`). That program
+ * replaces itself with the engine or stays its parent in the same group, so
+ * the pid here is still the one `stop` ends everything by.
  *
  * `shell: false` is the default and is written anyway, because it is the line
  * a reviewer looks for. `stdin` is closed: an engine that stops to ask a
@@ -1101,10 +1409,10 @@ async function partOnce(
   /* A PDF left by the run before must not be mistaken for this run's: an engine that halts leaves it. */
   rmSync(made, { force: true })
   const runs = partRunsFor(engine, tectonic ? `${DRIVER}.tex` : MAIN, work, onlyLine(only))
-  const went = await runAll(runs, tectonic ? tree : root, engine, started, job, superseded)
+  const went = await runAll(runs, tectonic ? tree : root, engine, started, job, superseded, { root, project, biber: false })
   if (went === 'superseded') return 'superseded'
   if ('error' in went) return { last: failed(engine, started, `${engine.name} could not be started: ${went.error}`), unresolved: [] }
-  const { output, timedOut, code } = went
+  const { output, timedOut, code, places, confined } = went
 
   const resolve = (name: string): string | null => {
     const files = paper?.files ?? [MAIN]
@@ -1119,6 +1427,7 @@ async function partOnce(
   const missing = unresolved(log)
 
   const ok = !timedOut && code === 0 && existsSync(made)
+  if (!ok && places) problems.unshift(...outside([output, log, logOf(join(work, 'main.blg'))].join('\n'), root, places))
   if (ok) {
     try {
       const pdf = readFileSync(made)
@@ -1163,7 +1472,7 @@ async function partOnce(
   }
 
   return {
-    last: { ok, at: Date.now(), ms: Date.now() - started, engine: engine.name, timedOut, problems, tail: tailOf(output) },
+    last: { ok, at: Date.now(), ms: Date.now() - started, engine: engine.name, timedOut, problems, tail: tailOf(output), confined },
     unresolved: ok ? missing : [],
   }
 }

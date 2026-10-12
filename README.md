@@ -149,6 +149,23 @@ folder: see "A picked part, compiled on its own"); `latexmk` runs `-norc`,
 since a `.latexmkrc` is Perl. Engines run in a process group of their own so that stopping one stops
 what it started.
 
+**The engines read only the paper, the build folder and the TeX
+installation** (`compile/confine.ts`). On macOS every engine — and whatever it
+starts: `biber`, `makeindex`, the font generators — runs under a
+`sandbox-exec` profile; on Linux under `bwrap` where there is one. Readable:
+the paper's folder and the project it is in (a paper draws figures and tables
+from elsewhere in its own repository; not the project's `.git` folders or
+`.env` files), the build folder, the TeX installation with the person's own
+TeX trees, system and personal fonts, and the system's libraries. Writable: the
+build folder and this module's cache for the engines in the temporary
+directory, where generated fonts, LuaTeX's font cache and an unpacked biber go
+— not the paper, and not the person's TeX trees. No network, except Tectonic's
+one run that may fetch a package. So a paper that draws on a file OUTSIDE its
+project — a figure linked in from another folder — does not compile until the
+file is copied in, and the problems list says which file. Where a machine has
+nothing to confine an engine with, the engine runs as it did before and the
+status line's tooltip says "Not confined".
+
 **One compile at a time per paper, and the latest save wins.** A newer request
 kills the compile in flight — by the pid of the child this process spawned,
 never by name — and starts again.
