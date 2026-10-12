@@ -34,6 +34,8 @@
  *  - **No rc files.** `latexmk` reads a `.latexmkrc` from the directory it runs
  *    in and that file is Perl; `-norc` is the difference between compiling a
  *    paper and executing its folder.
+ *  - **An engine reads only the paper, the build folder and the TeX
+ *    installation.** Not an argument, so not in this file: `confine.ts`.
  *  - **Tectonic runs `--untrusted`**, its own switch for all of this. It costs
  *    one thing, stated in the README rather than hidden: an extra search path
  *    is refused in that mode, so a `.sty` in a SUBFOLDER of the paper has to be
@@ -367,9 +369,14 @@ export function pathFirst(engine: Engine, biberDir: string | null): string[] {
  * Not the server's whole environment. A dev server's environment holds
  * whatever the shell that started it held — tokens, among other things — and
  * TeX can read environment variables. `HOME` stays because Tectonic keeps its
- * package cache under it and TeX Live its font cache; the three kpathsea
- * settings say again, for an engine that reads them, what the flags already
- * said.
+ * package cache under it and TeX Live its font cache.
+ *
+ * The three kpathsea settings: `shell_escape` and `openout_any` say again, for
+ * an engine that reads them, what the flags already said — nothing is run, and
+ * nothing is written outside the output directory. `openin_any=r` is only
+ * kpathsea's own default spelled out (it keeps dotfiles out of a search); it
+ * is NOT what decides which files an engine can read. That is `confine.ts`,
+ * which `build.ts` puts around every engine it starts.
  */
 export function envFor(env: Record<string, string | undefined>, first: readonly string[] = [], more: readonly string[] = []): Record<string, string> {
   const out: Record<string, string> = {}

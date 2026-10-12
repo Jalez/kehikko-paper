@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button.tsx'
 import { cn } from '@/lib/utils.ts'
 
 import type { PartStatus } from '../compile/build.ts'
+import { NOT_CONFINED } from '../compile/confine.ts'
 import type { Problem } from '../compile/log.ts'
 import { pageOfLine, type PageRect } from '../compile/synctex.ts'
 import { plainText } from '../latex/parse.ts'
@@ -1353,7 +1354,13 @@ export function Workspace({
           </select>
         )}
         <span className="flex-1" />
-        <span className={cn('text-muted-foreground', failed && 'text-(--gone)')} data-build={compiling ? 'running' : failed ? 'failed' : ran ? 'ok' : 'idle'}>
+        <span
+          className={cn('text-muted-foreground', failed && 'text-(--gone)')}
+          data-build={compiling ? 'running' : failed ? 'failed' : ran ? 'ok' : 'idle'}
+          /* Said here and not in a row of its own: it is a fact about the run, like the seconds beside it. */
+          title={ran?.confined === false ? NOT_CONFINED : undefined}
+          data-confined={ran?.confined === undefined ? undefined : String(ran.confined)}
+        >
           {engineSays}
           {shown.page !== null && build?.pdf?.pages ? ` · p. ${shown.page}/${build.pdf.pages}` : ''}
         </span>
