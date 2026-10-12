@@ -2,7 +2,7 @@ import { establishBuild, mintTicket, refuseTicket, type Reply as DoorReply } fro
 import { join, relative } from 'node:path'
 
 import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
-import { buildStatus, compile, readPdf, syncForward, syncReverse } from './compile/build.ts'
+import { buildStatus, compile, compilePart, partStatus, readPdf, syncForward, syncReverse } from './compile/build.ts'
 import { installer } from './compile/install.ts'
 import type { PieceId } from './compile/toolchain.ts'
 import { MAX_EDIT_BYTES } from './latex/edit.ts'
@@ -1464,12 +1464,34 @@ export function answer(
     return ok({ ok: true, toolchain: installer().cancel() })
   }
 
+  /*
+   * Where the build of one picked selection stands: `files`, the picked files
+   * of the paper as a JSON list. A read, like `/api/build`, and it compiles nothing —
+   * the page asks it on opening so that a part's PDF from the last session is
+   * on screen at once. `part` is null when none of the files named is a file
+   * of this paper.
+   */
+  if (path === '/api/part' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (!buildStatus(epic, project)) return bad('There is no paper for that epic in this project.', 404)
+    let named: unknown = null
+    try {
+      named = JSON.parse(str(query.get('files'), 200 * MAX_PATH) || '[]')
+    } catch {
+      return bad('`files` is the picked files as a JSON list')
+    }
+    return ok({ ok: true, part: partStatus(epic, project, pickedFiles(named)) })
+  }
+
   /* The last PDF that compiled, as bytes. `build` on the address is only a
-     cache key for the browser; what is served is always the one that stands. */
+     cache key for the browser; what is served is always the one that stands.
+     `part` asks for one selection's own PDF, by the key `/api/part` gave. */
   if (path === '/api/pdf' && method === 'GET') {
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
-    const pdf = readPdf(epic, projectOf(str(query.get('project'), MAX_PROJECT)))
+    const pdf = readPdf(epic, projectOf(str(query.get('project'), MAX_PROJECT)), partOf(query))
     if (!pdf) return bad('that paper has no compiled PDF yet', 404)
     return bytes({ bytes: pdf.bytes, type: 'application/pdf' })
   }
@@ -1481,6 +1503,10 @@ export function answer(
    * and `y` — PDF points from the top-left of the page — ask which line a point
    * came from. Answered from the last GOOD build, which is the PDF on screen,
    * and the answer names that build so a page showing a newer one can tell.
+   *
+   * `part` says the PDF on screen is one selection's own (`/api/part`): the
+   * question is then asked of THAT build's table, and a page in the answer or
+   * the question is a sheet of that PDF.
    */
   if (path === '/api/sync' && method === 'GET') {
     const epic = str(query.get('epic'), MAX_SLUG)
@@ -1495,14 +1521,14 @@ export function answer(
       const x = number('x')
       const y = number('y')
       if (!Number.isInteger(page) || page < 1 || !Number.isFinite(x) || !Number.isFinite(y)) return bad('that is not a point on a page')
-      const found = syncReverse(epic, project, page, x, y)
+      const found = syncReverse(epic, project, page, x, y, partOf(query))
       return ok({ ok: true, found })
     }
     const file = str(query.get('file'), MAX_PATH)
     const line = number('line')
     const to = query.has('to') ? number('to') : line
     if (!file || !Number.isInteger(line) || line < 1 || !Number.isInteger(to) || to < 1) return bad('that is not a line of a file')
-    return ok({ ok: true, found: syncForward(epic, project, file, line, to) })
+    return ok({ ok: true, found: syncForward(epic, project, file, line, to, partOf(query)) })
   }
 
   /* An unknown path under `/api/` is ours to refuse rather than Vite's to try
@@ -1528,24 +1554,48 @@ export function answer(
  * see `compile` in `compile/build.ts` for what a newer request does to an
  * older one — and always with the build's status, whether or not a PDF came
  * out, because a failed compile is an answer and not an error of this door.
+ *
+ * ## `POST /api/part`
+ *
+ * The same, for the picked parts' files compiled on their own: `files` in the
+ * body, the paper's own names. It answers with BOTH statuses, because making a
+ * part may have meant compiling the whole paper first — `full` asks for that
+ * when the whole paper is not of the text on disk, `force` whatever stands.
+ * See `compilePart`.
  */
 export function later(
   method: string,
   path: string,
   query: URLSearchParams,
-  _body: Record<string, unknown> | null,
+  body: Record<string, unknown> | null,
   ticket: string | null = null,
 ): Promise<Reply> | null {
-  if (path !== '/api/compile' || method !== 'POST') return null
+  if ((path !== '/api/compile' && path !== '/api/part') || method !== 'POST') return null
   const refused = unticketed(ticket)
   if (refused) return Promise.resolve(refused)
   const epic = str(query.get('epic'), MAX_SLUG)
   if (!isEpic(epic)) return Promise.resolve(bad('that is not an epic name'))
   const project = projectOf(str(query.get('project'), MAX_PROJECT))
   if (project === null) return Promise.resolve({ status: 409, body: { ok: false, error: NOWHERE, project: null } })
+  if (path === '/api/part') {
+    return compilePart(epic, project, pickedFiles(body?.files), { full: body?.full === true, force: body?.force === true }).then((made) =>
+      made ? ok({ ok: true, build: made.build, part: made.part }) : bad('There is no paper for that epic in this project.', 404),
+    )
+  }
   return compile(epic, project).then((status) =>
     status ? ok({ ok: true, build: status }) : bad('There is no paper for that epic in this project.', 404),
   )
+}
+
+/** The picked files a request names: strings, bounded in number and length. Which of them are files of the paper is `build.ts`'s to say. */
+function pickedFiles(named: unknown): string[] {
+  if (!Array.isArray(named)) return []
+  return named.filter((one): one is string => typeof one === 'string' && one.length > 0 && one.length <= MAX_PATH).slice(0, 200)
+}
+
+/** The selection a request says is on screen, or null for the whole paper. Its shape is checked where it is used. */
+function partOf(query: URLSearchParams): string | null {
+  return str(query.get('part'), 32) || null
 }
 
 export { MANIFEST }

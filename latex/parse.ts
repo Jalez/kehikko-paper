@@ -173,7 +173,15 @@ export type Block =
   | { kind: "comment"; id: string; srcStart: number; srcEnd: number; text: string }
   | { kind: "preamble"; id: string; srcStart: number; srcEnd: number; raw: string }
   /** \include{chapters/3_methods} — the edge that defines document order. */
-  | { kind: "include"; id: string; srcStart: number; srcEnd: number; target: string }
+  | {
+      kind: "include";
+      id: string;
+      srcStart: number;
+      srcEnd: number;
+      target: string;
+      /** The command that pulled it in — `include`, `input`, `subfile` — which decides whether the file can be compiled alone. */
+      via?: string;
+    }
   /** \maketitle, \tableofcontents, \printbibliography … structural, not prose. */
   | { kind: "structure"; id: string; srcStart: number; srcEnd: number; command: string }
   | { kind: "unknown"; id: string; srcStart: number; srcEnd: number; raw: string; env?: string };
@@ -1422,6 +1430,7 @@ function parseBlocks(src: string, path: string, exists: (target: string) => bool
             srcStart: i,
             srcEnd: close,
             target: src.slice(cmd.end + 1, close - 1).trim(),
+            via: cmd.name,
           });
           i = close;
           continue;

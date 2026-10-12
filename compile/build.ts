@@ -1,14 +1,46 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  accessSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
 import { MAIN, hashesOf, paperRoot, readPaper } from '../store.ts'
-import { HOW_TO_INSTALL, chooseEngine, envFor, findEngines, namedEngine, needsBiber, pathFirst, runsFor, texLiveDirs, wantsNetwork, type Engine, type EngineName } from './engine.ts'
+import {
+  HOW_TO_INSTALL,
+  chooseEngine,
+  envFor,
+  findEngines,
+  namedEngine,
+  needsBiber,
+  partRunsFor,
+  pathFirst,
+  runsFor,
+  texLiveDirs,
+  wantsNetwork,
+  type Engine,
+  type EngineName,
+  type Run,
+} from './engine.ts'
 import { canFetchBiber, managed } from './install.ts'
 import { biberAbsent, biberAdvice, biberMismatch, biberOffer, noBiber, problemsFrom, tailOf, type BiberMismatch, type Problem } from './log.ts'
+import { DRIVER, KEPT_PARTS, driverText, isIntermediate, onlyLine, planOf, toEvict, unresolved, type Plan } from './part.ts'
 import { BIBER_VERSION, BUNDLE_BIBLATEX } from './toolchain.ts'
 import {
   forward,
@@ -63,6 +95,8 @@ import {
  *
  *     <tmpdir>/kehikot-paper/<hash>/work/   the engine's output directory, emptied before every run
  *     <tmpdir>/kehikot-paper/<hash>/good/   main.pdf, main.synctex.gz and meta.json from the last run that produced a PDF
+ *     <tmpdir>/kehikot-paper/<hash>/good/aux/     what that run wrote for the NEXT run to read: every `.aux`, the `.bbl`, the `.toc`
+ *     <tmpdir>/kehikot-paper/<hash>/parts/<key>/  one picked selection compiled on its own — see "A part on its own", below
  *
  * Two folders because of the rule the page keeps: **a compile that fails must
  * not take the last good PDF off the screen.** The engine never writes into
@@ -76,6 +110,40 @@ import {
  * longer exists, so it is KILLED — by the pid of the child this process itself
  * spawned, never by name — and the newer one starts. Nobody waits for a PDF of
  * text they have already changed, and two engines never write into one `work/`.
+ *
+ * ## A part on its own
+ *
+ * When parts of the epic are picked and their files are `\include`d, the
+ * engine is given `\includeonly{…}` ahead of `main.tex` and typesets those
+ * chapters alone (`part.ts` has why, and what cannot be). Three things make
+ * that work, and all three are folders here and none is the paper's:
+ *
+ *  - **`good/aux/`** — a full build's intermediates, kept. `\includeonly`
+ *    reads the numbers of every chapter it leaves out from that chapter's
+ *    `.aux`, so the last full build's have to be where the part's compile can
+ *    read them, and `work/` is emptied before every run.
+ *  - **`parts/<key>/work/`** — the part's own output directory, seeded from
+ *    `good/aux/` and NOT emptied: `latexmk` then knows what changed and runs
+ *    the engine once for an edit, where a fresh folder costs three passes.
+ *  - **`parts/<key>/good/`** — the last PDF of that selection that compiled,
+ *    with its own SyncTeX and its own `meta.json`: which text it is of, which
+ *    full build's numbers it read. Kept per selection, the last few used, so
+ *    coming back to a part is not a compile.
+ *
+ * Tectonic reads its inputs from the folder it runs in and nowhere else, so
+ * for it there is a fourth: `parts/<key>/tree/`, the paper's folder mirrored
+ * with links, with the `.aux` files and the two-line file that says
+ * `\includeonly` put into the mirror rather than into the paper.
+ *
+ * ## When the whole paper is compiled, once parts are picked
+ *
+ * Not on every save: the picked chapters are, and the rest of the paper is
+ * not typeset. The whole paper is compiled when there is no full build to
+ * read numbers from; when the page asks for it — the pick changed or was
+ * lifted, somebody pressed Compile, a passage outside the part has to be
+ * shown; and when the part's own log says a reference or a citation could not
+ * be resolved from numbers that are older than the text. One queue for both
+ * kinds, so an engine never runs beside another on one paper.
  */
 
 /** How long one run may take before it is killed. A first compile may be downloading a TeX distribution's worth of packages. */
@@ -107,6 +175,33 @@ interface Meta {
   /** The hash of every source file as it was when this PDF was made. */
   hashes: Record<string, string>
   map: Record<string, PageSpan[]>
+  /** A hash of the intermediates this build left in `good/aux/`. Absent when it left none. */
+  aux?: string
+}
+
+/** A part's own last good build: a `Meta`, and what it was made of. */
+interface PartMeta extends Meta {
+  /** What `\includeonly` was given. */
+  only: string[]
+  /** The engine, the selection, the text and the full build's numbers, as one hash: the same again is the same PDF. */
+  stamp: string
+  /** References the part's log could not resolve. */
+  unresolved: string[]
+}
+
+/** Where one picked selection's own build stands. */
+export interface PartStatus {
+  /** The selection, as its folder is named. What `/api/pdf` and `/api/sync` are asked with. */
+  key: string
+  /** What `\includeonly` is given, in the paper's order. Empty when the selection cannot be compiled on its own. */
+  only: string[]
+  /** Why it cannot, as the one sentence the pane shows. Null when it can. */
+  cannot: string | null
+  running: boolean
+  /** The last run of THIS selection in this process. Null before the first. */
+  last: BuildStatus['last']
+  /** The last PDF of this selection that compiled. Its pages are sheets of THAT PDF, not pages of the paper. */
+  pdf: BuildStatus['pdf']
 }
 
 export interface BuildStatus {
@@ -153,13 +248,15 @@ interface Job {
   running: boolean
   last: BuildStatus['last']
   table: { id: string; table: SyncTable } | null
+  /** Per selection: its last run, and its SyncTeX table once asked for. */
+  parts: Map<string, { last: BuildStatus['last']; table: { id: string; table: SyncTable } | null }>
 }
 
 const jobs = new Map<string, Job>()
 
 function jobFor(key: string): Job {
   let job = jobs.get(key)
-  if (!job) jobs.set(key, (job = { generation: 0, child: null, tail: Promise.resolve(), running: false, last: null, table: null }))
+  if (!job) jobs.set(key, (job = { generation: 0, child: null, tail: Promise.resolve(), running: false, last: null, table: null, parts: new Map() }))
   return job
 }
 
@@ -316,52 +413,17 @@ async function once(
     return failed(engine, started, `The build folder ${dir} could not be made: ${(error as Error).message}`)
   }
 
-  let output = ''
-  let timedOut = false
-  let code: number | null = null
-  let fetching = false
-  const runs = runsFor(engine, MAIN, work)
-  /* Decided once per compile: which biber Tectonic finds, and that a TeX Live
-     engine finds its own siblings. See `pathFirst`. */
-  const env = envFor(process.env, pathFirst(engine, managed().biberDir), texLive())
-  for (let i = 0; i < runs.length; i += 1) {
-    const run = runs[i]!
-    const left = TIMEOUT_MS - (Date.now() - started)
-    if (left <= 0) {
-      timedOut = true
-      break
-    }
-    fetching = engine.name === 'tectonic' && !run.cachedOnly
-    const ran = await spawned(run.argv, root, left, job, env)
-    if (superseded()) return job.last
-    output = ran.output
-    timedOut = ran.timedOut
-    code = ran.code
-    if (ran.error) return failed(engine, started, `${engine.name} could not be started: ${ran.error}`)
-    if (timedOut) break
-    /* A cached-only run that failed for want of a file gets its second,
-       fetching run; one that failed for any other reason does not, because the
-       second would say the same thing thirty seconds later. One that worked
-       skips the fetching run entirely. */
-    if (run.cachedOnly) {
-      if (code === 0) break
-      if (!wantsNetwork(output)) break
-      continue
-    }
-    if (code !== 0) break
-  }
+  const went = await runAll(runsFor(engine, MAIN, work), root, engine, started, job, superseded)
+  if (went === 'superseded') return job.last
+  if ('error' in went) return failed(engine, started, `${engine.name} could not be started: ${went.error}`)
+  const { output, timedOut, code, fetching } = went
 
   const resolve = (name: string): string | null => {
     const files = paper?.files ?? [MAIN]
     const plain = (relativeInput(name, root) ?? name).replace(/^\.\//, '')
     return files.find((file) => file === plain || file === `${plain}.tex`) ?? null
   }
-  let log = ''
-  try {
-    log = readFileSync(join(work, 'main.log'), 'latin1').slice(0, 2_000_000)
-  } catch {
-    /* No log is an ordinary outcome: the engine may not have got that far. */
-  }
+  const log = logOf(join(work, 'main.log'))
   /* The one tool failure this module can do something about: biber of the
      wrong release. Where the right one can be fetched, the sentence says so
      and the page puts a button beside it. */
@@ -410,7 +472,11 @@ async function once(
         job.table = null
       }
       renameSync(made, join(dir, 'good', PDF))
-      const meta: Meta = { id, at: Date.now(), pages, engine: engine.name, hashes, map }
+      /* After the PDF, which is what this run was for: a build whose
+         intermediates could not be kept is still a build, and only the parts
+         compiled on their own go without. */
+      const aux = keepIntermediates(work, join(dir, 'good'))
+      const meta: Meta = { id, at: Date.now(), pages, engine: engine.name, hashes, map, ...(aux ? { aux } : {}) }
       const scratch = join(dir, 'good', `${META}.tmp`)
       writeFileSync(scratch, JSON.stringify(meta))
       renameSync(scratch, join(dir, 'good', META))
@@ -435,6 +501,117 @@ async function once(
     problems,
     tail: tailOf(output),
     biber: !ok && mismatch ? { ...mismatch, fetchable } : null,
+  }
+}
+
+/**
+ * Run an engine's argument lists in order, to the first that settles it.
+ *
+ * Shared by the whole paper and a part of it: the same timeout, the same
+ * cached-only-then-fetching pair for Tectonic, the same child a newer request
+ * kills.
+ */
+async function runAll(
+  runs: readonly Run[],
+  cwd: string,
+  engine: Engine,
+  started: number,
+  job: Job,
+  superseded: () => boolean,
+): Promise<'superseded' | { error: string } | { output: string; timedOut: boolean; code: number | null; fetching: boolean }> {
+  let output = ''
+  let timedOut = false
+  let code: number | null = null
+  let fetching = false
+  /* Decided once per compile: which biber Tectonic finds, and that a TeX Live
+     engine finds its own siblings. See `pathFirst`. */
+  const env = envFor(process.env, pathFirst(engine, managed().biberDir), texLive())
+  for (let i = 0; i < runs.length; i += 1) {
+    const run = runs[i]!
+    const left = TIMEOUT_MS - (Date.now() - started)
+    if (left <= 0) {
+      timedOut = true
+      break
+    }
+    fetching = engine.name === 'tectonic' && !run.cachedOnly
+    const ran = await spawned(run.argv, cwd, left, job, env)
+    if (superseded()) return 'superseded'
+    output = ran.output
+    timedOut = ran.timedOut
+    code = ran.code
+    if (ran.error) return { error: ran.error }
+    if (timedOut) break
+    /* A cached-only run that failed for want of a file gets its second,
+       fetching run; one that failed for any other reason does not, because the
+       second would say the same thing thirty seconds later. One that worked
+       skips the fetching run entirely. */
+    if (run.cachedOnly) {
+      if (code === 0) break
+      if (!wantsNetwork(output)) break
+      continue
+    }
+    if (code !== 0) break
+  }
+  return { output, timedOut, code, fetching }
+}
+
+function logOf(path: string): string {
+  try {
+    return readFileSync(path, 'latin1').slice(0, 2_000_000)
+  } catch {
+    /* No log is an ordinary outcome: the engine may not have got that far. */
+    return ''
+  }
+}
+
+/** Every file under a folder, as paths from it. Bounded: a build folder is small, and one that is not is not walked forever. */
+function filesUnder(dir: string, depth = 0, out: string[] = [], from = dir): string[] {
+  if (depth > 6 || out.length > 4000) return out
+  for (const name of names(dir)) {
+    const path = join(dir, name)
+    let stat
+    try {
+      stat = lstatSync(path)
+    } catch {
+      continue
+    }
+    if (stat.isDirectory()) filesUnder(path, depth + 1, out, from)
+    else if (stat.isFile()) out.push(relative(from, path))
+  }
+  return out
+}
+
+/** The most one kept intermediate may be. An `.aux` is kilobytes; this is a bound against something that is not one. */
+const MAX_INTERMEDIATE_BYTES = 20_000_000
+
+/**
+ * Keep what a full build wrote for the next run to read, in `good/aux/`.
+ *
+ * Copied out of `work/`, which the next compile empties, into a folder made
+ * beside the old one and swapped for it — a compile of one part may be reading
+ * the old one's files until this run is done. Answers a hash of what was kept,
+ * which is how a part's build knows the numbers it read are still the ones
+ * that stand; null when nothing could be kept.
+ */
+function keepIntermediates(work: string, good: string): string | null {
+  const next = join(good, 'aux.next')
+  try {
+    rmSync(next, { recursive: true, force: true })
+    mkdirSync(next, { recursive: true })
+    const hash = createHash('sha256')
+    for (const name of filesUnder(work).filter(isIntermediate).sort()) {
+      const from = join(work, name)
+      if (statSync(from).size > MAX_INTERMEDIATE_BYTES) continue
+      const bytes = readFileSync(from)
+      mkdirSync(dirname(join(next, name)), { recursive: true })
+      writeFileSync(join(next, name), bytes)
+      hash.update(name).update('\0').update(bytes).update('\0')
+    }
+    rmSync(join(good, 'aux'), { recursive: true, force: true })
+    renameSync(next, join(good, 'aux'))
+    return hash.digest('hex').slice(0, 16)
+  } catch {
+    return null
   }
 }
 
@@ -540,12 +717,25 @@ function tableFrom(path: string): SyncTable | null {
   }
 }
 
-/** The SyncTeX table of the last good build, parsed once per build and kept in memory. */
-function tableOf(root: string): { table: SyncTable; meta: Meta } | null {
+/** The SyncTeX table of the last good build — of the whole paper, or of one selection's own — parsed once per build and kept in memory. */
+function tableOf(root: string, part: string | null = null): { table: SyncTable; meta: Meta } | null {
+  const job = jobFor(root)
+  if (part !== null) {
+    if (!PART_KEY.test(part)) return null
+    const pdir = partDir(root, part)
+    const meta = readPartMeta(pdir)
+    if (!meta) return null
+    let held = job.parts.get(part)
+    if (!held) job.parts.set(part, (held = { last: null, table: null }))
+    if (held.table?.id !== meta.id) {
+      const table = tableFrom(join(pdir, 'good', SYNC))
+      held.table = table ? { id: meta.id, table: rebased(table, [join(pdir, 'tree')], root) } : null
+    }
+    return held.table ? { table: held.table.table, meta } : null
+  }
   const dir = buildDir(root)
   const meta = readMeta(dir)
   if (!meta) return null
-  const job = jobFor(root)
   if (job.table?.id !== meta.id) {
     const table = tableFrom(join(dir, 'good', SYNC))
     job.table = table ? { id: meta.id, table } : null
@@ -553,12 +743,13 @@ function tableOf(root: string): { table: SyncTable; meta: Meta } | null {
   return job.table ? { table: job.table.table, meta } : null
 }
 
-/** The last good PDF's bytes. */
-export function readPdf(epic: string, project: string | null): { bytes: Uint8Array; id: string } | null {
+/** The last good PDF's bytes: the whole paper's, or — `part` — one selection's own. */
+export function readPdf(epic: string, project: string | null, part: string | null = null): { bytes: Uint8Array; id: string } | null {
   const root = paperRoot(epic, project)
   if (!root) return null
-  const dir = buildDir(root)
-  const meta = readMeta(dir)
+  if (part !== null && !PART_KEY.test(part)) return null
+  const dir = part === null ? buildDir(root) : partDir(root, part)
+  const meta = part === null ? readMeta(dir) : readPartMeta(dir)
   if (!meta) return null
   try {
     const path = join(dir, 'good', PDF)
@@ -569,38 +760,440 @@ export function readPdf(epic: string, project: string | null): { bytes: Uint8Arr
   }
 }
 
-/** Where lines of a file came out in the last good PDF. Null when there is no build to ask. */
+/**
+ * Where lines of a file came out in the last good PDF. Null when there is no build to ask.
+ *
+ * `part` asks one selection's own PDF, and the pages in the answer are then
+ * sheets of THAT PDF. Every question about a place on screen names the PDF
+ * that is on screen: a rectangle from one drawn on the other is a mark in the
+ * wrong place.
+ */
 export function syncForward(
   epic: string,
   project: string | null,
   file: string,
   from: number,
   to: number,
+  part: string | null = null,
 ): { build: string; rects: PageRect[]; exact: boolean; line: number | null } | null {
   const root = paperRoot(epic, project)
   if (!root) return null
-  const held = tableOf(root)
+  const held = tableOf(root, part)
   if (!held) return null
   return { build: held.meta.id, ...forward(held.table, tagsOf(held.table, root, file), from, to) }
 }
 
-/** Which file and line a point of the last good PDF came from. */
+/** Which file and line a point of the last good PDF — or of one selection's own — came from. */
 export function syncReverse(
   epic: string,
   project: string | null,
   page: number,
   x: number,
   y: number,
+  part: string | null = null,
 ): { build: string; file: string; line: number } | null {
   const root = paperRoot(epic, project)
   if (!root) return null
-  const held = tableOf(root)
+  const held = tableOf(root, part)
   if (!held) return null
   const name = (tag: number) => relativeInput(held.table.inputs.get(tag) ?? '', root)
   const found = reverse(held.table, (tag) => name(tag) !== null, page, x, y)
   if (!found) return null
   const file = name(found.tag)
   return file === null ? null : { build: held.meta.id, file, line: found.line }
+}
+
+/* ---- A part on its own ---------------------------------------------------- */
+
+const PART_KEY = /^[0-9a-f]{16}$/
+
+/** A selection's folder name: a hash of what `\includeonly` is given, so one selection is one folder however its parts were ticked. */
+function partKey(only: readonly string[]): string {
+  return createHash('sha256').update(only.join('\0')).digest('hex').slice(0, 16)
+}
+
+function partDir(root: string, key: string): string {
+  return join(buildDir(root), 'parts', key)
+}
+
+function readPartMeta(pdir: string): PartMeta | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(pdir, 'good', META), 'utf8'))
+    if (!parsed || typeof parsed !== 'object') return null
+    const meta = parsed as PartMeta
+    if (typeof meta.id !== 'string' || typeof meta.stamp !== 'string' || !existsSync(join(pdir, 'good', PDF))) return null
+    return meta
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A table whose files are named from the paper's folder, whichever folder the engine ran in.
+ *
+ * Tectonic compiles a part in a mirror of the paper's folder (`mirror`), so
+ * its table names `…/tree/chapters/a.tex`. Everything that reads a table asks
+ * it about the paper's own files; the names are moved back once, here.
+ */
+function rebased(table: SyncTable, trees: readonly string[], root: string): SyncTable {
+  const all = [...trees]
+  for (const tree of trees) {
+    try {
+      all.push(realpathSync(tree))
+    } catch {
+      /* Not there: a TeX Live build has no mirror. */
+    }
+  }
+  const inputs = new Map<number, string>()
+  for (const [tag, name] of table.inputs) {
+    const tree = all.find((one) => name.startsWith(`${one}/`))
+    inputs.set(tag, tree ? `${root}/${name.slice(tree.length + 1)}` : name)
+  }
+  return { ...table, inputs }
+}
+
+/** How the picked files can be compiled on their own, read off the paper as it is on disk now. */
+function planFor(epic: string, project: string | null, files: readonly string[]): { plan: Plan | null; files: string[] } {
+  const paper = readPaper(epic, project)
+  if (!paper) return { plan: null, files: [] }
+  const picked = paper.files.filter((file) => files.includes(file))
+  return { plan: planOf(picked, paper), files: paper.files }
+}
+
+/** Where one selection's own build stands, without compiling anything. Null when there is no paper, or nothing of it is picked. */
+export function partStatus(epic: string, project: string | null, files: readonly string[]): PartStatus | null {
+  const root = paperRoot(epic, project)
+  if (!root) return null
+  const { plan } = planFor(epic, project, files)
+  if (!plan) return null
+  if (plan.cannot !== undefined) return { key: '', only: [], cannot: plan.cannot, running: false, last: null, pdf: null }
+  const key = partKey(plan.only)
+  const job = jobs.get(root)
+  const meta = readPartMeta(partDir(root, key))
+  return {
+    key,
+    only: plan.only,
+    cannot: null,
+    running: job?.running ?? false,
+    last: job?.parts.get(key)?.last ?? null,
+    pdf: meta ? { id: meta.id, at: meta.at, pages: meta.pages, hashes: meta.hashes, map: meta.map } : null,
+  }
+}
+
+/**
+ * Compile the picked files on their own, superseding whatever is compiling.
+ *
+ * In the same queue as `compile`, so that one paper has one engine running:
+ * a newer request of either kind kills the one in flight.
+ *
+ * `full` asks for the whole paper to be OF THIS TEXT first — it is compiled
+ * when it is not, and left alone when it is. `force` compiles both whatever
+ * stands: somebody pressed Compile. Without either the whole paper is still
+ * compiled when there is no full build whose numbers a part could read, and
+ * when the part's log says it could not resolve something from numbers older
+ * than the text.
+ *
+ * Resolves with both statuses, because either may have changed. Never rejects.
+ */
+export async function compilePart(
+  epic: string,
+  project: string | null,
+  files: readonly string[],
+  ask: { full?: boolean; force?: boolean } = {},
+): Promise<{ build: BuildStatus; part: PartStatus | null } | null> {
+  const root = paperRoot(epic, project)
+  if (!root) return null
+  const job = jobFor(root)
+  job.generation += 1
+  const mine = job.generation
+  stop(job.child)
+  const superseded = () => mine !== job.generation
+
+  const run = job.tail.then(async () => {
+    if (superseded()) return
+    const { plan } = planFor(epic, project, files)
+    if (!plan || plan.cannot !== undefined) return
+    job.running = true
+    try {
+      const dir = buildDir(root)
+      const stale = () => {
+        const meta = readMeta(dir)
+        return !meta || !sameHashes(meta.hashes, hashesOf(epic, project) ?? {})
+      }
+      const numbered = () => {
+        const meta = readMeta(dir)
+        return Boolean(meta?.aux) && existsSync(join(dir, 'good', 'aux'))
+      }
+      const whole = async () => {
+        job.last = await once(epic, project, root, job, superseded)
+      }
+      if (ask.force || !numbered() || (ask.full && stale())) {
+        await whole()
+        if (superseded()) return
+      }
+      const key = partKey(plan.only)
+      const held = job.parts.get(key) ?? { last: null, table: null }
+      job.parts.set(key, held)
+      if (!numbered()) {
+        /* No full build to read numbers from, and the one just tried failed:
+           what it said is what there is to say about this part too. */
+        held.last = job.last
+        return
+      }
+      let made = await partOnce(epic, project, root, plan.only, job, superseded, ask.force === true)
+      if (made === 'superseded') return
+      /* `??` where a number should be, read from numbers older than the text:
+         the whole paper is compiled, and the part again from what it left. */
+      if (made.unresolved.length && stale()) {
+        await whole()
+        if (superseded()) return
+        if (job.last?.ok) {
+          made = await partOnce(epic, project, root, plan.only, job, superseded, false)
+          if (made === 'superseded') return
+        }
+      }
+      held.last = made.last
+    } finally {
+      job.running = false
+      job.child = null
+    }
+  })
+  job.tail = run.catch(() => undefined)
+  await job.tail
+  while (mine !== job.generation) {
+    const newest = job.generation
+    await job.tail
+    if (newest === job.generation) break
+  }
+  const build = buildStatus(epic, project)
+  return build ? { build, part: partStatus(epic, project, files) } : null
+}
+
+function sameHashes(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key])
+}
+
+/**
+ * The paper's folder, mirrored with links, for an engine that reads nowhere else.
+ *
+ * Tectonic finds `\input` files — and the `.aux` files `\includeonly` reads —
+ * in the folder its main file is in, and has no way to be told another. The
+ * paper's folder is not somewhere an `.aux` may be put. So the folder is
+ * mirrored: every entry a link to the paper's own, except the folders an
+ * intermediate has to sit in, which are real folders of links. The
+ * intermediates are copied in beside them, the full build's `main.*` under the
+ * name of the two-line file that is compiled here, and that file is written.
+ * Made again for every run, since the paper's folder may have gained a file.
+ */
+function mirror(root: string, tree: string, aux: string, only: readonly string[]): void {
+  rmSync(tree, { recursive: true, force: true })
+  mkdirSync(tree, { recursive: true })
+  const kept = filesUnder(aux)
+  const real = new Set<string>()
+  for (const name of kept) for (let dir = dirname(name); dir !== '.'; dir = dirname(dir)) real.add(dir)
+  const link = (at: string, depth: number): void => {
+    for (const name of names(join(root, at))) {
+      /* Dot-entries are a repository's and an editor's; no paper names one. */
+      if (name.startsWith('.')) continue
+      const here = at ? join(at, name) : name
+      if (real.has(here) && depth < 6) {
+        mkdirSync(join(tree, here), { recursive: true })
+        link(here, depth + 1)
+      } else symlinkSync(join(root, here), join(tree, here))
+    }
+  }
+  link('', 0)
+  for (const name of kept) {
+    const to = join(tree, name.startsWith('main.') ? `${DRIVER}${name.slice('main'.length)}` : name)
+    mkdirSync(dirname(to), { recursive: true })
+    /* A link by that name is the paper's own leftover `.aux`: the build's replaces it here, in the mirror. */
+    rmSync(to, { force: true })
+    copyFileSync(join(aux, name), to)
+  }
+  writeFileSync(join(tree, `${DRIVER}.tex`), driverText(only))
+}
+
+/**
+ * One compile of one selection.
+ *
+ * Skipped altogether when the last good PDF of this selection was made by
+ * this engine from this text and these numbers (`stamp`): coming back to a
+ * part is then a read of a folder. `again` compiles regardless.
+ */
+async function partOnce(
+  epic: string,
+  project: string | null,
+  root: string,
+  only: readonly string[],
+  job: Job,
+  superseded: () => boolean,
+  again: boolean,
+): Promise<'superseded' | { last: BuildStatus['last']; unresolved: string[] }> {
+  const started = Date.now()
+  const paper = readPaper(epic, project)
+  const hashes = hashesOf(epic, project) ?? {}
+  const source = (() => {
+    try {
+      return readFileSync(join(root, MAIN), 'utf8')
+    } catch {
+      return ''
+    }
+  })()
+  const chosen = chooseEngine(engines(), namedEngine(source), needsBiber(source))
+  const key = partKey(only)
+  const was = job.parts.get(key)?.last ?? null
+  if (!chosen.ok) return { last: was, unresolved: [] }
+  const engine = chosen.engine
+
+  const dir = buildDir(root)
+  const whole = readMeta(dir)
+  const aux = join(dir, 'good', 'aux')
+  const pdir = partDir(root, key)
+  const work = join(pdir, 'work')
+  const good = join(pdir, 'good')
+  const stamp = createHash('sha256')
+    .update([engine.name, only.join('\0'), whole?.aux ?? '', JSON.stringify(Object.entries(hashes).sort())].join('\n'))
+    .digest('hex')
+    .slice(0, 24)
+
+  const before = readPartMeta(pdir)
+  if (!again && before?.stamp === stamp) {
+    used(pdir)
+    return { last: was ?? { ok: true, at: before.at, ms: 0, engine: before.engine, timedOut: false, problems: [], tail: '' }, unresolved: before.unresolved ?? [] }
+  }
+
+  const tectonic = engine.name === 'tectonic'
+  const tree = join(pdir, 'tree')
+  try {
+    mkdirSync(work, { recursive: true })
+    mkdirSync(good, { recursive: true })
+    for (const file of paper?.files ?? []) {
+      const sub = dirname(file)
+      if (sub !== '.') mkdirSync(join(work, sub), { recursive: true })
+    }
+    if (tectonic) mirror(root, tree, aux, only)
+    else {
+      /* The full build's numbers, laid over what this folder holds — when they
+         are newer than the ones laid here last. Not emptied first: what
+         `latexmk` remembers about this folder is why an edit is one pass. */
+      const seeded = join(work, '.seed')
+      let seed = ''
+      try {
+        seed = readFileSync(seeded, 'utf8')
+      } catch {
+        /* Never seeded. */
+      }
+      if (seed !== (whole?.aux ?? '')) {
+        for (const name of filesUnder(aux)) {
+          mkdirSync(dirname(join(work, name)), { recursive: true })
+          copyFileSync(join(aux, name), join(work, name))
+        }
+        writeFileSync(seeded, whole?.aux ?? '')
+      }
+    }
+  } catch (error) {
+    return { last: failed(engine, started, `The build folder ${pdir} could not be made: ${(error as Error).message}`), unresolved: [] }
+  }
+
+  const base = tectonic ? DRIVER : 'main'
+  const made = join(work, `${base}.pdf`)
+  /* A PDF left by the run before must not be mistaken for this run's: an engine that halts leaves it. */
+  rmSync(made, { force: true })
+  const runs = partRunsFor(engine, tectonic ? `${DRIVER}.tex` : MAIN, work, onlyLine(only))
+  const went = await runAll(runs, tectonic ? tree : root, engine, started, job, superseded)
+  if (went === 'superseded') return 'superseded'
+  if ('error' in went) return { last: failed(engine, started, `${engine.name} could not be started: ${went.error}`), unresolved: [] }
+  const { output, timedOut, code } = went
+
+  const resolve = (name: string): string | null => {
+    const files = paper?.files ?? [MAIN]
+    const plain = (relativeInput(name, root) ?? relativeInput(name, tree) ?? name).replace(/^\.\//, '')
+    return files.find((file) => file === plain || file === `${plain}.tex`) ?? null
+  }
+  const log = logOf(join(work, `${base}.log`))
+  const problems = problemsFrom(output, log, resolve, biberAdvice)
+  if (timedOut) {
+    problems.unshift({ severity: 'error', file: null, line: null, message: `${engine.name} was stopped after ${Math.round(TIMEOUT_MS / 1000)} seconds without finishing.` })
+  }
+  const missing = unresolved(log)
+
+  const ok = !timedOut && code === 0 && existsSync(made)
+  if (ok) {
+    try {
+      const pdf = readFileSync(made)
+      const id = createHash('sha256').update(pdf).digest('hex').slice(0, 16)
+      let pages: number | null = null
+      let map: Record<string, PageSpan[]> = {}
+      const sync = join(work, `${base}.synctex.gz`)
+      const held = job.parts.get(key) ?? { last: null, table: null }
+      job.parts.set(key, held)
+      if (existsSync(sync)) {
+        const read = tableFrom(sync)
+        if (read) {
+          const table = rebased(read, [tree], root)
+          pages = table.pages
+          map = pageMap(table, root)
+          held.table = { id, table }
+        }
+        copyFileSync(sync, join(good, `${SYNC}.tmp`))
+        renameSync(join(good, `${SYNC}.tmp`), join(good, SYNC))
+      } else {
+        rmSync(join(good, SYNC), { force: true })
+        held.table = null
+      }
+      /* Copied, not moved: the engine's own folder keeps its PDF, which is what tells `latexmk` there is nothing to do. */
+      writeFileSync(join(good, `${PDF}.tmp`), pdf)
+      renameSync(join(good, `${PDF}.tmp`), join(good, PDF))
+      const meta: PartMeta = { id, at: Date.now(), pages, engine: engine.name, hashes, map, only: [...only], stamp, unresolved: missing }
+      writeFileSync(join(good, `${META}.tmp`), JSON.stringify(meta))
+      renameSync(join(good, `${META}.tmp`), join(good, META))
+      used(pdir)
+      evict(root, key, job)
+    } catch (error) {
+      return { last: failed(engine, started, `The PDF was made and could not be kept: ${(error as Error).message}`), unresolved: [] }
+    }
+  } else if (!problems.some((one) => one.severity === 'error')) {
+    problems.unshift({
+      severity: 'error',
+      file: null,
+      line: null,
+      message: `${engine.name} stopped without making a PDF of the picked part and without naming an error. Its last words are below.`,
+    })
+  }
+
+  return {
+    last: { ok, at: Date.now(), ms: Date.now() - started, engine: engine.name, timedOut, problems, tail: tailOf(output) },
+    unresolved: ok ? missing : [],
+  }
+}
+
+/** Say that a selection's build was used just now: what `evict` orders by. */
+function used(pdir: string): void {
+  try {
+    const now = new Date()
+    utimesSync(pdir, now, now)
+  } catch {
+    /* It is then the first to go, and is made again when asked for. */
+  }
+}
+
+/** Remove the selections not used lately. `pdir` paths are built from the temp directory and hex digests: see `once`. */
+function evict(root: string, current: string, job: Job): void {
+  const parts = join(buildDir(root), 'parts')
+  const kept = names(parts)
+    .filter((name) => PART_KEY.test(name))
+    .map((key) => {
+      try {
+        return { key, used: statSync(join(parts, key)).mtimeMs }
+      } catch {
+        return { key, used: 0 }
+      }
+    })
+  for (const key of toEvict(kept, KEPT_PARTS, current)) {
+    rmSync(join(parts, key), { recursive: true, force: true })
+    job.parts.delete(key)
+  }
 }
 
 /** For tests: forget every job. The folders in the temp directory are left; a test makes its own paper and so its own hash. */

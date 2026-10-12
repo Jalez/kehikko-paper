@@ -269,17 +269,58 @@ export interface Run {
  */
 export function runsFor(engine: Engine, main: string, out: string): Run[] {
   if (engine.name === 'tectonic') {
-    const base = ['-X', 'compile', '--untrusted', '--synctex', '--keep-logs', '--outdir', out]
+    const base = [...TECTONIC, '--outdir', out]
     return [
       { argv: [engine.path, ...base, '--only-cached', main], cachedOnly: true },
       { argv: [engine.path, ...base, main] },
     ]
   }
-  const tex = ['-no-shell-escape', '-interaction=nonstopmode', '-halt-on-error', '-file-line-error', '-synctex=1']
   if (engine.name === 'latexmk') {
-    return [{ argv: [engine.path, '-norc', '-pdf', ...tex, `-outdir=${out}`, main] }]
+    return [{ argv: [engine.path, '-norc', '-pdf', ...TEX, `-outdir=${out}`, main] }]
   }
-  const once: Run = { argv: [engine.path, ...tex, `-output-directory=${out}`, main] }
+  const once: Run = { argv: [engine.path, ...TEX, `-output-directory=${out}`, main] }
+  return [once, once]
+}
+
+/**
+ * `--keep-intermediates`, because Tectonic otherwise holds the `.aux` files in
+ * memory and drops them: the next compile of one part reads every other
+ * chapter's numbers from them (`part.ts`). They go to `--outdir` like the rest,
+ * never beside the paper.
+ */
+const TECTONIC = ['-X', 'compile', '--untrusted', '--synctex', '--keep-logs', '--keep-intermediates']
+const TEX = ['-no-shell-escape', '-interaction=nonstopmode', '-halt-on-error', '-file-line-error', '-synctex=1']
+
+/**
+ * The runs that compile only some of a paper's `\include`d files into `out`.
+ *
+ * `ahead` is the `\includeonly{…}` line (`onlyLine` in `part.ts`), given from
+ * outside the paper. How "outside" is spelled is the engine's:
+ *
+ *  - **`latexmk`** has `-usepretex`, which puts TeX code in front of the file.
+ *    It also gets `-bibtex-`: the bibliography is the whole paper's, and a
+ *    biber run over a part's citations alone would renumber it. The `.bbl` the
+ *    last full build made is in `out` already.
+ *  - **The bare engines** take the code and an `\input` in place of a file
+ *    name, and `-jobname` so the output is still called `main`.
+ *  - **Tectonic** takes a file name and nothing else, so `main` is here the
+ *    two-line file `driverText` writes, in the folder `build.ts` runs it in.
+ *
+ * `out` already holds the last full build's `.aux` files: see `build.ts`.
+ */
+export function partRunsFor(engine: Engine, main: string, out: string, ahead: string): Run[] {
+  if (engine.name === 'tectonic') {
+    const base = [...TECTONIC, '--outdir', out]
+    return [
+      { argv: [engine.path, ...base, '--only-cached', main], cachedOnly: true },
+      { argv: [engine.path, ...base, main] },
+    ]
+  }
+  if (engine.name === 'latexmk') {
+    return [{ argv: [engine.path, '-norc', '-pdf', '-bibtex-', ...TEX, `-outdir=${out}`, `-usepretex=${ahead}`, main] }]
+  }
+  const job = main.replace(/\.tex$/, '')
+  const once: Run = { argv: [engine.path, ...TEX, `-output-directory=${out}`, `-jobname=${job}`, `${ahead}\\input{${main}}`] }
   return [once, once]
 }
 

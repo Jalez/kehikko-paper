@@ -58,7 +58,7 @@ describe('what an engine is told', () => {
     const runs = runsFor(at('tectonic'), 'main.tex', '/tmp/out')
     expect(runs).toHaveLength(2)
     expect(runs[0]).toEqual({
-      argv: ['/opt/homebrew/bin/tectonic', '-X', 'compile', '--untrusted', '--synctex', '--keep-logs', '--outdir', '/tmp/out', '--only-cached', 'main.tex'],
+      argv: ['/opt/homebrew/bin/tectonic', '-X', 'compile', '--untrusted', '--synctex', '--keep-logs', '--keep-intermediates', '--outdir', '/tmp/out', '--only-cached', 'main.tex'],
       cachedOnly: true,
     })
     expect(runs[1]!.argv).not.toContain('--only-cached')

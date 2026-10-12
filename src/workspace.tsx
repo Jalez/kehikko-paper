@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Button } from '@/components/ui/button.tsx'
 import { cn } from '@/lib/utils.ts'
 
+import type { PartStatus } from '../compile/build.ts'
 import type { Problem } from '../compile/log.ts'
 import { pageOfLine, type PageRect } from '../compile/synctex.ts'
 import { plainText } from '../latex/parse.ts'
@@ -13,7 +14,23 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import { MAIN_FILE, emptySaid, fileAfterTicks, fileOnOpening, filesShown, narrowed, pagesShown, tabsOf, ticksOf, type Narrowed } from './focus.ts'
+import {
+  MAIN_FILE,
+  coveredBy,
+  emptySaid,
+  fileAfterTicks,
+  fileOnOpening,
+  filesShown,
+  narrowed,
+  pageOfSheet,
+  pagesOfSheets,
+  pagesShown,
+  partOf,
+  sheetsOf,
+  tabsOf,
+  ticksOf,
+  type Narrowed,
+} from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
@@ -94,9 +111,19 @@ import { useTheme } from './use-theme.ts'
  * **A pointer from elsewhere still arrives.** A note, a question or a slide
  * may point at a passage in a file no picked part owns. It is opened and
  * marked exactly as before, the sentence about it says it is outside the
- * picked parts, and the page it printed on is drawn, labelled as outside, for
- * as long as the mark is there. The same goes for a press on a shared sheet
- * that lands in a file outside the focus.
+ * picked parts, and the whole paper is shown at that place for as long as the
+ * mark is there — see "Which PDF is on screen", in the body.
+ *
+ * **The PDF is the picked files compiled on their own**, when the paper pulls
+ * them in with `\include` (`compile/part.ts`): a second PDF, with fewer
+ * sheets than the paper, its own SyncTeX table and its own record of which
+ * text it is of. Three things follow, and each is kept in one place here.
+ * Whatever is asked about a place on screen is asked of the PDF on screen
+ * (`screen`, `buildId`). Whatever is SAID about a place — to the canvas, in
+ * the toolbar, on a sheet — is a page of the paper and never a sheet of the
+ * part's PDF (`pageAt`, `partNumbers`). And a save compiles the part alone;
+ * the whole paper is compiled when the person leaves the part (`recompile`,
+ * and the effects beside it).
  *
  * **There is no "show everything" here, and no line about the pick.** The
  * host's bar says what is picked, and that is where it is lifted. A second switch on this
@@ -150,8 +177,13 @@ export function Workspace({
   settle?: number
 }) {
   const theme = useTheme()
-  const { build, compiling, compile, refresh } = useBuild(paper.epic)
+  const { build, part, compiling, compile, compilePart, seePart, refresh } = useBuild(paper.epic)
   const { setPaper, setProposals, setSaid } = wire
+  /* What "compile" means just now: the whole paper, or — with parts picked
+     whose files can be compiled on their own — those files. Decided further
+     down, where the pick is known, and reached from here through a ref because
+     a save lands in a callback made before any of that. */
+  const recompile = useRef<() => void>(() => void compile())
 
   const onLanded = useCallback(
     (landed: Landed) => {
@@ -159,9 +191,9 @@ export function Workspace({
       if (Array.isArray(landed.proposals)) setProposals(landed.proposals)
       if (landed.said) setSaid(landed.said)
       /* The save reached the disk, so the PDF on screen is now of older text. */
-      void compile()
+      recompile.current()
     },
-    [compile, setPaper, setProposals, setSaid],
+    [setPaper, setProposals, setSaid],
   )
   const source = useSource({ paper, disk: wire.disk, onLanded, saveDelay })
   const { file, doc } = source
@@ -178,6 +210,50 @@ export function Workspace({
   )
   const focusRef = useRef(focus)
   focusRef.current = focus
+  /* ---- The picked parts compiled on their own ---------------------------- */
+
+  /* Whether the picked files can be compiled alone, and as what (`partOf`):
+     `only` is what `\includeonly` is given, or null — nothing picked, a pick
+     that owns no file, or files that cannot be (the pane then says which, in
+     `plan.cannot`). Held as strings: the paper is re-read after every save,
+     and a selection that has not changed must not look as though it had. */
+  const plan = partOf(focus, paper)
+  const cannot = plan?.cannot ?? null
+  const onlyKey = plan?.only ? plan.only.join('\n') : null
+  const pickedKey = onlyKey !== null && focus ? focus.files.join('\n') : null
+  /* Every file the part's own PDF is of: the picked ones and what they pull in. */
+  const coveredKey = pickedKey !== null && focus ? coveredBy(focus.files, paper).join('\n') : ''
+  const covered = useMemo(() => (coveredKey ? coveredKey.split('\n') : NO_FILES), [coveredKey])
+  /* What the server last said about THIS selection. */
+  const heard = part !== null && part.files === pickedKey ? part : null
+  const own = heard?.status ?? null
+  /* The part's PDF to draw: this selection's own, once there is one. Until
+     then the pages its files printed in the whole paper are what is on screen,
+     as they always were under a pick — with `\include` those are the same
+     sheets, of the last full build — so a tick shows the right chapter at
+     once and the part's own PDF takes its place when it is made. Held in a
+     ref so that a status re-read that changes nothing is the same object. */
+  const drawn = useRef<DrawnPart | null>(null)
+  if (pickedKey === null || onlyKey === null || !own?.pdf || !own.key) drawn.current = null
+  else if (drawn.current?.pdf.id !== own.pdf.id || drawn.current.kind !== onlyKey || drawn.current.covered !== covered) {
+    drawn.current = { kind: onlyKey, key: own.key, pdf: own.pdf, covered }
+  }
+  const partDrawn = drawn.current
+
+  /* A pick is compiled once it has held still for a moment, the whole paper
+     first when it is not of the text on disk (`full`): the pick changing is
+     the person leaving the part they were in, and the next part reads every
+     other chapter's numbers from the whole paper's last build. What stands
+     from before — a reload, a selection come back to — is asked for at once
+     and drawn while that is found out. */
+  useEffect(() => {
+    if (pickedKey === null) return
+    const files = pickedKey.split('\n')
+    void seePart(files)
+    const timer = setTimeout(() => void compilePart(files, { full: true }), PICK_SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [paper.epic, pickedKey, seePart, compilePart])
+
   /** Whether a file is outside what is picked. Never, when nothing is. */
   const isOutside = useCallback((name: string) => !ticked.inFocus({ file: name }), [ticked])
   const outsideSaid = focus ? `the picked part${focus.parts.length === 1 ? '' : 's'}` : ''
@@ -234,7 +310,13 @@ export function Workspace({
   }, [paper.epic])
   const ticksRef = useRef(ticks)
   ticksRef.current = ticks
-  const onPdfScrolled = useCallback((top: number) => rememberPdf(standingIn(), paper.epic, { top, ticks: ticksRef.current }), [paper.epic])
+  const onPdfScrolled = useCallback(
+    (top: number) => {
+      /* Not while the whole paper is on screen for a mark outside the picked part: that is a visit, at another length, and not where the reader was. */
+      if (!calledNow.current) rememberPdf(standingIn(), paper.epic, { top, ticks: ticksRef.current })
+    },
+    [paper.epic],
+  )
   const followed = useRef<{ epic: string; ticks: string } | null>(null)
   const midEdit = source.state !== 'saved'
   useEffect(() => {
@@ -266,20 +348,23 @@ export function Workspace({
      was accepted. The PDF follows that too. */
   const taken = source.taken
   useEffect(() => {
-    if (taken > 0) void compile()
-  }, [taken, compile])
+    if (taken > 0) recompile.current()
+  }, [taken])
 
   /* On opening: compile when there is an engine and no PDF of THIS text. Once
      per text, so a paper that does not compile is not retried in a loop. */
   const tried = useRef('')
   useEffect(() => {
-    if (!build || !build.engine || compiling) return
+    /* Not while parts are compiled on their own: their own request compiles
+       the whole paper when it has to (above). Lifting the pick comes through
+       here, and the paper — stale by then, if anything was typed — is made. */
+    if (!build || !build.engine || compiling || pickedKey !== null) return
     const stamp = `${paper.epic}\0${Object.entries(paper.hashes).sort().join('|')}`
     if (tried.current === stamp) return
     const fresh = build.pdf !== null && sameHashes(build.pdf.hashes, paper.hashes)
     tried.current = stamp
     if (!fresh) void compile()
-  }, [build, compiling, compile, paper.epic, paper.hashes])
+  }, [build, compiling, compile, paper.epic, paper.hashes, pickedKey])
 
   const [tab, setTab] = useState<'source' | 'pdf'>('source')
   const tabRef = useRef(tab)
@@ -428,7 +513,24 @@ export function Workspace({
   const here = useMemo(() => (doc ? sectionAt(sections, file, fromByte) : null), [doc, sections, file, fromByte])
 
   const map = build?.pdf?.map ?? null
-  const page = useMemo(() => (map ? pageOfLine(map, file, fromLine) : null), [map, file, fromLine])
+  /* The page of the PAPER a line is on. Read off the part's own build when
+     there is one and the file is in it — it is the newer of the two while
+     somebody types in a part — and turned from a sheet of that PDF into a page
+     of the paper, which is the only number that leaves this module. */
+  const partMap = own?.pdf?.map ?? null
+  const pageAt = useCallback(
+    (name: string, line: number): number | null => {
+      if (!map) return null
+      if (partMap && covered.includes(name)) {
+        const sheet = pageOfLine(partMap, name, line)
+        const known = sheet === null ? null : pageOfSheet(sheet, partMap, map, covered)
+        if (known !== null) return known
+      }
+      return pageOfLine(map, name, line)
+    },
+    [map, partMap, covered],
+  )
+  const page = useMemo(() => pageAt(file, fromLine), [pageAt, file, fromLine])
 
   /* ---- Remembering where this is, for the next time the page loads ------- */
 
@@ -481,7 +583,53 @@ export function Workspace({
     [wandered],
   )
 
-  const [foreignRects, setForeignRects] = useState<PageRect[]>([])
+  const selecting = to > from
+  /* ---- Which PDF is on screen --------------------------------------------- */
+
+  /* With parts compiled on their own there are two PDFs: the part's, and the
+     whole paper's. The part's is the one drawn — except while something is
+     marked that it has no page for. A passage a neighbour pointed at in a file
+     outside the picked ones, a change that landed in one, and the person's
+     own selection or "Show in PDF" in a file kept open outside them: the
+     whole paper is then shown, at that place, for as long as that mark is up,
+     and the part's PDF comes back when it is taken down. Decided by WHICH FILE
+     the mark is in and by nothing that arrives later — not by rectangles, not
+     by a build finishing — so it cannot go back and forth by itself. A bare
+     caret in a file outside is not a mark anybody asked for and calls nothing.
+
+     The same holds for a pick that cannot be compiled on its own (`cannot`):
+     nothing is in a part's PDF then, the pane says why, and a mark still
+     brings the whole paper. */
+  const [shownOutside, setShownOutside] = useState(false)
+  useEffect(() => setShownOutside(false), [file, from, to, ticks])
+  const called =
+    plan !== null && ((foreign !== null && !covered.includes(foreign.file)) || ((selecting || shownOutside) && !covered.includes(file)))
+  const onPart = partDrawn !== null && !called
+  /* Everything asked about a place on screen is asked of the PDF on screen. */
+  const buildId = onPart ? partDrawn.pdf.id : (build?.pdf?.id ?? null)
+  const screen = useRef<DrawnPart | null>(null)
+  screen.current = onPart ? partDrawn : null
+  const wholeStale = build?.pdf ? !sameHashes(build.pdf.hashes, paper.hashes) : false
+
+  recompile.current = () => {
+    if (pickedKey === null) void compile()
+    /* The whole paper is on screen for a mark outside the part: it is what has to follow the text. */
+    else void compilePart(pickedKey.split('\n'), called ? { full: true } : {})
+  }
+  /* The whole paper was called onto the screen and is of older text than the
+     disk's, as it is by design while a part is worked in: it is made current.
+     Once per call — a paper that does not compile is not retried in a loop. */
+  useEffect(() => {
+    if (called && pickedKey !== null && wholeStale) void compilePart(pickedKey.split('\n'), { full: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [called, pickedKey])
+
+  /* Rectangles are in the sheets of the PDF they were asked of (`of`: that
+     build). They are drawn on that PDF and no other: when the pane turns from
+     the whole paper to a part's own, what was asked of the one is not a place
+     in the other, and is not shown for the moment it takes to ask again. */
+  const [foreignHeld, setForeignRects] = useState<AskedRects>(NO_RECTS)
+  const foreignRects = foreignHeld.of === buildId ? foreignHeld.rects : NO_RECTS.rects
   const foreignDoc = foreign ? source.docs.get(foreign.file) : undefined
   const foreignText = foreignDoc?.text
 
@@ -498,7 +646,13 @@ export function Workspace({
      come down: the same page goes on being read out and said. */
   const markedOn = useRef<{ at: string; page: number } | null>(null)
   const showingAt = showing ? `${showing.file}\0${showing.from}` : ''
-  if (showing && foreign === showing && foreignRects[0]) markedOn.current = { at: showingAt, page: foreignRects[0].page }
+  if (showing && foreign === showing && foreignRects[0]) {
+    /* A rectangle is in the sheets of the PDF it was asked of. On a part's own
+       PDF that is not a page of the paper, and it is turned into one here. */
+    const drawnOn = foreignRects[0].page
+    const paged = !onPart ? drawnOn : map ? pageOfSheet(drawnOn, partDrawn.pdf.map, map, partDrawn.covered) : null
+    markedOn.current = paged === null ? null : { at: showingAt, page: paged }
+  }
   const marked = markedOn.current?.at === showingAt ? markedOn.current.page : null
   const shown = useMemo(
     () =>
@@ -509,11 +663,11 @@ export function Workspace({
           marked,
           mapped:
             map && showingText !== undefined && showingDoc
-              ? pageOfLine(map, showing.file, lineAt(showingText, indexAt(showingText, showing.from, showingDoc.eol)))
+              ? pageAt(showing.file, lineAt(showingText, indexAt(showingText, showing.from, showingDoc.eol)))
               : null,
         },
       ),
-    [page, here, showing, sections, marked, map, showingText, showingDoc],
+    [page, here, showing, sections, marked, map, pageAt, showingText, showingDoc],
   )
 
   /* ---- What this page says to the canvas -------------------------------- */
@@ -709,17 +863,19 @@ export function Workspace({
 
   /* ---- Source to PDF ---------------------------------------------------- */
 
-  const buildId = build?.pdf?.id ?? null
-  const [ownRects, setOwnRects] = useState<PageRect[]>([])
-  const [reveal, setReveal] = useState<{ nonce: number } | null>(null)
+  const [ownHeld, setOwnRects] = useState<AskedRects>(NO_RECTS)
+  const ownRects = ownHeld.of === buildId ? ownHeld.rects : NO_RECTS.rects
+  /* `part` says which PDF the mark to go to is on: the other one is not scrolled. */
+  const [reveal, setReveal] = useState<{ nonce: number; part: boolean } | null>(null)
+  const turnTo = useCallback(() => setReveal((was) => ({ nonce: (was?.nonce ?? 0) + 1, part: screen.current !== null })), [])
   /* Set by "Show in PDF": reveal even though only a caret is placed. */
   const wanted = useRef(false)
   const [asked, setAsked] = useState(0)
-  const selecting = to > from
 
   const ask = useCallback(
     async (name: string, first: number, last: number, nearest = false): Promise<PageRect[]> => {
-      const body = await json('/api/sync', { epic: paper.epic, file: name, line: String(first), to: String(last) })
+      const on = screen.current
+      const body = await json('/api/sync', { epic: paper.epic, file: name, line: String(first), to: String(last), ...(on ? { part: on.key } : {}) })
       const found = body.found as { rects?: PageRect[]; exact?: boolean } | null | undefined
       /* An inexact answer is SyncTeX's nearest recorded line — a caret on a
          comment or in the preamble has none of its own. Drawing a box round a
@@ -733,7 +889,7 @@ export function Workspace({
 
   useEffect(() => {
     if (!buildId || !doc) {
-      setOwnRects([])
+      setOwnRects(NO_RECTS)
       return
     }
     let stopped = false
@@ -741,14 +897,14 @@ export function Workspace({
       void ask(file, fromLine, toLine, wanted.current)
         .then((rects) => {
           if (stopped) return
-          setOwnRects(rects)
+          setOwnRects({ of: buildId, rects })
           /* A SELECTION is followed; a caret moving is not, or the page would
              slide under every arrow key. Nor is the selection this page put
              back itself: the PDF was put back too, to where IT was. */
           const now = spot.current
           const back = putBack.current
           const restored = back !== null && back.file === now.file && back.from === now.from && back.to === now.to
-          if (rects.length && ((selecting && !restored) || wanted.current)) setReveal((was) => ({ nonce: (was?.nonce ?? 0) + 1 }))
+          if (rects.length && ((selecting && !restored) || wanted.current)) turnTo()
           wanted.current = false
         })
         .catch(() => {})
@@ -757,18 +913,18 @@ export function Workspace({
       stopped = true
       clearTimeout(timer)
     }
-  }, [buildId, doc === null, file, fromLine, toLine, selecting, ask, settle, asked])
+  }, [buildId, doc === null, file, fromLine, toLine, selecting, ask, settle, asked, turnTo])
 
   /* A change is marked on the PDF only once the PDF is OF the text it is in.
      Until the compile that follows a landing has finished, the page on screen
      is the build before it: the new words are not there to be found, and the
      mark was the whole source line — three printed lines — for a dozen seconds
      and then snapped to the word. The source's mark does not wait. */
-  const behind = theirs === null && noted !== null && build?.pdf?.hashes[noted.file] !== foreignDoc?.hash
+  const behind = theirs === null && noted !== null && (onPart ? partDrawn.pdf.hashes : build?.pdf?.hashes)?.[noted.file] !== foreignDoc?.hash
   const turns = theirs !== null || noted?.reveal === true
   useEffect(() => {
     if (!buildId || !foreign || foreignText === undefined || !foreignDoc || behind) {
-      setForeignRects([])
+      setForeignRects(NO_RECTS)
       return
     }
     let stopped = false
@@ -777,15 +933,15 @@ export function Workspace({
     void ask(foreign.file, first, Math.max(first, last), true)
       .then((rects) => {
         if (stopped) return
-        setForeignRects(rects)
-        if (rects.length && turns) setReveal((was) => ({ nonce: (was?.nonce ?? 0) + 1 }))
+        setForeignRects({ of: buildId, rects })
+        if (rects.length && turns) turnTo()
       })
       .catch(() => {})
     return () => {
       stopped = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, behind, turns])
+  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, behind, turns, turnTo])
 
   const marks = useMemo<PdfMark[]>(() => {
     const out: PdfMark[] = []
@@ -809,16 +965,31 @@ export function Workspace({
      any a mark is on, so that nothing this page points at is ever on a sheet
      that is not there. Null when nothing is picked: every page, as always. */
   const sheets = useMemo(() => {
-    if (!focus || focus.pages === null) return null
+    /* Called onto the screen for a mark outside the part: the whole paper, whole. */
+    if (!focus || focus.pages === null || called) return null
     return pagesShown(focus, marks.flatMap((mark) => mark.rects.map((rect) => rect.page)))
-  }, [focus, marks])
+  }, [focus, marks, called])
+  /* The same for the part's own PDF, in ITS sheets: the ones its files
+     printed — its title page and bibliography are `main.tex`'s, and are left
+     out as they are from the whole paper — and what page of the paper each
+     sheet is, for everything said about one. */
+  const partSheets = useMemo(() => {
+    if (!onPart || !focus || partDrawn.pdf.pages === null) return null
+    return pagesShown({ ...focus, pages: sheetsOf(partDrawn.covered, partDrawn.pdf.map) }, marks.flatMap((mark) => mark.rects.map((rect) => rect.page)))
+  }, [onPart, partDrawn, focus, marks])
+  const partNumbers = useMemo(
+    () => (partDrawn && partDrawn.pdf.pages !== null && map ? pagesOfSheets(partDrawn.pdf.pages, partDrawn.pdf.map, map, partDrawn.covered) : null),
+    [partDrawn, map],
+  )
 
   const showInPdf = () => {
     setTab('pdf')
-    if (!buildId) {
+    if (!build?.pdf) {
       setSaid('There is no compiled PDF yet to show this in.')
       return
     }
+    /* In a file the part's own PDF has no page for: the whole paper is called for. */
+    if (plan !== null && !covered.includes(file)) setShownOutside(true)
     /* Asked again rather than reusing what is drawn: a caret on a line with
        no record of its own draws nothing until somebody asks for the nearest. */
     wanted.current = true
@@ -829,7 +1000,9 @@ export function Workspace({
 
   const onPoint = useCallback(
     (at: { page: number; x: number; y: number; word: string | null }) => {
-      void json('/api/sync', { epic: paper.epic, page: String(at.page), x: at.x.toFixed(2), y: at.y.toFixed(2) })
+      /* `at.page` is a sheet of the PDF that was pressed, and that PDF is the one asked. */
+      const on = screen.current
+      void json('/api/sync', { epic: paper.epic, page: String(at.page), x: at.x.toFixed(2), y: at.y.toFixed(2), ...(on ? { part: on.key } : {}) })
         .then((body) => {
           const found = body.found as { file?: string; line?: number } | null | undefined
           if (!found?.file || !found.line) {
@@ -851,7 +1024,9 @@ export function Workspace({
 
   /* ---- The engine's complaints ------------------------------------------ */
 
-  const problems = build?.last?.problems ?? NONE
+  /* The run whose words are on screen: the part's own while parts are compiled alone, the whole paper's otherwise. */
+  const ran = (pickedKey !== null ? own?.last : null) ?? build?.last ?? null
+  const problems = ran?.problems ?? NONE
   const inThisFile = useMemo(
     () =>
       problems
@@ -863,13 +1038,40 @@ export function Workspace({
         .map((one) => ({ line: one.line, severity: one.severity, message: one.message })),
     [problems, file],
   )
-  const failed = build?.last ? !build.last.ok : false
+  const failed = ran ? !ran.ok : false
   const errors = problems.filter((one) => one.severity === 'error')
   const warnings = problems.filter((one) => one.severity === 'warning')
   const [showLog, setShowLog] = useState(false)
 
-  const stale = build?.pdf ? !sameHashes(build.pdf.hashes, paper.hashes) : false
+  /* Of the PDF on screen. A part's own is of its own files and `main.tex`: another chapter edited since is not in it to be behind. */
+  const stale = onPart ? [MAIN_FILE, ...partDrawn.covered].some((one) => partDrawn.pdf.hashes[one] !== paper.hashes[one]) : wholeStale
   const pdfUrl = build?.pdf ? apiUrl('/api/pdf', { epic: paper.epic, build: build.pdf.id }) : null
+  const partUrl = partDrawn ? apiUrl('/api/pdf', { epic: paper.epic, part: partDrawn.key, build: partDrawn.pdf.id }) : null
+  /* A pick that cannot be compiled on its own draws no page — `cannot` is said instead — until a mark calls the whole paper. */
+  const silent = cannot !== null && !called
+  /* On opening with a part picked, nothing is drawn until the server has said
+     whether that part has a PDF of its own: the whole paper flashing up for a
+     moment first is the reload this page is otherwise careful not to show. */
+  const drew = useRef(false)
+  const awaited = pickedKey !== null && heard === null && partDrawn === null && !drew.current
+  const wholeShown = pdfUrl !== null && !onPart && !silent && !awaited
+  useEffect(() => {
+    if (wholeShown || onPart) drew.current = true
+  }, [wholeShown, onPart])
+  const partKind = partDrawn?.kind ?? null
+  const partFrom = useMemo(
+    () => (partKind === null ? 0 : (pdfWas(standingIn(), paper.epic, partKind)?.top ?? 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [paper.epic, partKind],
+  )
+  const onPartScrolled = useCallback(
+    (top: number, kind?: string) => {
+      if (kind) rememberPdf(standingIn(), paper.epic, { top, ticks: ticksRef.current }, kind)
+    },
+    [paper.epic],
+  )
+  const calledNow = useRef(called)
+  calledNow.current = called
 
   /* ---- Suggestions, and the Auto tick ----------------------------------- */
 
@@ -1023,8 +1225,8 @@ export function Workspace({
       ? 'No engine'
       : compiling || build.running
         ? 'Compiling…'
-        : build.last
-          ? `${build.last.ok ? 'Compiled' : 'Failed'} · ${(build.last.ms / 1000).toFixed(1)} s`
+        : ran
+          ? `${ran.ok ? 'Compiled' : 'Failed'} · ${(ran.ms / 1000).toFixed(1)} s`
           : build.engine
 
   return (
@@ -1098,12 +1300,18 @@ export function Workspace({
           </select>
         )}
         <span className="flex-1" />
-        <span className={cn('text-muted-foreground', failed && 'text-(--gone)')} data-build={compiling ? 'running' : failed ? 'failed' : build?.last ? 'ok' : 'idle'}>
+        <span className={cn('text-muted-foreground', failed && 'text-(--gone)')} data-build={compiling ? 'running' : failed ? 'failed' : ran ? 'ok' : 'idle'}>
           {engineSays}
           {shown.page !== null && build?.pdf?.pages ? ` · p. ${shown.page}/${build.pdf.pages}` : ''}
         </span>
         {build?.engine && (
-          <Button variant="outline" size="container" disabled={compiling} onClick={() => void source.flush().then(() => compile())}>
+          <Button
+            variant="outline"
+            size="container"
+            disabled={compiling}
+            /* Asked for by hand: the whole paper, and then the picked part from it. */
+            onClick={() => void source.flush().then(() => (pickedKey !== null ? compilePart(pickedKey.split('\n'), { force: true }) : compile()))}
+          >
             Compile
           </Button>
         )}
@@ -1213,11 +1421,11 @@ export function Workspace({
         </div>
 
         <div className={cn('min-h-0 min-w-0 flex-1 flex-col @min-[720px]:flex', tab === 'pdf' ? 'flex' : 'hidden')}>
-          {(errors.length > 0 || (showLog && build?.last)) && (
+          {(errors.length > 0 || (showLog && ran)) && (
             <section className="problems max-h-[40%] shrink-0 overflow-auto border-b text-[0.72rem]" aria-label="Compile errors">
               {failed && (
                 <p className="px-2 pt-1 font-medium text-(--gone)">
-                  {build?.last?.engine} did not produce a PDF{build?.pdf ? '. The one below is the last that compiled.' : '.'}
+                  {ran?.engine} did not produce a PDF{(onPart ? partDrawn.pdf : build?.pdf) ? '. The one below is the last that compiled.' : '.'}
                 </p>
               )}
               <ul>
@@ -1243,8 +1451,8 @@ export function Workspace({
                   </li>
                 ))}
               </ul>
-              {showLog && build?.last?.tail && (
-                <pre className="text-muted-foreground border-t px-2 py-1 font-mono text-[0.65rem] whitespace-pre-wrap">{build.last.tail}</pre>
+              {showLog && ran?.tail && (
+                <pre className="text-muted-foreground border-t px-2 py-1 font-mono text-[0.65rem] whitespace-pre-wrap">{ran.tail}</pre>
               )}
             </section>
           )}
@@ -1256,23 +1464,57 @@ export function Workspace({
             <CompilerOffer build={build} onInstalled={(what, complete) => void (what === 'compiler' ? refresh() : complete ? compile() : undefined)} />
           )}
           {/* The one thing said about a focus, and only when it has left this pane empty: `emptySaid`. */}
-          {pdfUrl && sheets && sheets.pages.length === 0 && focus && emptySaid(focus) && (
+          {wholeShown && sheets && sheets.pages.length === 0 && focus && emptySaid(focus) && (
             <p className="text-muted-foreground shrink-0 px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
               {emptySaid(focus)}
             </p>
           )}
+          {onPart && partSheets && partSheets.pages.length === 0 && focus && (
+            <p className="text-muted-foreground shrink-0 px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages>
+              {emptySaid({ ...focus, pages: [] })}
+            </p>
+          )}
+          {/* And the one sentence for a pick that cannot be compiled on its own, where its pages would have been. */}
+          {silent && (
+            <p className="text-muted-foreground shrink-0 px-2 py-2 text-xs leading-relaxed" role="status" data-no-pages data-cannot>
+              {cannot}
+            </p>
+          )}
           <div className="relative min-h-0 flex-1">
+            {/* Two panes, one in front. Each keeps its own document and its own
+                place in it, so going from the part's PDF to the whole paper
+                and back is neither a load nor a lost scroll; the one behind
+                has no layout, draws nothing and is handed no marks. */}
+            {partUrl && partDrawn && (
+              <div className={cn('h-full', !onPart && 'hidden')} data-pdf="part">
+                <PreviewPane
+                  url={partUrl}
+                  kind={partDrawn.kind}
+                  marks={onPart ? marks : NO_MARKS}
+                  reveal={reveal?.part ? reveal : null}
+                  onPoint={onPoint}
+                  onOpen={() => setTab('source')}
+                  from={partFrom}
+                  onScrolled={onPartScrolled}
+                  numbers={partNumbers}
+                  total={build?.pdf?.pages ?? null}
+                  {...(partSheets ? { pages: partSheets.pages, outside: partSheets.outside, outsideOf: outsideSaid } : {})}
+                />
+              </div>
+            )}
             {pdfUrl ? (
-              <PreviewPane
-                url={pdfUrl}
-                marks={marks}
-                reveal={reveal}
-                onPoint={onPoint}
-                onOpen={() => setTab('source')}
-                from={pdfFrom}
-                onScrolled={onPdfScrolled}
-                {...(sheets ? { pages: sheets.pages, outside: sheets.outside, outsideOf: outsideSaid } : {})}
-              />
+              <div className={cn('h-full', !wholeShown && 'hidden')} data-pdf="whole">
+                <PreviewPane
+                  url={pdfUrl}
+                  marks={wholeShown ? marks : NO_MARKS}
+                  reveal={reveal && !reveal.part ? reveal : null}
+                  onPoint={onPoint}
+                  onOpen={() => setTab('source')}
+                  from={pdfFrom}
+                  onScrolled={onPdfScrolled}
+                  {...(sheets ? { pages: sheets.pages, outside: sheets.outside, outsideOf: outsideSaid } : {})}
+                />
+              </div>
             ) : (
               build?.engine && (
                 <p className="text-muted-foreground p-3 text-xs">
@@ -1281,7 +1523,7 @@ export function Workspace({
               )
             )}
           </div>
-          {build?.last && (
+          {ran && (
             <footer className="text-muted-foreground flex shrink-0 flex-wrap items-center gap-x-2 border-t px-2 py-0.5 text-[0.68rem]">
               {stale && !compiling && <span>The PDF is of an earlier save.</span>}
               <span className="flex-1" />
@@ -1297,6 +1539,26 @@ export function Workspace({
 }
 
 const NONE: readonly Problem[] = []
+const NO_FILES: string[] = []
+const NO_MARKS: readonly PdfMark[] = []
+
+/** What SyncTeX answered, and which build's PDF it answered about. */
+interface AskedRects {
+  of: string | null
+  rects: PageRect[]
+}
+const NO_RECTS: AskedRects = { of: null, rects: [] }
+
+/** How long a pick has to hold still before its files are compiled on their own: several ticks in a row are one selection. */
+const PICK_SETTLE_MS = 250
+
+/** A part's own PDF as it is drawn: which selection (`kind`, what `\includeonly` was given), where it is asked for (`key`), and the files it is of. */
+interface DrawnPart {
+  kind: string
+  key: string
+  pdf: NonNullable<PartStatus['pdf']>
+  covered: string[]
+}
 
 /** How long the list of files on screen has to hold still before it is said. See where it is used. */
 const SHOWN_SETTLE_MS = 60

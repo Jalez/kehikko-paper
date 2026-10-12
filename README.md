@@ -144,8 +144,9 @@ says so rather than using another.
 spawned from an argument array — there is no shell anywhere — with shell escape
 explicitly off, a closed stdin, a three-minute timeout, a cap on how much
 output is kept, and an environment holding `HOME`, `PATH` and little else.
-Tectonic runs `--untrusted`; `latexmk` runs `-norc`, since a `.latexmkrc` is
-Perl. Engines run in a process group of their own so that stopping one stops
+Tectonic runs `--untrusted` (and `--keep-intermediates`, into its output
+folder: see "A picked part, compiled on its own"); `latexmk` runs `-norc`,
+since a `.latexmkrc` is Perl. Engines run in a process group of their own so that stopping one stops
 what it started.
 
 **One compile at a time per paper, and the latest save wins.** A newer request
@@ -249,8 +250,11 @@ What was fetched is kept, the page says so, and the next compile finishes.
 
 **The operating system's temporary directory**: `<tmpdir>/kehikot-paper/<hash
 of the paper's real path>/`, holding `work/` (the engine's output directory,
-emptied before each run) and `good/` (the PDF, SyncTeX file and a small
-`meta.json` from the last run that produced a PDF).
+emptied before each run), `good/` (the PDF, SyncTeX file and a small
+`meta.json` from the last run that produced a PDF, and under `good/aux/` what
+that run wrote for the next one to read: every `.aux`, the `.bbl`, the `.toc`)
+and `parts/` (one folder per picked selection compiled on its own — see "A
+picked part, compiled on its own").
 
 Not beside the paper, and not elsewhere under `.kehikot/`: a build is derived —
 losing it costs one compile — it is per machine, and the paper's folder may be
@@ -356,6 +360,10 @@ The table also yields, per file of the paper, which pages it reached and with
 which lines (`pageMap`). The page uses it to say which page the caret is on,
 and to show only the pages of the parts a person picked — the next section.
 
+Every build has a table of its own, and a mark is asked of the one whose PDF
+is on screen. A rectangle answered about the whole paper is not drawn on a
+part's own PDF, or the other way round, for the moment it takes to ask again.
+
 ## Narrowed to the picked parts of the epic
 
 An epic can be divided into parts, and a person can point the whole canvas at
@@ -392,11 +400,12 @@ With some picked (`reacts: ['parts']`; the rule is the protocol's
 
 - **The tabs and the section list** hold only the files a picked part owns,
   and their sections.
-- **The PDF** shows only the pages those files printed on, read off the page
-  map. A page two files share is shown when either is picked. Every sheet
-  carries its real number (`p. 7 of 20`) and each run left out is said where it
-  would have been (`pp. 8–20 · outside the picked part`), because other
-  modules store page numbers and page 7 must stay page 7.
+- **The PDF** is those files compiled on their own, when `main.tex` pulls
+  them in with `\include` — the next section. Only the sheets they printed are
+  drawn, read off the page map. Every sheet carries its number IN THE PAPER
+  (`p. 7 of 20`) and each run left out is said where it would have been
+  (`pp. 8–20 · outside the picked part`), because other modules store page
+  numbers and page 7 must stay page 7.
 - **No line about the pick.** The host's bar says which parts are picked, and
   the narrowed pages and files are the message; a row of prose above a paper is
   a row of the paper not shown. There is no "show everything" on this page; the
@@ -415,6 +424,9 @@ draw, the pane says why — inside itself, where there is nothing else
   chapters/desing.tex, which main.tex does not include.`
 - their files printed nothing — `No page of this PDF was printed by a file of
   the picked part.`
+- a file of theirs is pulled in with `\input` — `No page is shown for the
+  picked part: main.tex pulls chapters/rule.tex in with \input, and only a
+  file pulled in with \include can be compiled on its own.`
 
 Three decisions that are this module's own:
 
@@ -428,9 +440,11 @@ Three decisions that are this module's own:
   focus is left open too: ticking a second part must not move the reader.
 - **A pointer from another module still arrives.** A note or a slide pointing
   at a passage in a file outside the picked parts is opened and marked as
-  before, the sentence about it says it is outside them, and the page it is on
-  is drawn, labelled as outside, while the mark is there. A press on a shared
-  sheet that lands in a file outside the focus works the same way.
+  before, the sentence about it says it is outside them, and the WHOLE PAPER
+  is shown at that place for as long as the mark is up; the part's own PDF
+  comes back when it is taken down. (A paper narrowed by its pages only — see
+  the end of the next section — draws that one page among the picked ones,
+  labelled as outside, as it always did.)
 - **A change of focus re-reads nothing of the paper.** `context.parts` is
   carried beside the paper, not into it: no `/api/paper` and no compile. The
   one read is the source of the file the editor moves to, the first time it is
@@ -438,8 +452,6 @@ Three decisions that are this module's own:
 
 Not narrowed, on purpose:
 
-- **Compilation.** The whole paper is always compiled from `main.tex`. A part
-  is a way of looking at the result.
 - **The passage this page publishes.** `passage.set` is the same in every
   field. (What it says it is SHOWING does follow the ticks — see "What other
   modules are told".)
@@ -448,10 +460,120 @@ Not narrowed, on purpose:
   no canvas and no focus; narrowing its reading by what a person happens to be
   looking at would be a tool whose answer changes for a reason it cannot see.
 
-Not done yet: dimming the rest of a shared sheet to the picked file's lines; a
-one-step "split this paper into one file per part"; and a paper folder that is
-itself a symlink, whose files the protocol cannot place in a part (they are
-counted outside a focus rather than guessed into one).
+Not done yet: a one-step "pull this paper's chapters in with `\include`"; and
+a paper folder that is itself a symlink, whose files the protocol cannot place
+in a part (they are counted outside a focus rather than guessed into one).
+
+## A picked part, compiled on its own
+
+Picking a part used to hide the pages of the whole paper its file had not
+printed on. With chapters pulled in by `\input` those pages are mostly
+somebody else's — the title and the introduction above the chapter, the next
+chapter below it — and the pick read as having done nothing.
+
+**It is done the LaTeX way.** A paper pulls its chapters in with `\include`,
+and the engine is given `\includeonly{chapters/methods}` AHEAD of `main.tex`,
+from outside it. LaTeX then typesets that chapter alone, with its real chapter,
+section, figure and page numbers and every reference to another chapter
+resolved, because each `\include`d file has an `.aux` of its own and the ones
+left out are read from theirs. Nothing is generated and nothing is copied: the
+source is the same whichever part is picked, and `main.tex` is never edited.
+
+| Engine | How `\includeonly` is given from outside |
+| --- | --- |
+| `latexmk` | `-usepretex=\includeonly{…}`, and `-bibtex-`: the bibliography is the whole paper's, and a biber run over one part's citations would renumber it |
+| `pdflatex`, `xelatex`, `lualatex` | `\includeonly{…}\input{main.tex}` in place of the file name, with `-jobname=main` |
+| Tectonic | a two-line file saying the same, in a mirror of the paper's folder — below |
+
+**What a paper has to do: `\include`, not `\input`.** `\includeonly` filters
+the files `main.tex` pulls in with `\include` and nothing else. So:
+
+- a picked file `main.tex` pulls in with `\include` is compiled on its own,
+  and anything that file pulls in (its tables, a section in a file of its own)
+  comes with it;
+- a picked file pulled in with `\input` cannot be, and the pane says so in one
+  sentence, in place of the pages, naming the file and who pulls it in. It does
+  NOT fall back to the pages of the whole paper that file printed on: they look
+  like the part and are mostly not it. One such file in a selection makes the
+  whole selection one that cannot be shown — a part with a hole in it and
+  nothing saying so would be worse;
+- `\include` starts each chapter on a sheet of its own. That is the price, and
+  it is the paper's to decide: this module never rewrites an `\input`.
+
+The same sentence is said for `main.tex` itself, for a paper that has an
+`\includeonly` of its own (the paper's overrules one given from outside), and
+for a file whose name `\includeonly` cannot carry — a space, a comma.
+
+**What is still on the part's PDF, and not drawn.** Whatever `main.tex` writes
+in its own body — a title page, an abstract, the table of contents, the
+bibliography — is typeset under `\includeonly` too. The page map leaves those
+sheets out exactly as it leaves them out of the whole paper: only the sheets
+the picked files (and what they pull in) printed are drawn.
+
+**Sheets are not pages, and no sheet number leaves this module.** The methods
+chapter alone is a PDF of 22 sheets; its ninth is page 19 of the paper. Other
+modules store pages of the paper. So everything SAID about a place — the
+label on a sheet, the runs left out, the toolbar's `p. 19/61`, the `page` of
+`passage.set` — is the page of the paper, through `pageOfSheet` in
+`src/focus.ts`, and everything asked about a place on screen (`/api/sync`,
+`/api/pdf`) names the PDF that is on screen with `part=<key>`.
+
+**Which build runs when.** The numbers of the chapters left out are those the
+last FULL build saved. An edit that makes the picked chapter a page longer
+shows at once in that chapter; that the next chapter now starts a page later
+is not known until the whole paper is compiled again. So:
+
+- **a save, with parts picked**, compiles the picked chapters only;
+- **the whole paper** is compiled when the pick changes or is lifted and the
+  paper is not of the text on disk — that is the person leaving the part —
+  when *Compile* is pressed, when a passage outside the part calls the whole
+  paper onto the screen, when there is no full build to read numbers from at
+  all, and when the part's own log says a reference or citation could not be
+  resolved from numbers older than the text (a `\cite` of a key the last full
+  build never saw). There is no export in this module to compile before; a
+  PDF taken out of the build folder is as old as the last of those;
+- one queue for both kinds, so one paper has one engine running, and a newer
+  request of either kind kills the one in flight.
+
+**Kept, per selection.** A part's PDF lives in `parts/<key>/` beside the
+whole paper's build — `<key>` a hash of what `\includeonly` was given — with
+its own SyncTeX and its own record of which text and which full build's
+numbers it was made from. The same again is not compiled again: coming back to
+a selection is a read of a folder. Its output folder is not emptied between
+runs either, so `latexmk` runs the engine once for an edit where a fresh folder
+costs three passes. The last four selections used are kept per paper and
+older ones removed; one that went is made again when asked for.
+
+Measured on a 61-page thesis (`report`, seven `\include`d chapters, biber,
+figures, pgfplots) with `latexmk`, and on a 13-page article with Tectonic:
+
+| | thesis, `latexmk` | article, Tectonic |
+| --- | --- | --- |
+| the whole paper | 12.2 s | 2.1 s |
+| a part, first time | 3.6–3.8 s | 1.8 s |
+| a part, after an edit in it | 2.0–2.5 s | 1.8 s |
+| a part come back to | 0.02 s | under 0.01 s |
+
+**Tectonic reads only the folder it runs in**, and the `.aux` files may not be
+put in the paper's. So for Tectonic the part is compiled in
+`parts/<key>/tree/`: the paper's folder mirrored with links — every entry a
+link to the paper's own, except the folders an `.aux` has to sit in, which are
+real folders of links — with the last full build's intermediates and the
+two-line file copied into the MIRROR. Tectonic is also run with
+`--keep-intermediates` now, for every build, since it otherwise drops the
+`.aux` files a part needs. It runs its own bibliography tool and cannot be told
+not to: with BibTeX that is the whole paper's bibliography still (the chapters
+left out keep their `\citation` lines), with biber it is the part's alone.
+
+**While the part's own PDF is being made** — a few seconds, the first time a
+selection is picked — the pane shows the pages those files printed in the
+whole paper, which with `\include` are the same sheets, of the last full
+build. It is never blank, and the part's PDF takes their place when it is
+there. Each PDF keeps its own scroll: coming back to a selection lands where
+it was left, and the whole paper where IT was.
+
+**A paper read by a server that does not say how its files are pulled in** is
+narrowed by its pages, as before this existed.
 
 ## What other modules are told
 
@@ -554,11 +676,12 @@ never pushing. `git.ts` says what it refuses and why.
 | `GET /api/paper`, `/api/papers`, `/api/source`, `/api/figure` | the paper's shape, a file's text and hash, a figure |
 | `POST /api/paper` | start a paper: empty, `template`, or `folder` |
 | `POST /api/file` | save one file whole; 409 with the disk's text when it moved |
-| `GET /api/build`, `/api/pdf` | where the build stands; the last good PDF |
+| `GET /api/build`, `/api/pdf` | where the build stands; the last good PDF — with `part=<key>`, one selection's own |
 | `POST /api/compile` | compile, superseding a compile in flight |
+| `GET /api/part`, `POST /api/part` | where the picked files' own build stands; compile them on their own (and the whole paper first when it has to be) |
 | `GET /api/toolchain` | the compiler this module can fetch: pieces, sizes, hosts, folder, progress |
 | `POST /api/toolchain/install`, `/api/toolchain/cancel` | start fetching the missing pieces (answers at once); stop |
-| `GET /api/sync` | `file`+`line`[+`to`] → rectangles; `page`+`x`+`y` → file and line |
+| `GET /api/sync` | `file`+`line`[+`to`] → rectangles; `page`+`x`+`y` → file and line; `part=<key>` asks one selection's own PDF |
 | `GET /api/proposals`, `POST /api/proposal` | suggestions waiting; accept or reject one |
 | `GET /api/uncommitted`, `POST /api/save` | where the repository stands; commit |
 | `GET /api/templates` | the built-in starting points |
@@ -589,6 +712,7 @@ compile/engine.ts    which engine and its arguments (pure)
 compile/log.ts       an engine's errors as file and line (pure)
 compile/synctex.ts   the SyncTeX reader, both directions, the page map (pure)
 compile/build.ts     the queue, the build folder, the spawn
+compile/part.ts      a picked part on its own: what can be, and how it is asked for (pure)
 compile/toolchain.ts the compiler this module can fetch: pinned addresses, sizes, checksums (pure)
 compile/install.ts   fetching it: download, verify, extract one file, rename into place
 latex/               the parser, labels, bibliography, proposals, diff
