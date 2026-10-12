@@ -298,32 +298,83 @@ export function useSource({
   /* The disk moved. Compared by FETCHING, not by the poll's hash alone: the
      poll may have been answered before this page's own save landed, and its
      stale hash would otherwise read as somebody else's change. */
+  /** What a read of one file found, taken: the disk's text if nothing is typed over it, a conflict if something is. */
+  const take = useCallback(
+    (name: string, got: { text: string; hash: string; eol: Eol }) => {
+      const held = docs.current.get(name)
+      if (!held || got.hash === held.hash) return
+      if (held.text === held.saved) {
+        docs.current.set(name, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
+        setChanged((was) => changedBy(name, held.text, got.text, was))
+        setTaken((n) => n + 1)
+        redraw()
+        return
+      }
+      setConflict({ file: name, theirs: got.text, hash: got.hash, eol: got.eol })
+    },
+    [redraw],
+  )
+  /* Each read of a file is numbered, and only the last one asked for is
+     taken: the poll's read and `fresh`'s can be out at once, and the older
+     answer arriving second must not put the older text back. */
+  const reads = useRef<Map<string, number>>(new Map())
+  const reading = useCallback((name: string) => {
+    const mine = (reads.current.get(name) ?? 0) + 1
+    reads.current.set(name, mine)
+    return () => reads.current.get(name) === mine
+  }, [])
   useEffect(() => {
     if (!disk || epic === null) return
     let stopped = false
     for (const [name, doc] of docs.current) {
       const now = disk[name]
       if (!now || now === doc.hash || conflictRef.current?.file === name) continue
+      const last = reading(name)
       void read(name)
         .then((got) => {
-          if (stopped || !got || epicRef.current !== epic || inflight.current) return
-          const held = docs.current.get(name)
-          if (!held || got.hash === held.hash) return
-          if (held.text === held.saved) {
-            docs.current.set(name, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
-            setChanged((was) => changedBy(name, held.text, got.text, was))
-            setTaken((n) => n + 1)
-            redraw()
-            return
-          }
-          setConflict({ file: name, theirs: got.text, hash: got.hash, eol: got.eol })
+          if (stopped || !got || !last() || epicRef.current !== epic || inflight.current) return
+          take(name, got)
         })
         .catch(() => {})
     }
     return () => {
       stopped = true
     }
-  }, [disk, epic, read, redraw])
+  }, [disk, epic, read, reading, take])
+
+  /**
+   * Look at one file on disk NOW, and say whether the editor holds it.
+   *
+   * The poll above finds out that the disk moved within `POLL_MS` of it
+   * moving, which is soon enough for a person and not for a pointer: a module
+   * that rewrites a file and points at a passage in it does both in the same
+   * moment, and its byte range is of the new file. Counted in the old text it
+   * is other words — in the source, and on the PDF, which is OF the old text
+   * and so looks entirely trustworthy (`pdfIsOf`). So whoever is about to act
+   * on a place in a file that somebody else chose asks this first.
+   *
+   * `true`: the editor's text is what is on disk (or the disk could not be
+   * asked, which is no reason to hold anything back). `false`: it was not —
+   * and it has been taken exactly as the poll would have taken it, so the
+   * page redraws with the new text, or with the conflict if something was
+   * typed over the old one.
+   */
+  const fresh = useCallback(
+    async (name: string): Promise<boolean> => {
+      if (epic === null || !docs.current.has(name)) return false
+      const last = reading(name)
+      const got = await read(name).catch(() => null)
+      if (!got) return true
+      const held = docs.current.get(name)
+      if (epicRef.current !== epic || !held) return false
+      if (got.hash === held.hash) return true
+      /* A save of this page's own is on its way: its landing settles what the file is. */
+      if (!last() || inflight.current || conflictRef.current?.file === name) return false
+      take(name, got)
+      return false
+    },
+    [epic, read, reading, take],
+  )
 
   const takeTheirs = useCallback(() => {
     const at = conflictRef.current
@@ -359,9 +410,9 @@ export function useSource({
   const state: SaveState = saving ? 'saving' : failure || conflict ? 'failed' : dirty ? 'dirty' : 'saved'
 
   return useMemo(
-    () => ({ file, open: setFile, doc, edit, flush, state, failure, conflict, takeTheirs, keepMine, taken, changed, docs: docs.current }),
+    () => ({ file, open: setFile, doc, edit, flush, fresh, state, failure, conflict, takeTheirs, keepMine, taken, changed, docs: docs.current }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [file, doc, doc?.text, doc?.hash, edit, flush, state, failure, conflict, takeTheirs, keepMine, taken, changed],
+    [file, doc, doc?.text, doc?.hash, edit, flush, fresh, state, failure, conflict, takeTheirs, keepMine, taken, changed],
   )
 }
 
