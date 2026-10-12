@@ -675,6 +675,51 @@ describe('a passage another module pointed at', () => {
     expect(said()).toContain('Nothing in this paper’s own files is recorded')
   })
 
+  const orange = () => lastPreview!.marks.some((mark) => mark.foreign)
+  const askedLine = (line: number) => calls.some((one) => one.path === '/api/sync' && one.query.get('line') === String(line))
+
+  test('on a PDF of this very text it is marked at once, and the PDF turns to it', async () => {
+    built = 'kept'
+    render(<Framed />)
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    const was = lastPreview!.reveal?.nonce
+    act(() => pointAt(there))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(6)).toBe(true)
+    expect(posted('/api/compile')).toHaveLength(0)
+    expect(lastPreview!.reveal?.nonce).not.toBe(was)
+  })
+
+  test('it is not marked on a PDF built before lines were added above it: the mark is drawn when the build that has them is on screen', async () => {
+    built = 'kept'
+    builtFrom = MAIN
+    const moved = MAIN.replace('\\section{End}', 'One.\nTwo.\nThree.\n\\section{End}')
+    disk['main.tex'] = moved
+    let finish = () => {}
+    compiling = new Promise((done) => (finish = done))
+    render(<Framed />)
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+    rectPage = 3
+    const bytes = Buffer.from(moved).indexOf('Fin')
+    act(() => pointAt({ ...there, from: bytes, to: bytes + 3 }))
+    /* In the source at once… */
+    const at = moved.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 3}`))
+    await new Promise((done) => setTimeout(done, 40))
+    /* …and the old build's table is never asked for line 9: it would answer for the line that was ninth then. */
+    expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept')
+    expect(orange()).toBe(false)
+    expect(askedLine(9)).toBe(false)
+    /* Until then the toolbar has the page map's page, as before any answer. */
+    expect(toolbar()).toContain('p. 2/3')
+    finish()
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-1'))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(9)).toBe(true)
+    await waitFor(() => expect(toolbar()).toContain('p. 3/3'))
+  })
+
   test('placeShown: the passage wins outright while it is shown', () => {
     const caret = { page: 11, section: 'Introduction' }
     expect(placeShown(caret, null)).toEqual(caret)

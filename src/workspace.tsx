@@ -763,8 +763,12 @@ export function Workspace({
      Until the compile that follows a landing has finished, the page on screen
      is the build before it: the new words are not there to be found, and the
      mark was the whole source line — three printed lines — for a dozen seconds
-     and then snapped to the word. The source's mark does not wait. */
-  const behind = theirs === null && noted !== null && build?.pdf?.hashes[noted.file] !== foreignDoc?.hash
+     and then snapped to the word. The source's mark does not wait.
+
+     A passage from the canvas waits the same way. Its lines are counted in
+     the text as it is now and asked of the build's table: with lines added
+     above it since that build, the table answers for other words. */
+  const behind = foreign !== null && build?.pdf?.hashes[foreign.file] !== foreignDoc?.hash
   const turns = theirs !== null || noted?.reveal === true
   useEffect(() => {
     if (!buildId || !foreign || foreignText === undefined || !foreignDoc || behind) {
