@@ -71,6 +71,8 @@ let built: string | null
 let partBuilt: string | null
 /** The props each pane was last drawn with: '' is the whole paper's, anything else a part's own. */
 let panes: Record<string, PreviewProps>
+/** While set, a compile of a part does not answer until it resolves. */
+let gate: Promise<void> | null
 interface Asked {
   type?: string
   method?: string
@@ -238,11 +240,14 @@ beforeEach(() => {
   built = null
   partBuilt = null
   panes = {}
+  gate = null
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), 'http://127.0.0.1:7870')
     const method = (init?.method ?? 'GET').toUpperCase()
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null
     calls.push({ method, path: url.pathname, query: url.searchParams, body })
+    /* A compile takes seconds: a test that has to see the page WHILE one runs holds it here. */
+    if (method === 'POST' && url.pathname === '/api/part' && gate) await gate
     const [status, answer] = serve(url.pathname, url.searchParams, body, method)
     return new Response(JSON.stringify(answer), { status, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
@@ -407,6 +412,89 @@ describe('a passage outside the picked files', () => {
     canvas.context(PARTS('the-method'), at('chapters/design.tex', 16, 35))
     await waitFor(() => expect(asked('/api/part', 'POST').at(-1)!.body).toEqual({ files: ['chapters/method.tex'], full: true }))
     await waitFor(() => expect(panes['']!.url).toContain('build=build-for-part-'))
+  })
+})
+
+describe('a PDF that is not of the text is never asked where a passage is', () => {
+  const held = () => {
+    let open = () => {}
+    gate = new Promise<void>((done) => {
+      open = () => {
+        gate = null
+        done()
+      }
+    })
+    return () => act(() => open())
+  }
+  const syncsFor = (file: string) => asked('/api/sync').filter((one) => one.query.get('file') === file)
+
+  test('the whole paper, behind on purpose while a part is worked in: a passage outside is looked for by its words, and marked by the table when the full build lands — nothing pressed', async () => {
+    const canvas = await framed(PARTS('the-method'))
+    await waitFor(() => expect(inFront()).toBe('part'))
+    /* The design chapter changes on disk — another editor, an agent — while the method chapter is what is compiled. */
+    disk['chapters/design.tex'] = ['\\chapter{Design}', 'A line added above.', 'The design is this.', ''].join('\n')
+    const before = asked('/api/part', 'POST').length
+    const release = held()
+    canvas.context(PARTS('the-method'), at('chapters/design.tex', 37, 56))
+    await waitFor(() => expect(inFront()).toBe('whole'))
+    /* The whole paper is asked to be made of this text… */
+    await waitFor(() => expect(asked('/api/part', 'POST').length).toBe(before + 1))
+    expect(asked('/api/part', 'POST').at(-1)!.body).toEqual({ files: ['chapters/method.tex'], full: true })
+    /* …and until it is, its table is not asked about that file: the mark is the passage's words alone. */
+    await waitFor(() => expect(panes['']!.marks.some((mark) => mark.foreign)).toBe(true))
+    const alone = panes['']!.marks.find((mark) => mark.foreign)!
+    expect(alone.rects).toEqual([])
+    expect(alone.source!.text.slice(alone.source!.from, alone.source!.to)).toBe('The design is this.')
+    await new Promise((done) => setTimeout(done, 60))
+    /* (The caret's own line, where the editor was taken, is asked as it always is; the passage's line is not.) */
+    expect(syncsFor('chapters/design.tex').filter((one) => one.query.get('line') === '3')).toEqual([])
+    expect(panes['']!.url).toContain('build=kept')
+
+    /* The full build lands. */
+    release()
+    await waitFor(() => expect(panes['']!.url).toContain('build=build-for-part-'))
+    await waitFor(() => expect(panes['']!.marks.find((mark) => mark.foreign)?.rects[0]?.page).toBe(6))
+    expect(syncsFor('chapters/design.tex').some((one) => one.query.get('line') === '3')).toBe(true)
+    expect(syncsFor('chapters/design.tex').every((one) => !one.query.has('part'))).toBe(true)
+    expect(inFront()).toBe('whole')
+  })
+
+  test('a file outside the part that has NOT changed since the full build is asked at once: its rows of that table are what they were', async () => {
+    const canvas = await framed(PARTS('the-method'))
+    await waitFor(() => expect(inFront()).toBe('part'))
+    fireEvent.change(screen.getByLabelText('LaTeX source'), { target: { value: `${TEXT['chapters/method.tex']}One more line.\n` } })
+    await waitFor(() => expect(asked('/api/part', 'POST').length).toBe(2))
+    const release = held()
+    canvas.context(PARTS('the-method'), at('chapters/design.tex', 16, 35))
+    await waitFor(() => expect(panes['']!.marks.find((mark) => mark.foreign)?.rects[0]?.page).toBe(6))
+    expect(panes['']!.url).toContain('build=kept')
+    release()
+  })
+
+  test('the part’s own PDF, behind what was just typed: a passage inside the part is its words alone on THAT PDF until the part’s compile lands', async () => {
+    const canvas = await framed(PARTS('the-method'))
+    await waitFor(() => expect(inFront()).toBe('part'))
+    await waitFor(() => expect(panes['chapters/method']!.marks.length).toBe(1))
+    const release = held()
+    fireEvent.change(screen.getByLabelText('LaTeX source'), { target: { value: `A line added above.\n${TEXT['chapters/method.tex']}` } })
+    await waitFor(() => expect(asked('/api/part', 'POST').length).toBe(2))
+    const asksBefore = syncsFor('chapters/method.tex').length
+    canvas.context(PARTS('the-method'), at('chapters/method.tex', 37, 56))
+    await waitFor(() => expect(panes['chapters/method']!.marks.some((mark) => mark.foreign)).toBe(true))
+    const alone = panes['chapters/method']!.marks.find((mark) => mark.foreign)!
+    expect(alone.rects).toEqual([])
+    expect(alone.source!.text.slice(alone.source!.from, alone.source!.to)).toBe('The method is that.')
+    expect(inFront()).toBe('part')
+    /* Nothing was asked of the part's table for the passage (its lines are counted in text that PDF was not made from)… */
+    await new Promise((done) => setTimeout(done, 60))
+    expect(syncsFor('chapters/method.tex').slice(asksBefore).filter((one) => one.query.get('line') === '2' && one.query.get('to') === '2')).toEqual([])
+    /* …and nothing of the whole paper's either. */
+    expect(syncsFor('chapters/method.tex').slice(asksBefore).every((one) => one.query.get('part') === KEY)).toBe(true)
+
+    release()
+    await waitFor(() => expect(panes['chapters/method']!.url).toContain('build=part-2'))
+    await waitFor(() => expect(panes['chapters/method']!.marks.find((mark) => mark.foreign)?.rects[0]?.page).toBe(6))
+    expect(syncsFor('chapters/method.tex').at(-1)!.query.get('part')).toBe(KEY)
   })
 })
 

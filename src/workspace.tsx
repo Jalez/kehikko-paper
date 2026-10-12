@@ -33,6 +33,7 @@ import {
 } from './focus.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
+import { pdfIsOf } from './pdf/of.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
 import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
@@ -196,7 +197,7 @@ export function Workspace({
     [setPaper, setProposals, setSaid],
   )
   const source = useSource({ paper, disk: wire.disk, onLanded, saveDelay })
-  const { file, doc } = source
+  const { file, doc, fresh } = source
 
   /* ---- The parts the canvas is pointed at ------------------------------- */
 
@@ -616,22 +617,40 @@ export function Workspace({
     /* The whole paper is on screen for a mark outside the part: it is what has to follow the text. */
     else void compilePart(pickedKey.split('\n'), called ? { full: true } : {})
   }
-  /* The whole paper was called onto the screen and is of older text than the
-     disk's, as it is by design while a part is worked in: it is made current.
-     Once per call — a paper that does not compile is not retried in a loop. */
-  useEffect(() => {
-    if (called && pickedKey !== null && wholeStale) void compilePart(pickedKey.split('\n'), { full: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [called, pickedKey])
 
-  /* Rectangles are in the sheets of the PDF they were asked of (`of`: that
-     build). They are drawn on that PDF and no other: when the pane turns from
-     the whole paper to a part's own, what was asked of the one is not a place
-     in the other, and is not shown for the moment it takes to ask again. */
-  const [foreignHeld, setForeignRects] = useState<AskedRects>(NO_RECTS)
-  const foreignRects = foreignHeld.of === buildId ? foreignHeld.rects : NO_RECTS.rects
+  /* Where the table said the foreign passage is printed — WHICH passage that
+     was asked about, and of WHICH PDF.
+
+     The passage, because one pointed a moment ago must not lend its
+     rectangles to the next one: for the tenth of a second before the new
+     answer, the new words were looked for beside the old place, and marked
+     there when they happened to be found.
+
+     The PDF (`build`), because rectangles are in the sheets of the PDF they
+     were asked of. They are drawn on that PDF and no other: when the pane
+     turns from the whole paper to a part's own, what was asked of the one is
+     not a place in the other, and is not shown for the moment it takes to ask
+     again. */
+  const [hint, setHint] = useState<Hint>(NO_HINT)
+  const foreignKey = foreign ? `${foreign.file}\0${foreign.from}\0${foreign.to}` : ''
+  const foreignRects = hint.of === foreignKey && hint.build === buildId ? hint.rects : NO_HINT.rects
   const foreignDoc = foreign ? source.docs.get(foreign.file) : undefined
   const foreignText = foreignDoc?.text
+
+  /* The whole paper was called onto the screen and is of older text than the
+     disk's — as it is by design while a part is worked in, and as it is when
+     the file the passage is in was changed by somebody else since the last
+     full build. It is made current, with nothing pressed, and the mark that
+     was waiting for it is put when it lands. Once per time it becomes so: a
+     paper that does not compile is not retried in a loop. */
+  const wholeBehind =
+    called
+    && pickedKey !== null
+    && (wholeStale || (foreign !== null && build?.pdf != null && foreignDoc !== undefined && build.pdf.hashes[foreign.file] !== foreignDoc.hash))
+  useEffect(() => {
+    if (wholeBehind && pickedKey !== null) void compilePart(pickedKey.split('\n'), { full: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wholeBehind, pickedKey])
 
   /* ---- What the toolbar reads out ---------------------------------------- */
 
@@ -915,43 +934,81 @@ export function Workspace({
     }
   }, [buildId, doc === null, file, fromLine, toLine, selecting, ask, settle, asked, turnTo])
 
-  /* A change is marked on the PDF only once the PDF is OF the text it is in.
-     Until the compile that follows a landing has finished, the page on screen
-     is the build before it: the new words are not there to be found, and the
-     mark was the whole source line — three printed lines — for a dozen seconds
-     and then snapped to the word. The source's mark does not wait. */
-  const behind = theirs === null && noted !== null && (onPart ? partDrawn.pdf.hashes : build?.pdf?.hashes)?.[noted.file] !== foreignDoc?.hash
+  /* A place somebody else chose — a passage from the canvas, a change that
+     landed — is put on the PDF by this PDF's table only once the PDF is OF
+     the text it is in (`pdfIsOf`, which says what that takes). Until then the
+     page on screen is an older build: the lines are counted in text it was
+     not made from, its table answers for other words, and what it named was
+     drawn — the wrong printed lines, for a dozen seconds, and then the right
+     ones. So the table is not asked. The source's mark does not wait, and
+     nothing says the PDF's is waiting.
+
+     A passage from the canvas is still LOOKED FOR meanwhile, by its own words
+     and nothing else (`marks`, below): where they are printed once in the PDF
+     on screen, that is where they are, whatever the table would have said —
+     and where they are not, nothing is drawn until the build that has them.
+
+     Asked of the PDF ON SCREEN, which is one of two. A part's own PDF is of
+     the text the part was last compiled from; the whole paper's is of the
+     text of its last full build, and while somebody works in a part that is
+     older on purpose. A passage outside the part calls the whole paper up
+     (`called`): if that file changed since the full build, its table is not
+     asked, the full build that `called` starts is waited for, and the mark is
+     put by the table when it lands — this effect runs again on the new build
+     with nothing pressed. */
+  const behind = foreign !== null && !pdfIsOf(onPart ? partDrawn.pdf : build?.pdf, foreign.file, foreignDoc)
   const turns = theirs !== null || noted?.reveal === true
+  /* The passage the PDF was last turned to without its table, so that going
+     behind again under the same passage — a key typed — does not turn it again. */
+  const turnedFor = useRef('')
   useEffect(() => {
     if (!buildId || !foreign || foreignText === undefined || !foreignDoc || behind) {
-      setForeignRects(NO_RECTS)
+      setHint(NO_HINT)
+      if (behind && buildId && theirs !== null && turnedFor.current !== foreignKey) {
+        turnedFor.current = foreignKey
+        turnTo()
+      }
+      if (!foreign) turnedFor.current = ''
       return
     }
     let stopped = false
     const first = lineAt(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol))
     const last = lineAt(foreignText, Math.max(indexAt(foreignText, foreign.to, foreignDoc.eol) - 1, 0))
-    void ask(foreign.file, first, Math.max(first, last), true)
+    /* The disk first (`fresh`): a byte range somebody else chose is of the
+       file as it is NOW, and the poll may not have told this page yet that it
+       moved. If it did, the text has just been taken, this effect runs again
+       behind, and nothing was asked of a table that is not this text's. */
+    void fresh(foreign.file)
+      .then((same) => (same && !stopped ? ask(foreign.file, first, Math.max(first, last), true) : null))
       .then((rects) => {
-        if (stopped) return
-        setForeignRects({ of: buildId, rects })
-        if (rects.length && turns) turnTo()
+        if (stopped || !rects) return
+        setHint({ of: foreignKey, build: buildId, rects })
+        if (rects.length && turns) {
+          turnedFor.current = foreignKey
+          turnTo()
+        }
       })
       .catch(() => {})
     return () => {
       stopped = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, behind, turns, turnTo])
+  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, fresh, behind, turns, turnTo])
 
   const marks = useMemo<PdfMark[]>(() => {
     const out: PdfMark[] = []
     /* The foreign mark first: `reveal` scrolls to the first mark, and what
        somebody pointed at outranks where the caret happens to be. */
-    if (foreign && foreignRects.length) {
+    if (foreign && (foreignRects.length || (behind && theirs !== null))) {
       const whole = foreignText !== undefined && foreignDoc
         ? wholeWords(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol), indexAt(foreignText, foreign.to, foreignDoc.eol))
         : null
-      out.push({ rects: foreignRects, source: whole && foreignText !== undefined ? { text: foreignText, ...whole } : null, foreign: true })
+      const source = whole && foreignText !== undefined ? { text: foreignText, ...whole } : null
+      /* With no rectangles — the PDF is not of this text, so its table was
+         not asked — a mark is its words alone: `find.ts` draws them where
+         they are printed once, and draws nothing otherwise. Without words to
+         look for there is then no mark to make. */
+      if (foreignRects.length || source) out.push({ rects: foreignRects, source, foreign: true })
     }
     /* With only a caret, the passage is the line it is on: what that line prints is what is marked. */
     if (ownRects.length) {
@@ -959,7 +1016,7 @@ export function Workspace({
       out.push({ rects: ownRects, source: selecting ? { text, from, to } : { text, from: start, to: start + textOfLine(text, fromLine).length } })
     }
     return out
-  }, [foreign, foreignRects, foreignText, foreignDoc, ownRects, selecting, text, from, to, fromLine])
+  }, [foreign, foreignRects, foreignText, foreignDoc, behind, theirs, ownRects, selecting, text, from, to, fromLine])
 
   /* The pages drawn under a focus: the picked parts' own, and — flagged —
      any a mark is on, so that nothing this page points at is ever on a sheet
@@ -1594,6 +1651,15 @@ export function placeShown(
   if (!passage) return caret
   return { page: passage.marked ?? passage.mapped, section: passage.section }
 }
+
+/** What the table answered about a pointed passage: which passage (`of`), and which build's PDF the rectangles are sheets of. */
+interface Hint {
+  of: string
+  build: string | null
+  rects: PageRect[]
+}
+/** No rectangles, of no passage. One object, so a mark with none is the same mark again. */
+const NO_HINT: Hint = { of: '', build: null, rects: [] }
 
 function sameHashes(a: Record<string, string>, b: Record<string, string>): boolean {
   const keys = Object.keys(a)

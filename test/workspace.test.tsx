@@ -50,6 +50,9 @@ let built: string | null
 let builtFrom: string | null
 /** Set, a compile does not answer until it resolves: the dozen seconds an engine takes. */
 let compiling: Promise<void> | null
+/** The next compiles fail: the last good PDF stays, and `last` says the build did not make one. */
+let failing: boolean
+let failed: boolean
 let lastPreview: PreviewProps | null
 let lastEditor: EditorProps | null
 /** Which page the fake SyncTeX says a line came out on. The page MAP says 2 for every line. */
@@ -78,7 +81,7 @@ const buildNow = () => ({
   engines: engine ? [engine] : [],
   how: engine ? '' : 'No LaTeX engine is installed on this machine. brew install tectonic',
   running: false,
-  last: built ? { ok: true, at: 1, ms: 2100, engine, timedOut: false, problems: [], tail: '' } : null,
+  last: built ? { ok: !failed, at: 1, ms: 2100, engine, timedOut: false, problems: [], tail: '' } : null,
   pdf: built ? { id: built, at: 1, pages: 3, hashes: { 'main.tex': hashOf(builtFrom ?? disk['main.tex']!) }, map: { 'main.tex': [{ page: 2, from: 1, to: 99 }] } } : null,
 })
 
@@ -87,6 +90,8 @@ function serve(method: string, path: string, query: URLSearchParams, body: Recor
   if (path === '/api/source') return [200, { ok: true, source: disk['main.tex'], hash: hashOf(disk['main.tex']!) }]
   if (path === '/api/build') return [200, { ok: true, build: buildNow() }]
   if (path === '/api/compile') {
+    failed = failing
+    if (failing) return [200, { ok: true, build: buildNow() }]
     built = `build-${calls.filter((one) => one.path === '/api/compile').length}`
     builtFrom = disk['main.tex']!
     return [200, { ok: true, build: buildNow() }]
@@ -141,6 +146,8 @@ beforeEach(() => {
   built = null
   builtFrom = null
   compiling = null
+  failing = false
+  failed = false
   lastPreview = null
   lastEditor = null
   rectPage = 2
@@ -686,6 +693,202 @@ describe('a passage another module pointed at', () => {
     fireEvent.change(screen.getByLabelText('Sections'), { target: { value: '0' } })
     await waitFor(() => expect(section()).toBe('Sections'))
     expect(said()).toContain('Nothing in this paper’s own files is recorded')
+  })
+
+  /** Marked where this PDF's table says, the words looked for beside it. */
+  const orange = () => lastPreview!.marks.some((mark) => mark.foreign && mark.rects.length > 0)
+  /**
+   * Handed to the PDF as its words alone — no rectangle, because the table is
+   * not this text's — and which words. `find.ts` draws them where they are
+   * printed once and nowhere else (`test/find.test.ts`: "with no rectangles
+   * from SyncTeX and nothing found, nothing is drawn").
+   */
+  const byWords = () => {
+    const mark = lastPreview!.marks.find((one) => one.foreign && one.rects.length === 0)
+    return mark?.source ? mark.source.text.slice(mark.source.from, mark.source.to) : null
+  }
+  const askedLine = (line: number) => calls.some((one) => one.path === '/api/sync' && one.query.get('line') === String(line))
+
+  test('on a PDF of this very text it is marked at once, and the PDF turns to it', async () => {
+    built = 'kept'
+    render(<Framed />)
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    const was = lastPreview!.reveal?.nonce
+    act(() => pointAt(there))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(6)).toBe(true)
+    expect(posted('/api/compile')).toHaveLength(0)
+    expect(lastPreview!.reveal?.nonce).not.toBe(was)
+  })
+
+  test('a PDF built before lines were added above it is not asked where it is: it is looked for by its words alone, and by the table when the build that has them is on screen', async () => {
+    built = 'kept'
+    builtFrom = MAIN
+    const moved = MAIN.replace('\\section{End}', 'One.\nTwo.\nThree.\n\\section{End}')
+    disk['main.tex'] = moved
+    let finish = () => {}
+    compiling = new Promise((done) => (finish = done))
+    render(<Framed />)
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+    rectPage = 3
+    const bytes = Buffer.from(moved).indexOf('Fin')
+    act(() => pointAt({ ...there, from: bytes, to: bytes + 3 }))
+    /* In the source at once… */
+    const at = moved.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 3}`))
+    await new Promise((done) => setTimeout(done, 40))
+    /* …and the old build's table is never asked for line 9: it would answer for the line that was ninth then. */
+    expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept')
+    expect(orange()).toBe(false)
+    expect(askedLine(9)).toBe(false)
+    expect(byWords()).toBe('Fin')
+    /* Until then the toolbar has the page map's page, as before any answer. */
+    expect(toolbar()).toContain('p. 2/3')
+    finish()
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-1'))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(9)).toBe(true)
+    expect(byWords()).toBeNull()
+    await waitFor(() => expect(toolbar()).toContain('p. 3/3'))
+  })
+
+  test('while lines typed above it are unsaved the table is not asked either: the build and the disk still agree, and the editor does not', async () => {
+    built = 'kept'
+    render(<Framed />)
+    const editor = await screen.findByLabelText('LaTeX source')
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    const typed = MAIN.replace('\\section{End}', 'One.\nTwo.\nThree.\n\\section{End}')
+    let land = () => {}
+    const landing = new Promise<void>((done) => (land = done))
+    const answering = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/api/file')) await landing
+      return answering(input, init)
+    }) as typeof fetch
+    fireEvent.change(editor, { target: { value: typed } })
+    await waitFor(() => expect(document.querySelector('[data-save]')?.getAttribute('data-save')).toBe('saving'))
+    rectPage = 3
+    const bytes = Buffer.from(typed).indexOf('Fin')
+    act(() => pointAt({ ...there, from: bytes, to: bytes + 3 }))
+    const at = typed.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 3}`))
+    await new Promise((done) => setTimeout(done, 40))
+    /* The save has not landed, so the hash is still the build's: only the text says the table is old. */
+    expect(disk['main.tex']).toBe(MAIN)
+    expect(orange()).toBe(false)
+    expect(askedLine(9)).toBe(false)
+    expect(byWords()).toBe('Fin')
+    land()
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-1'))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(9)).toBe(true)
+  })
+
+  test('the file changed on disk a moment ago and the poll has not said so: the disk is looked at before the PDF is asked, and the old text’s table never is', async () => {
+    built = 'kept'
+    render(<Framed />)
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    /* Somebody rewrites the file and points into it in the same moment. Nothing wakes the poll. */
+    const moved = MAIN.replace('\\section{End}', 'One.\nTwo.\nThree.\n\\section{End}')
+    let finish = () => {}
+    compiling = new Promise((done) => (finish = done))
+    disk['main.tex'] = moved
+    rectPage = 3
+    const bytes = Buffer.from(moved).indexOf('Fin')
+    act(() => pointAt({ ...there, from: bytes, to: bytes + 3 }))
+    /* The editor takes the disk's text at once, so the source's mark is on the words that were meant… */
+    const at = moved.indexOf('Fin')
+    await waitFor(() => expect(lastEditor!.value).toBe(moved))
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 3}`))
+    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+    await new Promise((done) => setTimeout(done, 40))
+    /* …and the PDF, which is of the old text, is asked nothing: those bytes of the old text are its last line. */
+    expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept')
+    expect(orange()).toBe(false)
+    expect(askedLine(7)).toBe(false)
+    expect(askedLine(9)).toBe(false)
+    expect(byWords()).toBe('Fin')
+    finish()
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-1'))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(9)).toBe(true)
+  })
+
+  test('when the compile that follows fails the last good PDF’s table is never asked, however long that lasts; a compile that succeeds is', async () => {
+    built = 'kept'
+    builtFrom = MAIN
+    const moved = MAIN.replace('\\section{End}', 'One.\nTwo.\nThree.\n\\section{End}')
+    disk['main.tex'] = moved
+    failing = true
+    render(<Framed />)
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+    await waitFor(() => expect(document.querySelector('[data-build]')?.getAttribute('data-build')).toBe('failed'))
+    const bytes = Buffer.from(moved).indexOf('Fin')
+    act(() => pointAt({ ...there, from: bytes, to: bytes + 3 }))
+    const at = moved.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 3}`))
+    await new Promise((done) => setTimeout(done, 60))
+    /* The PDF on screen is the last one that compiled, and it is not of this text. */
+    expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept')
+    expect(orange()).toBe(false)
+    expect(askedLine(9)).toBe(false)
+    expect(byWords()).toBe('Fin')
+    /* Nothing is said about the mark that is waiting: the toolbar's "failed" is the only word on it. */
+    expect(said()).not.toMatch(/PDF|compile|build/i)
+    failing = false
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }))
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-2'))
+    await waitFor(() => expect(orange()).toBe(true))
+    expect(askedLine(9)).toBe(true)
+  })
+
+  test('a passage pointed straight after another does not borrow its rectangles while its own are on their way', async () => {
+    built = 'kept'
+    render(<Framed />)
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    act(() => pointAt(there))
+    await waitFor(() => expect(orange()).toBe(true))
+    let answer = () => {}
+    const held = new Promise<void>((done) => (answer = done))
+    const answering = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/api/sync')) await held
+      return answering(input, init)
+    }) as typeof fetch
+    const claim = Buffer.from(MAIN).indexOf('claim')
+    act(() => pointAt({ ...there, from: claim, to: claim + 5, quoted: 'claim' }))
+    const at = MAIN.indexOf('claim')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-mark')).toBe(`${at}-${at + 5}`))
+    await new Promise((done) => setTimeout(done, 40))
+    /* "claim" beside where "Fin" is printed would be a mark of one passage in the other's place. */
+    expect(lastPreview!.marks.some((mark) => mark.foreign)).toBe(false)
+    answer()
+    await waitFor(() => expect(orange()).toBe(true))
+  })
+
+  test('pointed at while the PDF is behind, the PDF is turned to it once — and a key typed under it afterwards does not turn it again', async () => {
+    built = 'kept'
+    render(<Framed />)
+    const editor = await screen.findByLabelText('LaTeX source')
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=kept'))
+    act(() => pointAt(there))
+    await waitFor(() => expect(orange()).toBe(true))
+    const turned = lastPreview!.reveal?.nonce
+    let land = () => {}
+    const landing = new Promise<void>((done) => (land = done))
+    const answering = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/api/file')) await landing
+      return answering(input, init)
+    }) as typeof fetch
+    /* The person types after a passage that is already up: its mark goes on standing, by its words, and the PDF stays where they left it. */
+    fireEvent.change(editor, { target: { value: MAIN.replace('Fin ä.', 'Fin ä. And more.') } })
+    await waitFor(() => expect(byWords()).toBe('Fin'))
+    await new Promise((done) => setTimeout(done, 40))
+    expect(lastPreview!.reveal?.nonce).toBe(turned)
+    land()
   })
 
   test('placeShown: the passage wins outright while it is shown', () => {
