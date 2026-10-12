@@ -1,4 +1,5 @@
-import { isFocused, narrowToFocus, pickedFiles, pickedParts, type EpicPart } from 'kehikot-module-protocol'
+import { KEHIKOT_DIR, emptySaid, moduleFolder, partsOfFile, pickedDocuments, pickedParts, type Anchor, type EpicPart } from 'kehikot-module-protocol'
+import type { Focus } from 'kehikot-module-protocol/client/react'
 
 import { planOf, type Plan, type Pullable } from '../compile/part.ts'
 import type { PageSpan } from '../compile/synctex.ts'
@@ -6,101 +7,133 @@ import type { PageSpan } from '../compile/synctex.ts'
 /**
  * The paper, narrowed to the parts of the epic a person picked out.
  *
- * ## What is being narrowed, and by whose rule
+ * ## One rule, and it is not this file's
  *
- * An epic may be divided into parts, and a person may point the whole canvas
- * at some of them in the host's bar. Since protocol 0.32.0 a part can say
- * which files of the epic's paper are its own — `chapters/design.tex`, named
- * from the paper's folder, which is exactly how this module already names a
- * file in `paper.files`, in its hashes and in the page map. So a paper split
- * the ordinary way, one `.tex` per part pulled into `main.tex` with `\input`,
- * can be shown one part at a time: that part's source, and the pages its
- * files printed.
- *
- * The rule is not this file's. It is the one every module on the canvas
- * follows, and it is asked of the protocol each time rather than restated:
+ * A part belongs to the epic and names no module. What it has is a list of
+ * documents, project-relative, which the host unions from what every module
+ * published for it (`chapters.ts` is where this module publishes its own). A
+ * host older than that sends the paper-relative `files` instead. Either way
+ * the question "is this in a picked part" is asked of the protocol and never
+ * answered here: every file of the paper says what ties it to a part with
+ * `anchorOf`, and `useFocus(context).narrow` decides.
  *
  *  - **Nothing picked is the whole epic.** `narrowed` answers null, and the
  *    page is exactly the page it was before any of this existed.
- *  - **Otherwise only what a picked part owns is shown**: a file is anchored
- *    by its own name, `{ file }`, and `narrowToFocus` decides.
- *  - **What is in no part is OUTSIDE the focus** — `main.tex`, usually, and
- *    everything written directly in it. Nothing is said about it: the host's
- *    bar names what is picked, and the pages left out are marked where they
- *    would have been in the PDF.
+ *  - **Otherwise only what a picked part has is shown**, and the one file the
+ *    person is in (`keep`): the editor is never taken from under them.
+ *  - **What is in no part is not shown, and nothing says so.** The host's bar
+ *    names what is picked; this page draws no line, label or rule about it.
+ *
+ * ## `main.tex` is a file like the others
+ *
+ * It is in a part when a part lists it, and otherwise in none — so the title
+ * page, the table of contents and the bibliography it prints are not drawn
+ * under a pick. It could have been anchored `{ whole: true }`, "part of every
+ * part"; then every pick would open on the title page and a person who picked
+ * Methods would be looking at `main.tex` again, which is the complaint a part
+ * compiled on its own was built to answer ("the front matter in main.tex's
+ * body still has to be left out of the view").
  *
  * ## Which pages
  *
- * The union of the pages the picked parts' files reached, read off the page
- * map the build already keeps (`pageMap` in `compile/synctex.ts`, built for
- * this). A page two files share is shown if EITHER of them is picked: half a
- * page cannot be left out of a PDF, and a part that begins halfway down a
- * sheet begins on that sheet. The numbers are the real ones — page 7 is still
- * page 7 with pages 1 to 6 not drawn — because other modules store them: a
- * note on page 7 must still be a note on page 7.
- *
- * The map is read over `pickedFiles`, not over the paper's file list, on
- * purpose. The list comes from this module's own walk of the `\input`s, which
- * does not see one in the middle of a paragraph; the engine does. A file the
- * engine opened and the walk missed has pages, and a part that names it means
- * those pages.
+ * A sheet of a PDF is an item too, about every file that printed on it, read
+ * off the page map the build keeps (`pageMap` in `compile/synctex.ts`). So a
+ * sheet two files share is shown when EITHER is picked: half a page cannot be
+ * left out of a PDF. A sheet something is marked on is the one in hand, and is
+ * kept. The numbers are the paper's — page 7 is still page 7 with pages 1 to
+ * 6 not drawn — because other modules store them.
  *
  * ## What is said, and where
  *
  * One sentence, and only inside a PDF pane the pick has left with no page to
- * draw (`emptySaid`): the picked parts own no file (`ownsNone`), they name only
- * files the paper does not include (`missing`), or their files printed
- * nothing. Everywhere else the narrowed paper is the message.
+ * draw (`noPage`): the protocol's `No page is in the picked part.`, or this
+ * module's own when it can say more — the picked part names a file the paper
+ * does not include, or its file cannot be compiled alone (`partOf`).
  *
  * ## A part compiled on its own
  *
  * When the picked files are ones `main.tex` pulls in with `\include`, the
  * PDF in the pane is those chapters compiled alone, with `\includeonly`
  * given from outside the paper (`compile/part.ts`, `partOf` here). That PDF
- * still opens with whatever `main.tex` writes in its own body — a title page,
- * a table of contents — and ends with its bibliography, so the page map does
- * the same work on it: only the sheets the picked files printed are drawn.
+ * still opens with whatever `main.tex` writes in its own body and ends with
+ * its bibliography, and the same narrowing leaves those sheets out.
  *
- * It has FEWER SHEETS than the paper, and that is the one thing to be careful
- * with. Sheet 9 of a part's PDF is page 17 of the paper, and other modules
- * store pages of the paper. So a sheet number never leaves this module: what
- * is said to the canvas, read out in the toolbar and written on a sheet is the
- * page of the paper, through `pageOfSheet`, and `sheetOfPage` goes back.
- *
- * A file pulled in with `\input` cannot be compiled alone. The pane then
- * says so, in the one sentence `partOf` answers, and draws no page: the
- * sheets of the whole paper that file printed on are mostly its neighbours'.
+ * It has FEWER SHEETS than the paper. Sheet 9 of a part's PDF is page 17 of
+ * the paper, and other modules store pages of the paper. So a sheet number
+ * never leaves this module: what is said to the canvas, read out in the
+ * toolbar and written on a sheet is the page of the paper, through
+ * `pageOfSheet`, and `sheetOfPage` goes back.
  *
  * ## What this does not touch
  *
- * The passage this page publishes
- * (`passage.set`): unchanged, in every field — though which FILES it says it
- * is showing does follow the ticks (`filesShown`). And the MCP door: an agent has no canvas and no
- * focus, so `list_sections`, `read_paper`, `read_source` and `list_papers`
- * answer about the whole paper whatever is picked.
+ * The MCP door: an agent has no canvas and no focus, so `list_sections`,
+ * `read_paper`, `read_source` and `list_papers` answer about the whole paper
+ * whatever is picked.
  *
- * Pure, with no React and no DOM in it, so that every sentence the page says
- * about a focus can be asserted without drawing anything.
+ * Pure, with no React and no DOM in it: `Focus` is the value `useFocus` hands
+ * the page, and every function here is given it.
  */
+
+/** `.kehikot/paper`: where a project keeps its papers, one folder to an epic. This module's own folder, spelled by the protocol. */
+const PAPERS = `${KEHIKOT_DIR}/${moduleFolder('kehikot.paper')}`
+
+/** A file of an epic's paper as a part lists it: relative to the project. */
+export function inProject(epic: string, file: string): string {
+  return `${PAPERS}/${epic}/${file}`
+}
+
+/** The other way: the paper's own name for a project-relative document, or null for one that is not under this epic's paper. */
+export function inPaper(epic: string, document: string): string | null {
+  const under = `${PAPERS}/${epic}/`
+  return document.startsWith(under) && document.length > under.length ? document.slice(under.length) : null
+}
+
+/** As much of a paper as an anchor reads. */
+export interface Anchored {
+  epic: string
+  pulls?: Readonly<Record<string, { by: string }>>
+}
+
+/**
+ * What ties one file of the paper to a part: THE anchor function of this
+ * module, and the only thing it gives the protocol's rule to compare.
+ *
+ * A file is about itself — its own project-relative name — and about every
+ * file that pulls it in, short of `main.tex`: a chapter's table belongs with
+ * the chapter, whether or not anything lists the table. `main.tex` pulls in
+ * everything and is nobody's parent here, or every file would be in whatever
+ * part listed it.
+ */
+export function anchorOf(paper: Anchored, file: string): Anchor[] {
+  const out: Anchor[] = [{ file: inProject(paper.epic, file) }]
+  let above = paper.pulls?.[file]?.by
+  for (let depth = 0; depth < 16 && above !== undefined && above !== MAIN_FILE; depth += 1) {
+    out.push({ file: inProject(paper.epic, above) })
+    above = paper.pulls?.[above]?.by
+  }
+  return out
+}
+
 export interface Narrowed {
-  /** The picked parts' headings, in the epic's order. Never empty. */
-  parts: string[]
-  /** The paper's files a picked part owns, in the paper's own order. */
+  /** Whether exactly one part is picked: “the picked part”, or “parts”. */
+  one: boolean
+  /** The paper's files a picked part has, with what they pull in, in the paper's own order. */
   files: string[]
+  /** Those, and the file in hand when it is not one of them. What the page lists. */
+  shown: string[]
   /**
    * The pages the picked files printed on, ascending, in the PDF's own
    * numbers. Null when nothing has compiled: there are no pages to speak of.
    */
   pages: number[] | null
-  /** Picked files that are not files of this paper, each with the parts naming it. */
-  missing: { file: string; parts: string[] }[]
-  /** The picked parts name no file at all. */
-  ownsNone: boolean
+  /** Files the picked parts name under this paper's folder that the paper does not include. */
+  missing: string[]
+  /** The protocol's sentence for a pane the pick left with no page. */
+  empty: string
 }
 
 /** As much of a paper as narrowing reads. */
-export interface NarrowablePaper {
-  epic: string
+export interface NarrowablePaper extends Anchored {
   files: readonly string[]
 }
 
@@ -110,36 +143,69 @@ export interface NarrowablePdf {
   map: Record<string, PageSpan[]>
 }
 
+/** Every sheet a page map has anything on, ascending, and the files that printed on each. */
+function sheetsIn(map: Record<string, PageSpan[]>): Map<number, string[]> {
+  const found = new Map<number, string[]>()
+  for (const [file, spans] of Object.entries(map)) {
+    for (const span of spans) {
+      const files = found.get(span.page)
+      if (!files) found.set(span.page, [file])
+      else if (!files.includes(file)) files.push(file)
+    }
+  }
+  return new Map([...found].sort((a, b) => a[0] - b[0]))
+}
+
+/**
+ * The sheets of one PDF that are in the picked parts, and those in hand.
+ *
+ * `map` is that PDF's own page map — the whole paper's, or a part's own — and
+ * the answer is in ITS sheets. A sheet is about every file that printed on it;
+ * `marked` are the sheets a mark is drawn on, which are kept: a passage a
+ * neighbour pointed at must arrive somewhere. Read over the map and not over
+ * the paper's file list, because the engine sees an `\input` in the middle of
+ * a paragraph that this module's own walk does not.
+ */
+export function pagesDrawn(focus: Focus, paper: Anchored, map: Record<string, PageSpan[]>, marked: readonly number[] = []): { pages: number[]; empty: string } {
+  const sheets = sheetsIn(map)
+  const said = focus.narrow(
+    [...new Set([...sheets.keys(), ...marked])].sort((a, b) => a - b),
+    (sheet) => (sheets.get(sheet) ?? []).flatMap((file) => anchorOf(paper, file)),
+    { noun: 'page', keep: (sheet) => marked.includes(sheet) },
+  )
+  return { pages: said.shown, empty: said.empty || emptySaid(focus.parts, 'page') }
+}
+
+/** The files of this paper that the picked parts name, once each: `documents`, and from a host older than those the paper-relative `files`. */
+function named(parts: readonly EpicPart[], epic: string): string[] {
+  const out: string[] = []
+  const put = (file: string | null) => {
+    if (file !== null && !out.includes(file)) out.push(file)
+  }
+  for (const document of pickedDocuments(parts)) put(inPaper(epic, document))
+  for (const part of pickedParts(parts)) for (const file of part.files ?? []) put(file)
+  return out
+}
+
 /**
  * The paper as a picked focus leaves it — or null when nothing is picked, and
  * the whole paper is in front of the person.
+ *
+ * `open` is the file in hand: the one the editor is on, with whatever is typed
+ * in it. It is kept in `shown` whatever is picked, and is in `files` only
+ * when a picked part has it.
  */
-export function narrowed(parts: readonly EpicPart[], paper: NarrowablePaper, pdf: NarrowablePdf | null): Narrowed | null {
-  if (!isFocused(parts)) return null
-  const picked = pickedParts(parts)
-  const owned = pickedFiles(parts)
-  const { shown: files } = narrowToFocus(parts, paper.files, (file) => ({ file }), { epic: paper.epic })
-
-  const missing = owned
-    .filter((file) => !paper.files.includes(file))
-    .map((file) => ({
-      file,
-      parts: picked.filter((part) => (part.files ?? []).includes(file)).map((part) => part.heading || part.id),
-    }))
-
-  let pages: number[] | null = null
-  if (pdf) {
-    const seen = new Set<number>()
-    for (const file of owned) for (const span of pdf.map[file] ?? []) seen.add(span.page)
-    pages = [...seen].sort((a, b) => a - b)
-  }
-
+export function narrowed(focus: Focus, paper: NarrowablePaper, pdf: NarrowablePdf | null, open: string | null = null): Narrowed | null {
+  if (!focus.focused) return null
+  const said = focus.narrow(paper.files, (file) => anchorOf(paper, file), { noun: 'page', keep: (file) => file === open })
+  const files = said.kept ? said.shown.filter((file) => file !== open) : said.shown
   return {
-    parts: picked.map((part) => part.heading || part.id),
+    one: pickedParts(focus.parts).length === 1,
     files,
-    pages,
-    missing,
-    ownsNone: owned.length === 0,
+    shown: said.shown,
+    pages: pdf ? pagesDrawn(focus, paper, pdf.map).pages : null,
+    missing: named(focus.parts, paper.epic).filter((file) => !paper.files.includes(file)),
+    empty: emptySaid(focus.parts, 'page'),
   }
 }
 
@@ -147,68 +213,16 @@ export function narrowed(parts: readonly EpicPart[], paper: NarrowablePaper, pdf
  * The one sentence this page says about a focus, and only where the pick has
  * left NOTHING to draw: in the PDF pane, in place of the pages.
  *
- * There used to be a line above the paper for as long as it was narrowed —
- * which parts, how many files and pages, how many were outside, where parts
- * are picked — and more under it. It is gone: the host's bar already says what
- * is picked, the narrowed pages are the message, and a row of prose above a
- * paper is a row of the paper not shown. An empty pane is the exception,
- * because with no words in it it looks broken; so it says why, in one sentence
- * that takes no room from anything.
- *
- * Null whenever there is a page to draw.
+ * The protocol's — `No page is in the picked part.` — except where this
+ * module knows why and the protocol cannot: the picked parts name only files
+ * `main.tex` does not include. (A file that cannot be compiled on its own has
+ * its sentence from `partOf`.)
  */
-export function emptySaid(focus: Narrowed): string | null {
-  if (focus.pages === null || focus.pages.length > 0) return null
-  const one = focus.parts.length === 1
-  const where = `the picked part${one ? '' : 's'}`
-  if (focus.ownsNone) return `No page of this paper is in ${where}: ${one ? 'it owns' : 'they own'} none of its files.`
+export function noPage(focus: Narrowed): string {
   if (focus.files.length === 0 && focus.missing.length) {
-    const named = focus.missing.map((missing) => missing.file).join(', ')
-    return `No page of this paper is in ${where}: ${one ? 'it names' : 'they name'} ${named}, which main.tex does not include.`
+    return `No page of this paper is in the picked part${focus.one ? '' : 's'}: ${focus.one ? 'it names' : 'they name'} ${focus.missing.join(', ')}, which main.tex does not include.`
   }
-  return `No page of this PDF was printed by a file of ${where}.`
-}
-
-/**
- * The pages the PDF pane draws under a focus, and which of them are there
- * although no picked part printed on them.
- *
- * `marked` is the pages a mark is drawn on — the person's own selection, or a
- * passage another module pointed at. Those are added, flagged, because a note
- * that points at a passage outside the picked parts must still arrive
- * somewhere: the page it is on is drawn, says it is outside, and goes again
- * when the mark does. Without it "show in PDF" and every pointer from another
- * module would scroll to a sheet that is not there.
- */
-export function pagesShown(focus: Narrowed, marked: readonly number[]): { pages: number[]; outside: number[] } {
-  const own = new Set(focus.pages ?? [])
-  const outside = [...new Set(marked)].filter((page) => !own.has(page)).sort((a, b) => a - b)
-  return { pages: [...new Set([...own, ...outside])].sort((a, b) => a - b), outside }
-}
-
-/**
- * The runs of pages NOT drawn, between the ones that are — so the pane can
- * say "pp. 1–4 are outside the picked parts" where they would have been,
- * rather than letting page 5 follow nothing.
- *
- * Keyed by the shown page each run comes BEFORE; the run after the last shown
- * page is under `total + 1`. `total` null — the build did not say how many
- * pages there are — leaves the last run unsaid rather than guessed.
- */
-export function gapsBetween(pages: readonly number[], total: number | null): Map<number, { from: number; to: number }> {
-  const gaps = new Map<number, { from: number; to: number }>()
-  let next = 1
-  for (const page of pages) {
-    if (page > next) gaps.set(page, { from: next, to: page - 1 })
-    next = page + 1
-  }
-  if (total !== null && next <= total) gaps.set(total + 1, { from: next, to: total })
-  return gaps
-}
-
-/** “p. 3” or “pp. 3–6”. */
-export function pagesSaid(run: { from: number; to: number }): string {
-  return run.from === run.to ? `p. ${run.from}` : `pp. ${run.from}–${run.to}`
+  return focus.empty
 }
 
 /** The file every paper starts from, and the one the editor rests on when nothing is picked. */
@@ -224,7 +238,7 @@ export const MAIN_FILE = 'main.tex'
  */
 export function ticksOf(parts: readonly EpicPart[]): string {
   return pickedParts(parts)
-    .map((part) => `${part.id}\u0000${(part.files ?? []).join('\u0000')}`)
+    .map((part) => `${part.id}\u0000${[...(part.documents ?? []), ...(part.files ?? [])].join('\u0000')}`)
     .join('\n')
 }
 
@@ -253,13 +267,10 @@ export function ticksOf(parts: readonly EpicPart[]): string {
  *
  * `midEdit` is the open file holding text that has not reached the disk —
  * typed and not yet saved, a save in flight, a save that failed. Then nothing
- * moves. The file stays open, is saved as it always is, and the page says it
- * is outside the picked parts and offers the way to them; it leaves when the
- * person leaves it. A tick in another control is not a reason to take a
- * sentence away from the person in the middle of it. (Nothing would be LOST
- * either way — every file's text is kept and saved whichever is on screen —
- * but the person would be looking at a different file than the one their
- * hands are in.)
+ * moves. The file stays open and is saved as it always is: it is the file in
+ * hand, which the rule keeps, and it leaves when the person leaves it. A tick
+ * in another control is not a reason to take a sentence away from the person
+ * in the middle of it.
  *
  * And a focus that owns no file of the paper has nowhere to go to; the open
  * file stays, and the empty PDF pane says why nothing is in the focus.
@@ -296,59 +307,48 @@ export function fileOnOpening(focus: Narrowed | null, files: readonly string[], 
  *
  * `passage.set` names ONE file — the one the caret is in. So with two parts
  * ticked the canvas knew one of their files, and with nothing ticked it knew
- * `main.tex`, which no note, question or checklist cites: a pane beside this
- * one that shows "what the paper is showing" showed the wrong half, or
- * nothing. The files are this page's to say, since only it knows them:
+ * `main.tex`, which no note, question or checklist cites. The files are this
+ * page's to say, since only it knows them:
  *
  *  - **nothing ticked** is the whole paper — every file;
- *  - **parts ticked** is the files those parts own that the paper includes,
- *    once each — and the open file when it is kept open outside them (unsaved
- *    text, a passage somebody pointed into), because it is on screen;
- *  - **ticked parts that own no file of the paper** is nothing. The page says
- *    so in its own line, and claiming the file left open under that line
- *    would be claiming the focus shows what it has just said it does not.
+ *  - **parts ticked** is what `narrowed` shows: the files those parts have,
+ *    and the file in hand;
+ *  - **ticked parts that have no file of the paper** is nothing. The pane says
+ *    so, and claiming the file left open beside that sentence would be
+ *    claiming the focus shows what it has just said it does not.
  *
  * ## The file the editor is on is said first
  *
  * The rest are in the paper's own order; the open file leads them. A list is
  * read from its head — a neighbour narrowed to this container names its
- * heading after `documents[0]` — and in the paper's order that was `main.tex`
- * whatever chapter the editor was on. It is one rule with the cut below: the
- * open file first, then the others, cut at the cap, so the file a person is
- * looking at is never the one dropped. The list changes when the open file
- * does and not otherwise: a caret, a scroll or a keystroke says nothing.
+ * heading after `documents[0]`. The list changes when the open file does and
+ * not otherwise: a caret, a scroll or a keystroke says nothing.
  *
  * ## More files than the wire carries
  *
  * `limit` is the protocol's bound on one container's documents. A paper with
- * more files than that cannot say all of them, and saying none would put the
- * canvas back to knowing only the caret's file. So it says as many as fit —
- * and WHICH is the question, because whatever is cut is a file whose notes
- * and questions a neighbour then calls "about documents nothing here is
- * showing".
- *
- * The first sixteen in the paper's order was the answer, and it cut by
- * accident: a thesis lists its generated tables between its chapters, so the
- * tables were said and the last chapters were not. `owned` is every file some
- * part of the epic owns, ticked or not — the files the work is organised
- * around, and the ones a note or a question is about. After the open file
- * those are said first, in the paper's order, and the rest fill what room is
- * left. A paper that fits is said whole.
+ * more files than that says as many as fit: the open file, then the files
+ * some part of the epic has (`held`, ticked or not — the ones a note or a
+ * question is about), then the rest.
  */
 export function filesShown(
   focus: Narrowed | null,
   files: readonly string[],
   open: string,
   limit: number,
-  owned: readonly string[] = [],
+  held: readonly string[] = [],
 ): string[] {
-  const shown =
-    focus === null ? [...files] : focus.files.length === 0 ? [] : files.filter((one) => one === open || focus.files.includes(one))
+  const shown = focus === null ? [...files] : focus.files.length === 0 ? [] : focus.shown
   /* The open file first, whatever the paper's order: see "The file the editor is on" above. */
   const first = shown.includes(open) ? [open] : []
   const rest = shown.filter((one) => one !== open)
   if (shown.length <= limit) return [...first, ...rest]
-  return [...first, ...rest.filter((one) => owned.includes(one)), ...rest.filter((one) => !owned.includes(one))].slice(0, limit)
+  return [...first, ...rest.filter((one) => held.includes(one)), ...rest.filter((one) => !held.includes(one))].slice(0, limit)
+}
+
+/** The files of the paper that some part of the epic has, picked or not, in the paper's order. */
+export function heldBy(parts: readonly EpicPart[], paper: NarrowablePaper, projectPath?: string | null): string[] {
+  return paper.files.filter((file) => partsOfFile(parts, inProject(paper.epic, file), paper.epic, projectPath).length > 0)
 }
 
 /** One file in the switch above the editor. */
@@ -356,33 +356,32 @@ export interface FileTab {
   file: string
   /** What the tab says: the file's own name, or its whole path where two share a name. */
   label: string
-  /** Open, and outside the picked parts: it is here because it is open. */
-  outside: boolean
 }
 
 /**
- * The files to switch among, above the editor: the picked parts' own.
+ * The files to switch among, above the editor: the picked parts' chapters.
  *
  * None when nothing is picked. The whole paper is in front of the person
  * then, and it is walked by pressing the PDF and by the section list — a row
  * of every file would be the file picker this page stopped having.
  *
- * Under a focus they are exactly the files in it, in the paper's order,
- * and — last, and marked — the open file when it is not one of them: a file
- * kept open under somebody typing, or one a note in another module pointed
- * into. That one is not a way to widen the focus; it is the tab the person
- * is standing on, which has to be drawn for the others to be tabs at all.
+ * Under a focus they are the files in it that no other file in it pulls in —
+ * a chapter, and not the tables it reads, which the section list reaches —
+ * in the paper's order, and the open file when it is not one of them: the tab
+ * the person is standing on, which has to be drawn for the others to be tabs
+ * at all. Nothing marks it. It is in hand, and that is why it is there.
  *
  * A single file is not a switch, and the page draws no tabs for one.
  */
-export function tabsOf(focus: Narrowed | null, open: string): FileTab[] {
+export function tabsOf(focus: Narrowed | null, open: string, paper: Pullable = { files: [] }): FileTab[] {
   if (focus === null) return []
-  const files = focus.files.includes(open) ? focus.files : [...focus.files, open]
+  const pulls = paper.pulls ?? {}
+  const chapters = focus.files.filter((file) => !focus.files.includes(pulls[file]?.by ?? ''))
+  const files = chapters.includes(open) ? chapters : [...chapters, open]
   const names = files.map((file) => file.split('/').pop() ?? file)
   return files.map((file, i) => ({
     file,
     label: names.indexOf(names[i]!) === names.lastIndexOf(names[i]!) ? names[i]! : file,
-    outside: !focus.files.includes(file),
   }))
 }
 
@@ -391,43 +390,18 @@ export function tabsOf(focus: Narrowed | null, open: string): FileTab[] {
 /**
  * How the picked parts' files are compiled on their own — or the sentence the
  * pane shows because they cannot be. Null when nothing is picked, when the
- * picked parts own no file of the paper (`emptySaid` has those sentences), and
+ * picked parts have no file of the paper (`noPage` has those sentences), and
  * for a paper that does not say how its files are pulled in: one read by a
  * server older than this page, which is narrowed by its pages as it always was.
+ *
+ * `focus.files` is every file the part's own PDF is OF: the picked ones and
+ * whatever they pull in — a chapter's tables, a section split into a file of
+ * its own. A chapter compiled alone with the sheets its own table printed
+ * left out would be a chapter with a hole in it.
  */
 export function partOf(focus: Narrowed | null, paper: Pullable): Plan | null {
   if (!focus || paper.pulls === undefined) return null
-  return planOf(focus.files, paper, `the picked part${focus.parts.length === 1 ? '' : 's'}`)
-}
-
-/**
- * Every file a part's own PDF is OF: the picked files, and whatever they pull
- * in — a chapter's tables, a section split into a file of its own.
- *
- * Wider than the picked files on purpose. Those decide the tabs and the
- * section list; this decides which sheets of the part's PDF are drawn, and a
- * chapter compiled alone with the three sheets its own table printed left out
- * would be a chapter with a hole in it.
- */
-export function coveredBy(picked: readonly string[], paper: Pullable): string[] {
-  const pulls = paper.pulls ?? {}
-  return paper.files.filter((file) => {
-    let at = file
-    for (let depth = 0; depth < 16; depth += 1) {
-      if (picked.includes(at)) return true
-      const above = pulls[at]?.by
-      if (above === undefined) return false
-      at = above
-    }
-    return false
-  })
-}
-
-/** The sheets of a PDF that any of some files printed on, ascending. */
-export function sheetsOf(files: readonly string[], map: Record<string, PageSpan[]>): number[] {
-  const seen = new Set<number>()
-  for (const file of files) for (const span of map[file] ?? []) seen.add(span.page)
-  return [...seen].sort((a, b) => a - b)
+  return planOf(focus.files, paper, `the picked part${focus.one ? '' : 's'}`)
 }
 
 /**

@@ -116,7 +116,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
    * forget to ask for is a ticket that protects nothing while looking like it
    * does, and nothing else on the page would ever show it.
    */
-  test.each(['/api/paper', '/api/file', '/api/proposal', '/api/save'])('POST %s without the ticket is 403', (path) => {
+  test.each(['/api/paper', '/api/file', '/api/proposal', '/api/save', '/api/chapters'])('POST %s without the ticket is 403', (path) => {
     const reply = answer('POST', path, new URLSearchParams(inProject(projectDir, 'epic=a-paper')), {
       file: 'main.tex',
       from: 0,

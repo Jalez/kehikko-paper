@@ -2,6 +2,7 @@ import { establishBuild, mintTicket, refuseTicket, type Reply as DoorReply } fro
 import { join, relative } from 'node:path'
 
 import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
+import { readChapters, republish, setChapters } from './chapters.ts'
 import { buildStatus, compile, compilePart, partStatus, readPdf, syncForward, syncReverse } from './compile/build.ts'
 import { installer } from './compile/install.ts'
 import type { PieceId } from './compile/toolchain.ts'
@@ -1041,7 +1042,44 @@ export function answer(
        are looked for again by their own words — see `settled` — and the ones
        whose words this save rewrote are dropped, with a sentence saying so. */
     const said = lostBecause(settled(project, epic))
-    return ok({ ok: true, hash: written.hash, paper: readPaper(epic, project), proposals: pendingFor(project, epic), said })
+    /* A chapter that now pulls in another file has another document: what this
+       module holds for the parts is published again, and the page is told when
+       that changed anything, so it can tell the canvas. Nothing for an epic
+       whose chapters this module does not keep. */
+    const published = republish(project, epic)
+    return ok({ ok: true, hash: written.hash, paper: readPaper(epic, project), proposals: pendingFor(project, epic), said, published })
+  }
+
+  /*
+   * Which chapter is which part's, as this module keeps it: `chapters` is
+   * `part id → file`, or null when it keeps nothing for this epic and the
+   * chapters are still read off the parts the host sends. A read: no ticket,
+   * and it writes nothing — see `chapters.ts`.
+   */
+  if (path === '/api/chapters' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+    return ok({ ok: true, chapters: readChapters(project, epic) })
+  }
+
+  /*
+   * Keep an epic's chapters: the whole mapping, as the page held it when a
+   * person set one. Ticketed, like every write here. It writes this module's
+   * own record and what it publishes from it, both under `.kehikot/paper/`,
+   * and nothing in the paper. `published` says whether what the canvas is told
+   * about the parts changed.
+   */
+  if (path === '/api/chapters' && method === 'POST') {
+    const refused = unticketed(ticket)
+    if (refused) return refused
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+    const set = setChapters(project, epic, body?.chapters)
+    return set.ok ? ok({ ok: true, chapters: set.chapters, published: set.published }) : bad(set.why, 404)
   }
 
   /*

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import { partRunsFor, type Engine } from '../compile/engine.ts'
 import { DRIVER, KEPT_PARTS, driverText, isIntermediate, onlyLine, planOf, toEvict, unresolved, type Pulled } from '../compile/part.ts'
-import { coveredBy, pageOfSheet, pagesOfSheets, partOf, sheetOfPage, sheetsOf, type Narrowed } from '../src/focus.ts'
+import { pageOfSheet, pagesOfSheets, partOf, sheetOfPage, type Narrowed } from '../src/focus.ts'
 import { readPaper } from '../store.ts'
 
 /**
@@ -264,11 +264,6 @@ describe('a sheet of a part’s own PDF, and the page of the paper it is', () =>
   }
   const files = ['chapters/methods.tex', 'tables/t1.tex']
 
-  test('the sheets drawn are the ones the part’s files printed, its own tables included', () => {
-    expect(sheetsOf(files, part)).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
-    expect(sheetsOf(['chapters/methods.tex'], part)).toEqual([9, 10, 11, 14, 15, 16, 17, 18, 19])
-  })
-
   test('sheet to page: the file’s first page in the paper, plus how far in the sheet is', () => {
     expect(pageOfSheet(9, part, whole, files)).toBe(12)
     expect(pageOfSheet(12, part, whole, files)).toBe(15)
@@ -284,7 +279,7 @@ describe('a sheet of a part’s own PDF, and the page of the paper it is', () =>
   test('page to sheet, and back again for every sheet of the part', () => {
     expect(sheetOfPage(12, part, whole, files)).toBe(9)
     expect(sheetOfPage(22, part, whole, files)).toBe(19)
-    for (const sheet of sheetsOf(files, part)) expect(sheetOfPage(pageOfSheet(sheet, part, whole, files)!, part, whole, files)).toBe(sheet)
+    for (const sheet of [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) expect(sheetOfPage(pageOfSheet(sheet, part, whole, files)!, part, whole, files)).toBe(sheet)
   })
 
   test('a page of the paper the part has no sheet for answers null, never a neighbouring sheet', () => {
@@ -312,7 +307,7 @@ describe('the picked parts, as the pane reads them', () => {
     files: ['main.tex', 'chapters/a.tex', 'tables/t.tex', 'chapters/b.tex'],
     pulls: { 'chapters/a.tex': include('chapters/a'), 'tables/t.tex': input('tables/t', 'chapters/a.tex'), 'chapters/b.tex': input('chapters/b') },
   }
-  const focus = (files: string[], parts = ['One']): Narrowed => ({ parts, files, pages: [], missing: [], ownsNone: files.length === 0 })
+  const focus = (files: string[], parts = ['One']): Narrowed => ({ one: parts.length === 1, files, shown: files, pages: [], missing: [], empty: '' })
 
   test('nothing picked, and a pick that owns no file of the paper, are not this function’s to speak about', () => {
     expect(partOf(null, paper)).toBeNull()
@@ -328,9 +323,7 @@ describe('the picked parts, as the pane reads them', () => {
     expect(partOf(focus(['chapters/a.tex']), { files: paper.files })).toBeNull()
   })
 
-  test('the files a part’s PDF is of: the picked ones and what they pull in, in the paper’s order', () => {
-    expect(coveredBy(['chapters/a.tex'], paper)).toEqual(['chapters/a.tex', 'tables/t.tex'])
-    expect(coveredBy(['chapters/b.tex'], paper)).toEqual(['chapters/b.tex'])
-    expect(coveredBy([], paper)).toEqual([])
+  test('a chapter with the table it pulls in is one selection: the chapter is what \\includeonly is given, and both are what its PDF is of', () => {
+    expect(partOf(focus(['chapters/a.tex', 'tables/t.tex']), paper)).toEqual({ only: ['chapters/a'], files: ['chapters/a.tex', 'tables/t.tex'] })
   })
 })

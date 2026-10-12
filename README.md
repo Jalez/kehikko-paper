@@ -367,12 +367,51 @@ part's own PDF, or the other way round, for the moment it takes to ask again.
 ## Narrowed to the picked parts of the epic
 
 An epic can be divided into parts, and a person can point the whole canvas at
-some of them in the host's bar. A part can name the files of the paper it owns
-(protocol 0.32.0; Journeys makes a part for each chapter file `main.tex` pulls
-in, or they are ticked on the part's row), each relative to the paper's folder
-with its extension: `chapters/design.tex`. That is the name this module already
-lists a file under, so a paper split the ordinary way — one `.tex` per part,
-pulled into `main.tex` with `\input` — can be read one part at a time.
+some of them in the host's bar. A part belongs to the epic and names no module:
+the host keeps the list, and each part has `documents` — project-relative
+paths, `.kehikot/paper/<epic>/chapters/design.tex` — which the host unions from
+what every module publishes for it (protocol 1.2.0). A host older than that
+sends the paper-relative `files` instead (`chapters/design.tex`), and this
+module is narrowed the same by either.
+
+**One rule, and it is the protocol's.** Every file of the paper says what ties
+it to a part with one function, `anchorOf` in `src/focus.ts` — its own
+project-relative name, and that of every file that pulls it in short of
+`main.tex`, so a chapter's tables come with the chapter — and
+`useFocus(context).narrow(files, anchorOf, { noun: 'page', keep })` decides.
+`keep` is the file in hand: the one the editor is on. A sheet of the PDF is an
+item too, about the files that printed on it, and a sheet a mark is on is kept.
+`main.tex` is a file like the others: in a part only when a part lists it, so
+the title page and the bibliography it prints are not drawn under a pick.
+
+### Which chapter is a part's
+
+This module's to keep: `<project>/.kehikot/paper/chapters.json`, `part id →
+file`, one chapter to a part and a chapter in at most one part (`chapters.ts`).
+What it PUBLISHES from that is the protocol's `parts.json` beside it — for each
+part the chapter and every file the chapter pulls in — written with
+`writeHoldings` after every change to the record or to the paper, and the
+canvas is then told (`content.changed`). The record is the decision; the
+publication is derived, and can be made again.
+
+- **Reading never writes.** For an epic the record says nothing about, a
+  part's chapter is what the parts the host sends already say, and the page is
+  narrowed by exactly those. The first time a person SETS a chapter, the whole
+  of what the parts said is kept with the one change: adopted once, on a
+  deliberate act, so every part keeps the chapter it had.
+- **Where it is set.** In the line over the editor, for a file `main.tex`
+  pulls in: "Editing `chapters/3_methods.tex` · Saved · *chapter of Methods ▾*".
+  No row of its own.
+- **A part for each chapter.** For an epic with a paper and no parts, the same
+  line offers it: one press asks the host for a part to each chapter
+  (`parts.set`, under `parts:set`), named by the chapter's first heading, and
+  files each chapter under the id the host made.
+- **Only on a host that keeps the parts.** The host is asked once per paper
+  with an edit that cannot change anything (move a part to after itself); one
+  that answers `unknown-method`, or declines, is shown neither control.
+- A host goes on unioning what an epic's record said for a part before it kept
+  the list. A chapter taken FROM such a part here is taken out of what this
+  module publishes, and stays in the part for as long as that record lists it.
 
 **This page has no chapter picker of its own.** It used to have a dropdown of
 the paper's files, and under a focus that was a second, private place to choose
@@ -395,35 +434,31 @@ shown follows the ticks (`fileAfterTicks` and `tabsOf` in `src/focus.ts`):
 `chapters/3_methods.tex` · Saved" — because the editor now changes file when a
 tick changes, and nothing else on the page says which file is open.
 
-With some picked (`reacts: ['parts']`; the rule is the protocol's
-`fileInFocus`, and `src/focus.ts` is what this module makes of it):
+With some picked (`reacts: ['parts']`):
 
-- **The tabs and the section list** hold only the files a picked part owns,
-  and their sections.
+- **The section list** holds only the files a picked part has, and the file in
+  hand; **the tabs** are the picked parts' chapters (a table a chapter pulls in
+  is reached by the section list, and has a tab only while it is open).
 - **The PDF** is those files compiled on their own, when `main.tex` pulls
   them in with `\include` — the next section. Only the sheets they printed are
   drawn, read off the page map. Every sheet carries its number IN THE PAPER
-  (`p. 7 of 20`) and each run left out is said where it would have been
-  (`pp. 8–20 · outside the picked part`), because other modules store page
-  numbers and page 7 must stay page 7.
-- **No line about the pick.** The host's bar says which parts are picked, and
-  the narrowed pages and files are the message; a row of prose above a paper is
-  a row of the paper not shown. There is no "show everything" on this page; the
+  (`p. 7 of 20`), because other modules store page numbers and page 7 must
+  stay page 7. Nothing is drawn where sheets were left out: no rule, no count.
+- **Nothing about the pick while anything is shown.** No line, no "outside"
+  on a tab, a sheet or a section group, no "shown anyway". The host's bar says
+  which parts are picked, and the narrowed pages and files are the message. There is no "show everything" on this page; the
   focus is lifted where it was set.
 
-Text written directly in `main.tex`, and any file no part names, belongs to the
-epic as a whole and is outside every focus.
-
 The one sentence, and where: when the pick leaves the PDF pane with no page to
-draw, the pane says why — inside itself, where there is nothing else
-(`emptySaid` in `src/focus.ts`):
+draw, the pane says so — inside itself, where there is nothing else (`noPage`
+in `src/focus.ts`):
 
-- the picked parts own no file — `No page of this paper is in the picked part:
-  it owns none of its files.`
-- they name only files the paper does not include — `… it names
-  chapters/desing.tex, which main.tex does not include.`
-- their files printed nothing — `No page of this PDF was printed by a file of
-  the picked part.`
+- the protocol's own (`emptySaid`, `narrow(...).empty`) — `No page is in the
+  picked part.` — for a part with no chapter, and for files that printed
+  nothing;
+- they name only files the paper does not include — `No page of this paper is
+  in the picked part: it names chapters/desing.tex, which main.tex does not
+  include.`
 - a file of theirs is pulled in with `\input` — `No page is shown for the
   picked part: main.tex pulls chapters/rule.tex in with \input, and only a
   file pulled in with \include can be compiled on its own.`
@@ -433,18 +468,17 @@ Three decisions that are this module's own:
 - **A file with unsaved text in it is never taken away by a change of focus.**
   The editor follows the ticks, except out from under somebody typing: a file
   whose text has not reached the disk stays open and editable, and is saved as
-  it always is; it is the last tab, marked as outside (`main.tex — outside`,
-  in italics), and the tab of a file in the focus is the way back. It leaves when
+  it always is. It is the file in hand, which the rule keeps: the last tab,
+  a tab like the others, and the tab of a file in the focus is the way back. It leaves when
   the person leaves it. (Nothing typed is lost either way — every file's text
   is kept and saved whichever is on screen.) A file that is already in the new
   focus is left open too: ticking a second part must not move the reader.
 - **A pointer from another module still arrives.** A note or a slide pointing
-  at a passage in a file outside the picked parts is opened and marked as
-  before, the sentence about it says it is outside them, and the WHOLE PAPER
+  at a passage in a file no picked part has is opened and marked as
+  before — it is then the file in hand — and the WHOLE PAPER
   is shown at that place for as long as the mark is up; the part's own PDF
   comes back when it is taken down. (A paper narrowed by its pages only — see
-  the end of the next section — draws that one page among the picked ones,
-  labelled as outside, as it always did.)
+  the end of the next section — draws that one page among the picked ones.)
 - **A change of focus re-reads nothing of the paper.** `context.parts` is
   carried beside the paper, not into it: no `/api/paper` and no compile. The
   one read is the source of the file the editor moves to, the first time it is

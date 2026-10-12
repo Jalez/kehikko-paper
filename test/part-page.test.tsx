@@ -571,3 +571,48 @@ describe('coming back', () => {
     void canvas
   })
 })
+
+describe('the same pick from a host that sends a part’s documents', () => {
+  /* A host that keeps the parts unions what the modules publish: each part has
+     `documents`, project-relative, and `files` beside them for older modules. */
+  const withDocuments = (...picked: string[]): EpicPart[] =>
+    PARTS(...picked).map((one) => ({ ...one, documents: (one.files ?? []).map((file) => `.kehikot/paper/${EPIC}/${file}`) }))
+  /* And one that sends ONLY documents is narrowed the same: nothing here reads `files` for the rule. */
+  const onlyDocuments = (...picked: string[]): EpicPart[] => withDocuments(...picked).map(({ files: _, ...rest }) => rest)
+
+  test.each([
+    ['documents and files', withDocuments],
+    ['documents alone', onlyDocuments],
+  ])('%s: the chapter compiled on its own, its sheets and no others, called by the paper’s pages', async (_, said) => {
+    const canvas = await framed(said())
+    await waitFor(() => expect(inFront()).toBe('whole'))
+    canvas.context(said('the-method'))
+    await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-pages')).toBe('8,9'))
+    await waitFor(() => expect(inFront()).toBe('part'))
+    expect(asked('/api/part', 'POST')[0]!.body).toEqual({ files: ['chapters/method.tex'], full: true })
+    const pane = panes['chapters/method']!
+    expect(pane.pages).toEqual([6, 7])
+    expect(pane.numbers).toEqual([null, null, null, null, null, 8, 9, null])
+    expect(pane.total).toBe(12)
+    expect(openFile()).toBe('chapters/method.tex')
+  })
+
+  test('nothing is handed to the pane about what was left out: no rule, no flag, no “outside”', async () => {
+    await framed(withDocuments('the-method'))
+    await waitFor(() => expect(inFront()).toBe('part'))
+    for (const pane of Object.values(panes)) {
+      expect('outside' in pane).toBe(false)
+      expect('outsideOf' in pane).toBe(false)
+    }
+    expect(document.body.textContent).not.toMatch(/outside|shown anyway/i)
+  })
+
+  test('a passage in a file the part does not have still brings the whole paper, and says nothing about the pick', async () => {
+    const canvas = await framed(withDocuments('the-method'))
+    await waitFor(() => expect(inFront()).toBe('part'))
+    canvas.context(withDocuments('the-method'), at('chapters/design.tex', 16, 26))
+    await waitFor(() => expect(inFront()).toBe('whole'))
+    expect(panes['']!.pages).toBeUndefined()
+    expect(screen.getByTestId('said').textContent).toBe('Something pointed at chapters/design.tex, bytes 16–26. It is marked in the source.')
+  })
+})
