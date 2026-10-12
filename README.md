@@ -269,30 +269,65 @@ text behind gzip, and it is parsed here.
 SyncTeX records boxes and the glue between words, with the source **line** each
 was read on. It does not record glyphs and it has no columns. So:
 
-- **Source to PDF** is exact to the source line: one rectangle per printed line
-  those source lines reached, as wide as the part they produced.
 - **PDF to source** is exact to the source line under the click. A press selects the
   word in the source and marks it on the page pressed; the PDF tab stays in
-  front, and a double press turns to the Source tab.
-- **Finer than a line** is done by matching against the PDF's own text
-  (`src/pdf/words.ts`): the clicked word is looked for on the named line and
-  selected, and the first and last words of a selection are looked for under
-  ALL of its rectangles — a source line is often printed over two — so that
-  the rectangles it does not reach are dropped and the two it ends in are
-  pulled in. A word's position in a run of PDF text is an estimate by
-  proportion, good to a character or two, so a pulled-in end keeps two
-  characters of margin rather than risk cutting into the word. When no match
-  is found the line-level answer stands, and nothing is ever widened past it.
-- **Where a word is on the page** is measured, not estimated. pdf.js gives a
-  printed line as a string and a width; each line is measured in the font it is
-  printed in (`offsetsOf` in `src/pdf/pdf-view.tsx`), with what is left of its
-  width shared among its spaces, as TeX shared it. When both ends of a
-  selection are found that way the mark runs from the first word to the last
-  exactly, and may be WIDER than SyncTeX's rectangles, which under pdfLaTeX
-  start a word late and end a word late. When a line cannot be measured the old
-  rule stands: by proportion, inward only.
+  front, and a double press turns to the Source tab. Finer than the line is
+  done by reading the page (`src/pdf/words.ts`): the word under the press is
+  looked for on the line SyncTeX named, and selected.
+- **Source to PDF is not SyncTeX's answer at all: the passage is looked for in
+  the PDF's own text** (`src/pdf/find.ts`). The source is turned into the
+  letters it prints (`src/pdf/printed.ts`) — markup dropped, an `\emph{x}` as
+  `x`, and a gap wherever it prints something that cannot be spelled: a
+  citation, a reference, maths, a command nobody has heard of — and those
+  letters are found on the page, across line breaks and hyphens, over the foot
+  of one page and the running head of the next, round a float, down one column
+  of two. The mark is drawn round the characters that were found, so it begins
+  on the passage's first letter and ends on its last, whatever SyncTeX's
+  rectangle for those source lines did.
+- **SyncTeX is the hint, the tie-breaker and the fallback.** Its rectangles say
+  which pages to read first. When the same words are printed twice, the ones
+  beside its rectangles are meant. And when the words are not found — the
+  passage is a figure, a display, a comment; or the PDF is older than the
+  text — what is drawn is the printed lines SyncTeX named, WHOLE and a shade
+  lighter: "about here", as Overleaf draws it, and never a tight mark in a
+  guessed place.
+- **A line being typed on keeps its mark.** The PDF does not have the new
+  letters, so the whole passage is not there to be found; the longest
+  beginning and the longest ending that are, with a little of what stands
+  before and after it, still pin it between them.
+- **Where a letter is on the page** is measured, not estimated. pdf.js gives a
+  printed line as a string and a width; a line a mark is drawn on is measured
+  in the font it is printed in (`offsetsOf` in `src/pdf/pdf-view.tsx`), with
+  what is left of its width shared among its spaces, as TeX shared it. When a
+  line cannot be measured an edge is found by proportion along it.
+- **What it costs.** A page's text is one question to pdf.js, asked once per
+  compiled PDF and only for the pages beside where SyncTeX pointed; the whole
+  PDF is read only when a passage is not found there. On a 61-page thesis in
+  WebKit that is about a millisecond a page — 0.11 s for all 61 — and looking
+  for a passage in what was read is under a millisecond (two, across the whole
+  PDF, for one that is not there). Measuring a page's letters is the slow part,
+  as it always was, and is only done for the pages a mark is drawn on.
 
-Measured on a 20-page paper (661 prose lines, 1,177 words clicked), with
+Measured on that thesis (pdfLaTeX through latexmk), in WebKit, by pointing at
+every passage as a neighbour does and reading back — with Ghostscript, not
+pdf.js — the characters that lie under the mark drawn. Of the 180 real passages
+the project's slides, questions and notes point at that print anything, the mark
+covered the passage's letters and nothing else, within two letters, for 180; of
+801 more nobody had tuned anything on — every other sentence of every chapter,
+short runs of words, whole paragraphs; 96 with citations, 163 with maths or
+commands, 25 across a page break, 20 in tables and captions — for 801. The
+method this replaced, which narrowed SyncTeX's rectangles to the passage's
+first and last words, scored 177 and 746 on the same passages. Median time
+from the pointing to a settled mark: 85 ms, as before.
+
+What it does not do: a fixed-pitch listing is measured by proportion, and the
+end of a mark in one can be a letter short; a passage that is only a figure,
+or prints nothing — a comment, a `\label`, an `\input` — is the lines SyncTeX
+named; and a passage whose words are printed more than once with the same
+words round them, away from where SyncTeX points, is those lines too.
+
+For PDF to source, measured on a 20-page paper (661 prose lines, 1,177 words clicked), with
+
 Tectonic: every source line's rectangles were on the printed lines holding its
 words; 91% covered both its first and last word within one character's slop; a
 click landed on the word's own source line 97.4% of the time, on the adjacent
@@ -305,15 +340,14 @@ Where it is coarser, and why:
   on. That is most of the "adjacent line" clicks; the word match usually
   recovers the right line.
 - **Maths** is one lump: inline maths answers with its line, and nothing inside
-  a formula is told apart.
+  a formula is told apart. A passage with maths IN it is marked from the words
+  before to the words after; a passage that is ONLY maths is its printed lines.
 - **Floats** answer from where they landed. A caption goes to its line; the
   image itself and the cells of a table go to the line of the environment or
   nearby.
 - **What a macro typeset** — the title block, a table of contents, a
   bibliography printed from a `.bbl` — answers with the line of the command
   that called it (`\maketitle`), or not at all when it came from the class.
-- **A hyphenated word** is found by SyncTeX but not by the word match, so that
-  end of a selection's highlight stays at the line-level answer.
 - **A caret on a line that printed nothing** — a comment, a `\label` — draws
   nothing until *Show in PDF* is pressed, which goes to the nearest line that
   did.
