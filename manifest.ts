@@ -112,9 +112,9 @@ export const PREFERRED_PORT = 7870
  *   what its chapters are, and an epic with a paper and no parts is one press
  *   from having a part to each: "a part for each chapter" asks the host to add
  *   them (`parts.set`, `src/use-chapters.ts`). Asked on a person's press and
- *   never otherwise — and once per paper with an edit that cannot change
- *   anything, to learn whether this host keeps parts at all before either
- *   control is drawn.
+ *   never otherwise — and once per paper about an id no part has, which
+ *   changes nothing, to learn whether this host keeps parts at all before
+ *   either control is drawn.
  * - **`content:report` — declared, beside it.** Which chapter is which part's
  *   is this module's to keep (`chapters.ts`), and what it holds for a part is
  *   published where every module's is. When that changes the canvas is told

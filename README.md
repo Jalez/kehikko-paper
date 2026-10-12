@@ -424,8 +424,9 @@ publication is derived, and can be made again.
   (`parts.set`, under `parts:set`), named by the chapter's first heading, and
   files each chapter under the id the host made.
 - **Only on a host that keeps the parts.** The host is asked once per paper
-  with an edit that cannot change anything (move a part to after itself); one
-  that answers `unknown-method`, or declines, is shown neither control.
+  about an id no part of the epic has, which changes nothing (it answers
+  `no-such-part`); one that answers `unknown-method`, or declines, is shown
+  neither control.
 - A host goes on unioning what an epic's record said for a part before it kept
   the list. A chapter taken FROM such a part here is taken out of what this
   module publishes, and stays in the part for as long as that record lists it.

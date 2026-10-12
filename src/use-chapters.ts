@@ -25,8 +25,9 @@ import { chaptersOf, chaptersSaid, nameFor, partOfChapter, withChapter, type Cha
  * A host that unions what modules publish also answers `parts.set`. One that
  * does not would leave a chapter set here unheard by everything else on the
  * canvas, and the control would be a switch wired to nothing. So the host is
- * asked once per paper, with an edit that cannot change anything — "put this
- * part right after itself" — and neither control is drawn unless it answers.
+ * asked once per paper, with an edit that cannot change anything — "move the
+ * part called <an id no part of this epic has>", which a host that keeps the
+ * parts answers `no-such-part` — and neither control is drawn unless it does.
  * An older host answers `unknown-method`; one that was not granted the
  * capability declines.
  */
@@ -73,11 +74,10 @@ export function useChapters({
   useEffect(() => {
     if (!hosted) return
     let stopped = false
-    const id = partsRef.current[0]?.id ?? 'part'
-    void request('parts.set', { epic, move: { id, after: id } })
+    void request('parts.set', { epic, move: { id: noSuchPart(partsRef.current), after: null } })
       .then((answer) => {
         const said = partsSetResult.safeParse(answer)
-        if (!stopped && said.success && (said.data.outcome === 'unchanged' || said.data.outcome === 'no-such-part')) setEdits(epic)
+        if (!stopped && said.success && said.data.outcome === 'no-such-part') setEdits(epic)
       })
       .catch(() => {})
     return () => {
@@ -89,6 +89,8 @@ export function useChapters({
   const kept = own?.epic === epic ? own.chapters : null
   const chapters = useMemo(() => kept ?? chaptersSaid(parts, paper, projectPath), [kept, parts, paper, projectPath])
   const candidates = useMemo(() => chaptersOf(paper), [paper])
+  /* What gets a part of its own: a chapter with a heading in it. A file of macros or of tables that `main.tex` pulls in is no chapter of anything a person would pick. */
+  const headed = useMemo(() => candidates.filter((file) => sections.some((section) => section.file === file)), [candidates, sections])
 
   const keep = useCallback(
     async (next: Chapters): Promise<void> => {
@@ -126,7 +128,7 @@ export function useChapters({
     setBusy(true)
     const next: Chapters = { ...chapters }
     try {
-      for (const file of candidates) {
+      for (const file of headed) {
         const said = partsSetResult.safeParse(await request('parts.set', { epic, add: { name: nameFor(file, sections) } }))
         if (said.success && said.data.outcome === 'changed' && said.data.id) next[said.data.id] = file
         else {
@@ -140,7 +142,7 @@ export function useChapters({
     } finally {
       setBusy(false)
     }
-  }, [busy, chapters, candidates, request, epic, sections, keep, say])
+  }, [busy, chapters, headed, request, epic, sections, keep, say])
 
   return {
     busy,
@@ -149,8 +151,15 @@ export function useChapters({
     /** Whether a file is one a person can make a part's chapter here: `main.tex` pulls it in, the epic has parts, and the host keeps them. */
     settable: useCallback((file: string) => can && parts.length > 0 && candidates.includes(file), [can, parts, candidates]),
     /** Whether "a part for each chapter" is offered: an epic with a paper and no parts, on a host that can add them. */
-    offer: can && parts.length === 0 && candidates.length > 0,
+    offer: can && parts.length === 0 && headed.length > 0,
     set,
     each,
   }
+}
+
+/** An id no part of the epic has: what the host is asked about, so that asking changes nothing. The context lists every part. */
+export function noSuchPart(parts: readonly EpicPart[]): string {
+  let id = 'no-such-part'
+  while (parts.some((part) => part.id === id)) id += '-x'
+  return id
 }

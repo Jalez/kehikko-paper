@@ -1443,9 +1443,11 @@ export function Workspace({
             {/* Which part this file is the chapter of, said and set in the
                 line that already names the file: no row of its own. Only for
                 a file `main.tex` pulls in itself, in an epic that has parts,
-                on a host that keeps them. As tall as the words beside it. */}
+                on a host that keeps them. As tall as the words beside it, and
+                it takes the room that is left rather than a line of its own:
+                in a very narrow container that is the arrow alone. */}
             {chapters.settable(file) && (
-              <label className="text-muted-foreground ml-auto flex max-w-[13rem] min-w-0 flex-[0_1_auto] items-center" title={`The part of the epic ${file} is the chapter of`}>
+              <label className="text-muted-foreground ml-auto flex max-w-[13rem] min-w-0 flex-[1_1_0%] items-center justify-end" title={`The part of the epic ${file} is the chapter of`}>
                 <select
                   className="hover:text-foreground w-full min-w-0 cursor-pointer appearance-none truncate bg-transparent p-0 text-right underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-1"
                   aria-label="The part this file is the chapter of"
@@ -1461,7 +1463,7 @@ export function Workspace({
                     </option>
                   ))}
                 </select>
-                <span aria-hidden className="pl-0.5">
+                <span aria-hidden className="shrink-0 pl-0.5">
                   ▾
                 </span>
               </label>

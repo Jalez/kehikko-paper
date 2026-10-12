@@ -8,6 +8,7 @@ import { standIn } from '../src/api.ts'
 import type { EditorProps } from '../src/editor/source-editor.tsx'
 import { inProject } from '../src/focus.ts'
 import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
+import { noSuchPart } from '../src/use-chapters.ts'
 import { usePaper } from '../src/use-paper.ts'
 import { Workspace } from '../src/workspace.tsx'
 
@@ -127,9 +128,11 @@ function host() {
       respond({ outcome: 'declined', parts: [], id: null, why: 'This module’s manifest does not ask for parts:set.' })
       return
     }
-    const params = asked.params as { add?: { name: string }; move?: { id: string; after: string } }
+    const params = asked.params as { add?: { name: string }; move?: { id: string; after: string | null } }
     if (params.move) {
-      respond({ outcome: listed.some((one) => one.id === params.move!.id) ? 'unchanged' : 'no-such-part', parts: listed, id: null, why: '' })
+      /* As a host does: a part that is not in the list is `no-such-part`, and one that is would be MOVED. */
+      if (listed.some((one) => one.id === params.move!.id)) throw new Error('the probe named a real part')
+      respond({ outcome: 'no-such-part', parts: listed, id: null, why: '' })
       return
     }
     if (params.add) {
@@ -220,7 +223,7 @@ describe('on a host that keeps the parts', () => {
     expect(writes()).toEqual([])
     expect(asked('content.changed')).toEqual([])
     /* The host was asked once whether it keeps parts, with an edit that changes nothing. */
-    expect(asked('parts.set').map((one) => one.params)).toEqual([{ epic: EPIC, move: { id: 'the-design', after: 'the-design' } }])
+    expect(asked('parts.set').map((one) => one.params)).toEqual([{ epic: EPIC, move: { id: 'no-such-part', after: null } }])
   })
 
   test('main.tex and a table a chapter pulls in are nobody’s chapter to set', async () => {
@@ -278,14 +281,14 @@ describe('on a host that keeps the parts', () => {
     expect(writes()).toEqual([])
     fireEvent.click(offer()!)
     await waitFor(() => expect(writes()).toHaveLength(1))
-    /* Named by the chapter's first heading, or by its file; in the paper's order; the table is no chapter. */
+    /* Named by the chapter's first heading, in the paper's order. The table a chapter reads is no
+       chapter, and neither is a file main.tex pulls in that has no heading: nobody picks a part called after a file of macros. */
     expect(asked('parts.set').filter((one) => one.params?.add).map((one) => one.params)).toEqual([
       { epic: EPIC, add: { name: 'The design' } },
       { epic: EPIC, add: { name: 'Method' } },
-      { epic: EPIC, add: { name: 'results' } },
     ])
     /* Under the ids the HOST made. */
-    expect(writes()[0]!.body).toEqual({ chapters: { 'the-design': 'chapters/design.tex', method: 'chapters/method.tex', results: 'chapters/results.tex' } })
+    expect(writes()[0]!.body).toEqual({ chapters: { 'the-design': 'chapters/design.tex', method: 'chapters/method.tex' } })
     await waitFor(() => expect(asked('content.changed')).toHaveLength(1))
   })
 
@@ -293,6 +296,15 @@ describe('on a host that keeps the parts', () => {
     await framed(PARTS())
     await settle()
     expect(offer()).toBeNull()
+  })
+})
+
+describe('what the host is asked, to learn whether it keeps the parts', () => {
+  test('is about an id no part of the epic has, so that asking can change nothing', () => {
+    const called = (id: string): EpicPart => ({ id, heading: id, refs: [], picked: false })
+    expect(noSuchPart([])).toBe('no-such-part')
+    expect(noSuchPart([called('methods')])).toBe('no-such-part')
+    expect(noSuchPart([called('no-such-part'), called('no-such-part-x')])).toBe('no-such-part-x-x')
   })
 })
 
