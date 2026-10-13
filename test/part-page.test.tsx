@@ -10,6 +10,7 @@ import type { EditorProps } from '../src/editor/source-editor.tsx'
 import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
 import { usePaper } from '../src/use-paper.ts'
 import { Workspace } from '../src/workspace.tsx'
+import { press } from './menu.ts'
 
 /**
  * The page with a picked part compiled on its own.
@@ -360,7 +361,7 @@ describe('a part whose file is \\include’d is picked', () => {
   test('pressing Compile asks for both, whatever stands', async () => {
     await framed(PARTS('the-method'))
     await waitFor(() => expect(inFront()).toBe('part'))
-    fireEvent.click(screen.getByRole('button', { name: 'Compile' }))
+    press('compile')
     await waitFor(() => expect(asked('/api/part', 'POST').at(-1)!.body).toEqual({ files: ['chapters/method.tex'], force: true }))
   })
 })

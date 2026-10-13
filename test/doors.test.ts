@@ -178,6 +178,13 @@ describe('the write paths are exactly two, and both are ticketed', () => {
       'read_source',
     ])
   })
+
+  test('every tool says whether it only reads, and only propose_edit does not', () => {
+    const reply = post('/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    const tools = (reply?.body as { result: { tools: { name: string; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }[] } }).result.tools
+    expect(tools.every((tool) => typeof tool.annotations?.readOnlyHint === 'boolean' && tool.annotations.destructiveHint === false)).toBe(true)
+    expect(tools.filter((tool) => !tool.annotations!.readOnlyHint).map((tool) => tool.name)).toEqual(['propose_edit'])
+  })
 })
 
 describe('the ordinary doors', () => {

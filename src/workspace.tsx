@@ -16,6 +16,8 @@ import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import type { Editor } from './editor/source-editor.tsx'
 import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, heldBy, narrowed, noPage, pageOfSheet, pagesDrawn, pagesOfSheets, partOf, tabsOf, ticksOf } from './focus.ts'
+import { HeaderFallback } from './header-fallback.tsx'
+import { headerOf } from './header.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import { pdfIsOf } from './pdf/of.ts'
@@ -26,7 +28,7 @@ import { ProposalsPanel } from './proposals-panel.tsx'
 import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
 import { useChapters } from './use-chapters.ts'
-import type { usePaper } from './use-paper.ts'
+import type { PressHandler, usePaper } from './use-paper.ts'
 import { join, usePublishedPassage, type Highlighted, type Sheet } from './use-published-passage.ts'
 import { useSource, type Landed } from './use-source.ts'
 import { useTheme } from './use-theme.ts'
@@ -1273,117 +1275,113 @@ export function Workspace({
 
   const saved =
     source.state === 'saving' ? 'Saving…' : source.state === 'dirty' ? 'Unsaved' : source.state === 'failed' ? 'Not saved' : 'Saved'
-  const engineSays = !build
-    ? ''
-    : !build.engine
-      ? 'No engine'
-      : compiling || build.running
-        ? 'Compiling…'
-        : ran
-          ? `${ran.ok ? 'Compiled' : 'Failed'} · ${(ran.ms / 1000).toFixed(1)} s`
-          : build.engine
+
+  /* What is NEWS about the build, for the line over the editor: nothing once it has compiled — the seconds are the Run menu's. */
+  const buildSays = !build ? '' : !build.engine ? 'No engine' : compiling || build.running ? 'Compiling…' : failed ? 'Failed' : ''
+
+  /* ---- The header: what the host draws in the container's own row --------- */
+
+  const chapterOf = chapters.settable(file) ? chapters.partOf(file) : undefined
+  const items = headerOf({
+    tab,
+    proposals: proposals.length,
+    tabs,
+    file,
+    listed,
+    jumps,
+    auto,
+    log: ran ? { open: showLog, warnings: warnings.length } : null,
+    chapter: chapterOf === undefined ? null : { parts, of: chapterOf },
+    eachOffered: chapters.offer,
+    chaptersBusy: chapters.busy,
+    engine: build ? build.engine : undefined,
+    compiling: compiling || build?.running === true,
+    ran: ran ? { ok: ran.ok, ms: ran.ms, first: errors[0]?.message ?? null } : null,
+    pages: build?.pdf?.pages ?? null,
+    pdf: build?.pdf != null,
+    /* Offered wherever there is a repository, with the reason it cannot be pressed when it cannot. */
+    commit:
+      wire.saving.at === 'nogit'
+        ? null
+        : {
+            why: busy
+              ? 'Something is being saved or decided just now.'
+              : wire.saving.at === 'ready'
+                ? null
+                : wire.saving.at === 'clean'
+                  ? 'Nothing in this paper has changed since the last commit.'
+                  : wire.saving.why,
+          },
+  })
+  /* Declared again when the list is a different list, and never otherwise:
+     held as a string, so a keystroke — which changes none of the above — and a
+     re-read of the paper that found the same sections say nothing. */
+  const itemsKey = JSON.stringify(items)
+  const { header } = wire
+  useEffect(() => {
+    header(items)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [header, itemsKey])
+  useEffect(() => () => header([]), [header])
+
+  const press: PressHandler = ({ item, value }) => {
+    const nth = (prefix: string) => (typeof value === 'string' && value.startsWith(prefix) ? Number(value.slice(prefix.length)) : -1)
+    if (item === 'pane') {
+      if (value === 'pdf') showInPdf()
+      else setTab('source')
+    } else if (item === 'reveal') {
+      showInPdf()
+    } else if (item === 'file') {
+      const to = tabs[nth('t')]
+      if (!to) return 'That file is no longer one of the picked parts’.'
+      if (to.file !== file) {
+        wandered()
+        source.open(to.file)
+      }
+    } else if (item === 'chapter') {
+      const part = value === 'none' ? null : parts[nth('p')]
+      if (part === undefined) return 'That part is no longer one of this epic’s.'
+      void chapters.set(part === null ? null : part.id, file)
+    } else if (item === 'auto') {
+      changeAuto(value === true)
+    } else if (item === 'log') {
+      setShowLog(value === true)
+      if (value === true) setTab('pdf')
+    } else if (item === 'section') {
+      const top = listed[nth('f')]
+      const picked = sections[nth('s')]
+      if (top === undefined && !picked) return 'That place is no longer in this paper.'
+      wandered()
+      go(top !== undefined ? { file: top, bytes: { from: 0, to: 0 }, focus: true } : { file: picked!.file, bytes: { from: picked!.at, to: picked!.at }, focus: true })
+      setTab('source')
+    } else if (item === 'compile') {
+      /* Asked for by hand: the whole paper, and then the picked part from it. Answered at once; the header reports. */
+      void source.flush().then(() => (pickedKey !== null ? compilePart(pickedKey.split('\n'), { force: true }) : compile()))
+    } else if (item === 'commit') {
+      void source.flush().then(() => wire.save())
+    } else if (item === 'parts-each') {
+      void chapters.each()
+    } else {
+      return 'That is not something this paper has.'
+    }
+  }
+  wire.press.current = press
+  useEffect(
+    () => () => {
+      wire.press.current = () => 'No paper is open here.'
+    },
+    [wire.press],
+  )
+  /* Whether the page draws its own way to the items: nobody frames it, or no host has pressed one yet. */
+  const fallback = wire.where !== 'hosted' || !wire.pressed
 
   return (
-    <div className="workspace flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-1 border-b px-1 pb-1 text-[0.72rem]">
-        {/* The picked parts' files, as tabs — and only under a focus with more
-            than one file to be on. Not a list of the paper's files: what is in
-            this row is decided by the ticks in the host's bar, and this only
-            moves between them. It scrolls sideways rather than wrapping, so
-            seven chapters in a 300-pixel container are one row and not five. */}
-        {tabs.length > 1 && (
-          <div role="tablist" aria-label="Files of the picked parts" className="flex max-w-full min-w-0 flex-[1_1_100%] gap-1 overflow-x-auto" data-files>
-            {tabs.map((one) => (
-              <Button
-                key={one.file}
-                role="tab"
-                aria-selected={one.file === file}
-                variant={one.file === file ? 'outline' : 'ghost'}
-                size="container"
-                className="shrink-0 font-mono"
-                title={one.file}
-                data-file={one.file}
-                onClick={() => {
-                  if (one.file === file) return
-                  wandered()
-                  source.open(one.file)
-                }}
-              >
-                {one.label}
-              </Button>
-            ))}
-          </div>
-        )}
-        {(sections.length > 0 || listed.length > 1) && (
-          <select
-            className="border-input bg-background w-0 max-w-[12rem] min-w-0 flex-1 basis-[5.5rem] rounded border px-1 py-0.5"
-            value=""
-            onChange={(event) => {
-              const value = event.target.value
-              /* "f:<file>" is the top of a file that has no heading to jump to. */
-              const top = value.startsWith('f:') ? value.slice(2) : null
-              const picked = top === null ? sections[Number(value)] : null
-              if (top !== null && listed.includes(top)) {
-                wandered()
-                go({ file: top, bytes: { from: 0, to: 0 }, focus: true })
-                setTab('source')
-              } else if (picked) {
-                wandered()
-                go({ file: picked.file, bytes: { from: picked.at, to: picked.at }, focus: true })
-                setTab('source')
-              }
-            }}
-            aria-label="Sections"
-          >
-            <option value="">{shown.section ?? 'Sections'}</option>
-            {jumps.map((group) => (
-              <optgroup key={group.file} label={group.file}>
-                {group.sections.length === 0 ? (
-                  <option value={`f:${group.file}`}>(no headings) top of the file</option>
-                ) : (
-                  /* By its place in the WHOLE list, which is what the handler
-                     above reads, so leaving some out renumbers nothing. */
-                  group.sections.map(({ index, section }) => (
-                    <option key={index} value={index}>
-                      {`${'  '.repeat(Math.max(0, section.level - 1))}${section.title}`}
-                    </option>
-                  ))
-                )}
-              </optgroup>
-            ))}
-          </select>
-        )}
-        <span className="flex-1" />
-        <span
-          className={cn('text-muted-foreground', failed && 'text-(--gone)')}
-          data-build={compiling ? 'running' : failed ? 'failed' : ran ? 'ok' : 'idle'}
-          /* Said here and not in a row of its own: it is a fact about the run, like the seconds beside it. */
-          title={ran?.confined === false ? NOT_CONFINED : undefined}
-          data-confined={ran?.confined === undefined ? undefined : String(ran.confined)}
-        >
-          {engineSays}
-          {shown.page !== null && build?.pdf?.pages ? ` · p. ${shown.page}/${build.pdf.pages}` : ''}
-        </span>
-        {build?.engine && (
-          <Button
-            variant="outline"
-            size="container"
-            disabled={compiling}
-            /* Asked for by hand: the whole paper, and then the picked part from it. */
-            onClick={() => void source.flush().then(() => (pickedKey !== null ? compilePart(pickedKey.split('\n'), { force: true }) : compile()))}
-          >
-            Compile
-          </Button>
-        )}
-        <Button variant="ghost" size="container" onClick={showInPdf} title="Show the caret’s line in the PDF">
-          Show in PDF
-        </Button>
-        {wire.saving.at === 'ready' && (
-          <Button variant="ghost" size="container" disabled={busy} onClick={() => void source.flush().then(() => wire.save())} title="Commit this paper to its repository">
-            Commit
-          </Button>
-        )}
-      </header>
+    <div className="workspace relative flex min-h-0 flex-1 flex-col" data-pane={tab}>
+      {/* No toolbar: the panes, the files, the sections, Compile, Commit, the
+          log and the rest are declared to the host (`header.ts`) and drawn in
+          the container's own row. A page no host draws that for has them
+          behind one small control laid over its corner. */}
+      {fallback && <HeaderFallback items={items} onPress={press} />}
 
       {source.conflict && (
         <div role="alert" className="bg-muted/60 flex shrink-0 flex-wrap items-center gap-2 border-b px-2 py-1 text-[0.72rem]">
@@ -1404,25 +1402,26 @@ export function Workspace({
         </p>
       )}
 
-      <div role="tablist" className="flex shrink-0 gap-1 border-b px-1 py-1 @min-[720px]:hidden">
-        {(['source', 'pdf'] as const).map((one) => (
-          <Button key={one} role="tab" aria-selected={tab === one} variant={tab === one ? 'outline' : 'ghost'} size="container" onClick={() => setTab(one)}>
-            {one === 'source' ? (tab === 'pdf' && proposals.length ? `Source · ${proposals.length}` : 'Source') : failed ? 'PDF ·!' : 'PDF'}
-          </Button>
-        ))}
-      </div>
-
       <div className="flex min-h-0 flex-1">
         <div className={cn('min-h-0 min-w-0 flex-1 flex-col @min-[720px]:flex @min-[720px]:border-r', tab === 'source' ? 'flex' : 'hidden')}>
           {/* Which file this is, directly over its text: what an edit below is
               saved to, and whether it has been. The only place the open file
               is named, now that no dropdown names it — and the editor changes
               file when a tick in the host's bar does, so it has to be here. */}
-          <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 border-b px-2 py-0.5 text-[0.72rem] leading-snug" data-editing={file}>
+          <div
+            className={cn(
+              /* One line, whatever the width: the file's name gives way first, then the section. */
+              'flex shrink-0 items-center gap-x-2 overflow-hidden border-b px-2 py-0.5 text-[0.72rem] leading-snug whitespace-nowrap',
+              fallback && '@max-[719px]:pr-7',
+            )}
+            data-editing={file}
+          >
             {awayFromMain && (
               <Button
                 variant="outline"
                 size="container"
+                /* As tall as the words beside it: the line is one line of text and no taller for having this in it. */
+                className="h-4 shrink-0 px-1 text-[0.68rem]"
                 aria-label={`Back to ${MAIN_FILE}`}
                 title={`Back to ${MAIN_FILE}, the file the whole paper starts from`}
                 onClick={() => {
@@ -1433,60 +1432,36 @@ export function Workspace({
                 ← {MAIN_FILE}
               </Button>
             )}
-            <span className="min-w-0 [overflow-wrap:anywhere]">
-              <span className="text-muted-foreground">Editing </span>
+            <span className="min-w-0 shrink truncate" title={file}>
+              <span className="text-muted-foreground hidden @min-[300px]:inline">Editing </span>
               <code className="text-foreground font-mono font-medium">{file}</code>
             </span>
-            <span className={cn('text-muted-foreground', source.state === 'failed' && 'text-(--gone)')} aria-live="polite" data-save={source.state}>
+            <span className={cn('text-muted-foreground shrink-0', source.state === 'failed' && 'text-(--gone)')} aria-live="polite" data-save={source.state}>
               {saved}
             </span>
-            {/* Which part this file is the chapter of, said and set in the
-                line that already names the file: no row of its own. Only for
-                a file `main.tex` pulls in itself, in an epic that has parts,
-                on a host that keeps them. As tall as the words beside it, and
-                it takes the room that is left rather than a line of its own:
-                in a very narrow container that is the arrow alone. */}
-            {chapters.settable(file) && (
-              <label className="text-muted-foreground ml-auto flex max-w-[13rem] min-w-0 flex-[1_1_0%] items-center justify-end" title={`The part of the epic ${file} is the chapter of`}>
-                <select
-                  className="hover:text-foreground w-full min-w-0 cursor-pointer appearance-none truncate bg-transparent p-0 text-right underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-1"
-                  aria-label="The part this file is the chapter of"
-                  data-chapter-of={chapters.partOf(file) ?? ''}
-                  value={chapters.partOf(file) ?? ''}
-                  disabled={chapters.busy}
-                  onChange={(event) => void chapters.set(event.target.value || null, file)}
-                >
-                  <option value="">chapter of no part</option>
-                  {parts.map((part) => (
-                    <option key={part.id} value={part.id}>
-                      chapter of {part.heading || part.id}
-                    </option>
-                  ))}
-                </select>
-                <span aria-hidden className="shrink-0 pl-0.5">
-                  ▾
+            {/* What the toolbar read out, in the line that is already here:
+                how the build stands when that is news, the section, the page.
+                Which part this file is the chapter of is set in the host's
+                View menu, and so is everything else that was a control. */}
+            <span
+              className={cn('text-muted-foreground ml-auto flex shrink-0 items-baseline gap-x-1', failed && 'text-(--gone)')}
+              data-build={compiling ? 'running' : failed ? 'failed' : ran ? 'ok' : 'idle'}
+              /* A fact about the run, said where the run is: no row of its own. */
+              title={ran?.confined === false ? NOT_CONFINED : undefined}
+              data-confined={ran?.confined === undefined ? undefined : String(ran.confined)}
+            >
+              {buildSays && <span className="shrink-0">{buildSays}</span>}
+              {shown.section && (
+                <span className="hidden max-w-[11rem] min-w-0 shrink-[99] truncate @min-[460px]:@max-[719px]:inline @min-[980px]:inline" data-section-now title={shown.section}>
+                  {shown.section}
                 </span>
-              </label>
-            )}
-            {/* An epic with a paper and no parts: one press asks the host for a part to each chapter. */}
-            {chapters.offer && (
-              <button
-                type="button"
-                className="text-muted-foreground hover:text-foreground ml-auto underline underline-offset-2"
-                disabled={chapters.busy}
-                title="Add a part to this epic for each chapter main.tex pulls in"
-                data-parts-each
-                onClick={() => void chapters.each()}
-              >
-                A part for each chapter
-              </button>
-            )}
+              )}
+              {shown.page !== null && build?.pdf?.pages ? <span className="shrink-0" data-page-now>{`p. ${shown.page}/${build.pdf.pages}`}</span> : null}
+            </span>
           </div>
           <ProposalsPanel
             proposals={proposals}
             busy={busy}
-            auto={auto}
-            onAuto={changeAuto}
             onDecide={(id, decision) => {
               if (decision === 'accept') accepted.current = true
               void answerOne(id, decision)
@@ -1577,6 +1552,12 @@ export function Workspace({
             </p>
           )}
           <div className="relative min-h-0 flex-1">
+            {/* Laid over the corner of the page it is about, where it takes no row. */}
+            {ran && stale && !compiling && (
+              <span className="bg-background/90 text-muted-foreground absolute right-1 bottom-1 z-10 rounded border px-1 text-[0.65rem]" data-stale>
+                The PDF is of an earlier save.
+              </span>
+            )}
             {/* Two panes, one in front. Each keeps its own document and its own
                 place in it, so going from the part's PDF to the whole paper
                 and back is neither a load nor a lost scroll; the one behind
@@ -1613,21 +1594,12 @@ export function Workspace({
               </div>
             ) : (
               build?.engine && (
-                <p className="text-muted-foreground p-3 text-xs">
+                <p className="text-muted-foreground p-3 pr-8 text-xs">
                   {compiling ? `Compiling with ${build.engine}…` : failed ? 'No PDF yet: the first compile failed. The errors are above.' : 'No PDF yet.'}
                 </p>
               )
             )}
           </div>
-          {ran && (
-            <footer className="text-muted-foreground flex shrink-0 flex-wrap items-center gap-x-2 border-t px-2 py-0.5 text-[0.68rem]">
-              {stale && !compiling && <span>The PDF is of an earlier save.</span>}
-              <span className="flex-1" />
-              <button type="button" className="underline underline-offset-2" onClick={() => setShowLog((on) => !on)}>
-                {showLog ? 'Hide the log' : warnings.length ? `${warnings.length} warning${warnings.length === 1 ? '' : 's'} · log` : 'Log'}
-              </button>
-            </footer>
-          )}
         </div>
       </div>
     </div>

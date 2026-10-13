@@ -370,7 +370,8 @@ Where it is coarser, and why:
   bibliography printed from a `.bbl` — answers with the line of the command
   that called it (`\maketitle`), or not at all when it came from the class.
 - **A caret on a line that printed nothing** — a comment, a `\label` — draws
-  nothing until *Show in PDF* is pressed, which goes to the nearest line that
+  nothing until the PDF is asked for by name (View → PDF, or Run → *Show this
+  line in the PDF*), which goes to the nearest line that
   did.
 
 The table also yields, per file of the paper, which pages it reached and with
@@ -692,9 +693,44 @@ because a suggestion was drawn into rendered prose and a change inside
 `\cite{…}` had nowhere to be drawn; a diff of the source shows exactly the
 bytes that would change.
 
-*Auto* accepts suggestions that arrive while it is ticked. It is the person
+*Accept suggestions as they arrive* (View) accepts suggestions that arrive
+while it is ticked. It is the person
 saying yes in advance, for this paper, in this browser; nothing an agent can
 call sets it.
+
+## The controls are the container's menus
+
+The page has no toolbar. What used to be one — the Source / PDF tabs, the
+section list, the picked parts' file tabs, Compile, *Show in PDF*, Commit, the
+Auto tick, the log, "chapter of" — is declared to the host
+(`kehikot.header`, `src/header.ts`) and drawn in the container's own header
+row as View, Go and Run. The page spends no row on any of it; the one line
+over the editor names the file, whether it is saved, and the section and page.
+
+| item | kind | menu | |
+|---|---|---|---|
+| `pane` | switch | View | Source / PDF. Choosing PDF shows the caret's line there |
+| `file` | switch | View | the picked parts' chapters, when more than one is picked |
+| `chapter` | switch | View | which part the open file is the chapter of |
+| `auto` | toggle | View | accept suggestions as they arrive. Person-only |
+| `log` | toggle | View | the last compile's warnings and log |
+| `section` | go | Go | every file offered and its sections |
+| `compile` | run | Run | `agents: true`; busy and failed show on the trigger; its `result` is the seconds and pages, or the first error |
+| `reveal` | run | Run | show the caret's line in the PDF — the switch cannot be pressed twice, this can |
+| `commit` | run | Run | `confirm: true`, so never an agent's; disabled with the reason when nothing has changed |
+| `parts-each` | run | Run | a part for each chapter, in an epic that has none |
+
+The list is declared again only when it is a different list: typing declares
+nothing. A compile starting and finishing declares two.
+
+**A host that draws no header.** A page cannot be told whether its host draws
+these: the greeting carries the wire protocol's whole number and nothing else,
+and an older host drops `kehikot.header` in silence. So the page keeps ONE
+control — a twenty-pixel "⋯" laid over its top right corner, taking no row —
+with the same items behind it (`src/header-fallback.tsx`). It is there on a
+page opened by its address, and on a framed page until the first
+`kehikot.press` arrives, which only a host that draws the header sends; that
+is remembered in the browser, and from then on it is gone.
 
 ## Templates
 

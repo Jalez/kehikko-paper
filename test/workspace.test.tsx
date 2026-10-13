@@ -11,6 +11,7 @@ import type { EditorProps } from '../src/editor/source-editor.tsx'
 import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
 import { usePaper } from '../src/use-paper.ts'
 import { placeShown, Workspace } from '../src/workspace.tsx'
+import { options, pane, press, row } from './menu.ts'
 
 /**
  * The page's logic, with a textarea where CodeMirror goes and a stub where
@@ -202,7 +203,8 @@ describe('opening a paper', () => {
     await waitFor(() => expect(document.querySelector('[data-build]')?.getAttribute('data-confined')).toBe('false'))
     const status = document.querySelector('[data-build]')!
     expect(status.getAttribute('title')).toContain('Not confined')
-    expect(status.textContent).toContain('Compiled')
+    /* What the run came to is the Compile item's: the seconds and the pages. */
+    expect(row('compile')!.textContent).toContain('2.1 s · 3 pp.')
     expect(document.body.textContent).not.toContain('Not confined')
   })
 
@@ -431,14 +433,13 @@ describe('between the source and the PDF', () => {
     built = 'kept'
     await open()
     await waitFor(() => expect(lastPreview).not.toBeNull())
-    const tabOf = (name: string) => screen.getByRole('tab', { name }).getAttribute('aria-selected')
-    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    press('pane', 'pdf')
     lastPreview!.onPoint({ page: 2, x: 100.5, y: 200.25, word: 'Fin' })
     const at = MAIN.indexOf('Fin')
     await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${at}-${at + 3}`))
-    expect(tabOf('PDF')).toBe('true')
+    expect(pane()).toBe('pdf')
     act(() => lastPreview!.onOpen!())
-    expect(tabOf('Source')).toBe('true')
+    expect(pane()).toBe('source')
   })
 
   test('a press with no word under it lands on the line', async () => {
@@ -518,18 +519,18 @@ describe('a change that arrives', () => {
   test('one that arrives is marked and gone to, the tab is left alone, and the Source tab counts it', async () => {
     built = 'kept'
     await open()
-    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    press('pane', 'pdf')
     proposals = [suggestion()]
     wake()
     await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 4}`))
     expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`)
-    expect(screen.getByRole('tab', { name: 'PDF' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByRole('tab', { name: 'Source · 1' })).toBeDefined()
+    expect(pane()).toBe('pdf')
+    expect(options('pane')[0]!.label).toBe('Source · 1 suggested')
     expect(await screen.findByText(/A change was suggested in main\.tex/)).toBeDefined()
     /* On the page too, in the colour of a passage somebody else chose. */
     await waitFor(() => expect(lastPreview!.marks.some((mark) => mark.foreign)).toBe(true))
     /* Rejected: there is nothing left to point at. */
-    fireEvent.click(screen.getByRole('tab', { name: 'Source · 1' }))
+    press('pane', 'source')
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
     await waitFor(() => expect(source().getAttribute('data-mark')).toBe(''))
   })
@@ -579,7 +580,9 @@ describe('a change that arrives', () => {
     built = 'kept'
     await open()
     await shownPdf()
-    fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+    press('pane', 'pdf')
+    /* Choosing the PDF shows the caret's line there, once: that is asked for, and is not the suggestion's doing. */
+    await waitFor(() => expect(lastPreview!.reveal?.nonce).toBeDefined())
     const was = lastPreview!.reveal?.nonce
     proposals = [suggestion()]
     wake()
@@ -643,7 +646,7 @@ describe('a passage another module pointed at', () => {
   const fin = Buffer.from(MAIN).indexOf('Fin')
   const there: Passage = { path: `${DIR}/main.tex`, page: 3, from: fin, to: fin + 3, quoted: 'Fin', section: null }
   const toolbar = () => document.querySelector('[data-build]')!.textContent ?? ''
-  const section = () => (screen.getByLabelText('Sections') as HTMLSelectElement).options[0]!.textContent
+  const section = () => document.querySelector('[data-section-now]')?.textContent ?? 'Sections'
   const said = () => screen.getByTestId('said').textContent
 
   const pointed = async () => {
@@ -672,7 +675,7 @@ describe('a passage another module pointed at', () => {
 
   test('picking another section is the person moving on: the toolbar is the caret’s again and the sentence is gone', async () => {
     await pointed()
-    fireEvent.change(screen.getByLabelText('Sections'), { target: { value: '0' } })
+    press('section', 's0')
     await waitFor(() => expect(said()).toBe(''))
     expect(section()).toBe('Sections')
     expect(toolbar()).toContain('p. 2/3')
@@ -711,7 +714,7 @@ describe('a passage another module pointed at', () => {
     recorded = false
     lastPreview!.onPoint({ page: 2, x: 1, y: 1, word: null })
     await waitFor(() => expect(said()).toContain('Nothing in this paper’s own files is recorded'))
-    fireEvent.change(screen.getByLabelText('Sections'), { target: { value: '0' } })
+    press('section', 's0')
     await waitFor(() => expect(section()).toBe('Sections'))
     expect(said()).toContain('Nothing in this paper’s own files is recorded')
   })
@@ -859,7 +862,7 @@ describe('a passage another module pointed at', () => {
     /* Nothing is said about the mark that is waiting: the toolbar's "failed" is the only word on it. */
     expect(said()).not.toMatch(/PDF|compile|build/i)
     failing = false
-    fireEvent.click(screen.getByRole('button', { name: 'Compile' }))
+    press('compile')
     await waitFor(() => expect(screen.getByTestId('preview').getAttribute('data-url')).toContain('build=build-2'))
     await waitFor(() => expect(orange()).toBe(true))
     expect(askedLine(9)).toBe(true)

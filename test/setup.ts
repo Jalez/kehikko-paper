@@ -21,6 +21,10 @@ const { mailbox, resetServerStanding } = await import('kehikot-module-protocol/c
    starts as a tab nobody has been in; `place.test.tsx` is where it does not. */
 beforeEach(() => {
   window.sessionStorage.clear()
+  /* And whether a host has ever pressed a header item here (`header-fallback.tsx`),
+     which a page remembers for good and a test must not inherit: every test
+     starts on a page that still draws its own menu. */
+  window.localStorage.removeItem('kehikot.paper.header-drawn')
   /* And one fact per page that outlives a test: whether this app's own server
      is answering. `stale` never heals, so a test that left it would cover
      every page after it. */
