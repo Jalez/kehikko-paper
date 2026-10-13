@@ -726,8 +726,9 @@ nothing. A compile starting and finishing declares two.
 **A host that draws no header.** A page cannot be told whether its host draws
 these: the greeting carries the wire protocol's whole number and nothing else,
 and an older host drops `kehikot.header` in silence. So the page keeps ONE
-control — a twenty-pixel "⋯" laid over its top right corner, taking no row —
-with the same items behind it (`src/header-fallback.tsx`). It is there on a
+control — a small "⋯" at the end of the line over the editor, and over the
+PDF's top left corner when the PDF is the only pane; no row either way — with
+the same items behind it (`src/header-fallback.tsx`). It is there on a
 page opened by its address, and on a framed page until the first
 `kehikot.press` arrives, which only a host that draws the header sends; that
 is remembered in the browser, and from then on it is gone.

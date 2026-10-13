@@ -179,6 +179,12 @@ const PARTS = (...picked: string[]): EpicPart[] => [
   part('the-steps', 'Steps only', picked.includes('the-steps')),
 ]
 
+/** What the line over the editor says, without the page's own menu at its end. */
+const lineSays = () => {
+  const line = document.querySelector('[data-editing]')!.cloneNode(true) as HTMLElement
+  line.querySelector('[data-header-fallback]')?.remove()
+  return line.textContent
+}
 /** The file the line over the editor says an edit is saved to. */
 const openFile = () => document.querySelector('[data-editing]')?.getAttribute('data-editing')
 /** The switch among the picked parts' files; empty when there is none to draw. */
@@ -234,7 +240,7 @@ describe('with nothing picked', () => {
     expect(tabs()).toEqual([])
     expect(openFile()).toBe('main.tex')
     /* …and, at its end, what the toolbar read out: the page. */
-    expect(document.querySelector('[data-editing]')!.textContent).toBe('Editing main.texSavedp. 1/5')
+    expect(lineSays()).toBe('Editing main.texSavedp. 1/5')
     expect(screen.queryByRole('button', { name: 'Back to main.tex' })).toBeNull()
     /* Every file is one jump away, through the section list. */
     expect(jumpFiles()).toEqual(FILES)
@@ -520,7 +526,7 @@ describe('the whole paper, with nothing picked', () => {
     await waitFor(() => expect(editorText()).toBe(TEXT['chapters/method.tex']!))
     /* Which file an edit is now saved to is said over the text. */
     expect(openFile()).toBe('chapters/method.tex')
-    expect(document.querySelector('[data-editing]')!.textContent).toBe('← main.texEditing chapters/method.texSavedMethodp. 3/5')
+    expect(lineSays()).toBe('← main.texEditing chapters/method.texSavedMethodp. 3/5')
     expect(tabs()).toEqual([])
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to main.tex' }))

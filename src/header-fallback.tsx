@@ -15,9 +15,10 @@ import { cn } from '@/lib/utils.ts'
  * carries the wire protocol's whole number and nothing about what a host
  * draws, and a host that does not know `kehikot.header` drops it in silence.
  *
- * So: ONE control, twenty pixels square, laid over the top right corner of the
- * page where it takes no row, with the same items behind it and the same
- * handler the host's presses reach. It is there on a page nobody frames, and
+ * So: ONE control, twenty pixels by sixteen, where it takes no row — at the end of
+ * the line over the editor, and over the top left corner of the PDF when that
+ * is the only pane (its top right has the zoom) — with the same items behind
+ * it and the same handler the host's presses reach. It is there on a page nobody frames, and
  * on a framed page until a press has arrived from a host — which only a host
  * that draws the header sends. That is remembered (`headerDrawn`), so on such
  * a host it is gone from the first press on, for good.
@@ -59,7 +60,19 @@ const INLINE = 4
 
 const ROW = 'hover:bg-accent flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-left disabled:opacity-50'
 
-export function HeaderFallback({ items, onPress }: { items: readonly HeaderItemInput[]; onPress: Press }) {
+export function HeaderFallback({
+  items,
+  onPress,
+  align = 'right',
+  className,
+}: {
+  items: readonly HeaderItemInput[]
+  onPress: Press
+  /** Which edge of the control its panel hangs from. */
+  align?: 'left' | 'right'
+  /** Where it stands: in a line, or laid over a corner. */
+  className?: string
+}) {
   const [open, setOpen] = useState(false)
   const [armed, setArmed] = useState<string | null>(null)
   const box = useRef<HTMLDivElement>(null)
@@ -90,14 +103,15 @@ export function HeaderFallback({ items, onPress }: { items: readonly HeaderItemI
   const failed = !busy && items.some((item) => item.kind === 'run' && item.state === 'failed')
 
   return (
-    <div ref={box} className="absolute top-0.5 right-0.5 z-40 text-[0.72rem]" data-header-fallback>
+    <div ref={box} className={cn('z-40 text-[0.72rem] whitespace-normal', className)} data-header-fallback>
       <button
         type="button"
         aria-label={`Menu${busy ? ' — running' : failed ? ' — the last run failed' : ''}`}
         aria-expanded={open}
         title="View, go and run"
         className={cn(
-          'bg-background/90 hover:bg-accent relative flex size-5 items-center justify-center rounded border leading-none',
+          /* As tall as a line of the words it stands among, so the line is no taller for it. */
+          'bg-background/90 hover:bg-accent relative flex h-4 w-5 items-center justify-center rounded border leading-none',
           failed && 'text-(--gone)',
         )}
         onClick={() => setOpen((was) => !was)}
@@ -108,7 +122,7 @@ export function HeaderFallback({ items, onPress }: { items: readonly HeaderItemI
         ) : null}
       </button>
       {open && (
-        <div role="menu" className="bg-background absolute top-full right-0 mt-0.5 max-h-[80cqh] w-56 max-w-[calc(100cqw-1rem)] overflow-auto rounded border p-1 shadow-md">
+        <div role="menu" className={cn('bg-background absolute top-full mt-0.5 max-h-[80cqh] w-56 max-w-[calc(100cqw-1rem)] overflow-auto rounded border p-1 shadow-md', align === 'right' ? 'right-0' : 'left-0')}>
           {MENUS.map((menu) => {
             const mine = items.filter((item) => (menu.kinds as readonly string[]).includes(item.kind))
             if (!mine.length) return null

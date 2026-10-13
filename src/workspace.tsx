@@ -1380,9 +1380,8 @@ export function Workspace({
       {/* No toolbar: the panes, the files, the sections, Compile, Commit, the
           log and the rest are declared to the host (`header.ts`) and drawn in
           the container's own row. A page no host draws that for has them
-          behind one small control laid over its corner. */}
-      {fallback && <HeaderFallback items={items} onPress={press} />}
-
+          behind one small control: at the end of the line over the editor,
+          and over the PDF's corner when the PDF is the only pane. */}
       {source.conflict && (
         <div role="alert" className="bg-muted/60 flex shrink-0 flex-wrap items-center gap-2 border-b px-2 py-1 text-[0.72rem]">
           <span className="min-w-0 flex-1">
@@ -1409,11 +1408,9 @@ export function Workspace({
               is named, now that no dropdown names it — and the editor changes
               file when a tick in the host's bar does, so it has to be here. */}
           <div
-            className={cn(
-              /* One line, whatever the width: the file's name gives way first, then the section. */
-              'flex shrink-0 items-center gap-x-2 overflow-hidden border-b px-2 py-0.5 text-[0.72rem] leading-snug whitespace-nowrap',
-              fallback && '@max-[719px]:pr-7',
-            )}
+            /* One line, whatever the width: the file's name gives way first.
+               Clipped sideways only — the page's own menu hangs below it. */
+            className="flex shrink-0 items-center gap-x-2 overflow-x-clip border-b px-2 py-0.5 text-[0.72rem] leading-snug whitespace-nowrap"
             data-editing={file}
           >
             {awayFromMain && (
@@ -1458,6 +1455,7 @@ export function Workspace({
               )}
               {shown.page !== null && build?.pdf?.pages ? <span className="shrink-0" data-page-now>{`p. ${shown.page}/${build.pdf.pages}`}</span> : null}
             </span>
+            {fallback && <HeaderFallback items={items} onPress={press} className="relative shrink-0" />}
           </div>
           <ProposalsPanel
             proposals={proposals}
@@ -1552,6 +1550,7 @@ export function Workspace({
             </p>
           )}
           <div className="relative min-h-0 flex-1">
+            {fallback && <HeaderFallback items={items} onPress={press} align="left" className="absolute top-1 left-1 @min-[720px]:hidden" />}
             {/* Laid over the corner of the page it is about, where it takes no row. */}
             {ran && stale && !compiling && (
               <span className="bg-background/90 text-muted-foreground absolute right-1 bottom-1 z-10 rounded border px-1 text-[0.65rem]" data-stale>
