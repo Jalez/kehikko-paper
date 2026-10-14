@@ -252,8 +252,11 @@ describe('the ordinary doors', () => {
     /* The property the two-root arrangement had to keep and the two-project one
        still does: nothing resolves against a root it does not belong to. The
        slug is right, the paper exists on this disk, and the answer is still no. */
-    expect(get('/api/paper', inProject(thesisProject, 'epic=a-paper'))?.status).toBe(404)
-    expect(get('/api/paper', inProject(projectDir, 'epic=thesis'))?.status).toBe(404)
+    for (const reply of [get('/api/paper', inProject(thesisProject, 'epic=a-paper')), get('/api/paper', inProject(projectDir, 'epic=thesis'))]) {
+      const body = reply?.body as { ok: boolean; paper?: unknown }
+      expect(body.ok).toBe(false)
+      expect(body.paper).toBeUndefined()
+    }
   })
 
   test('one paper comes back parsed, with its chapters in reading order', () => {
@@ -266,8 +269,17 @@ describe('the ordinary doors', () => {
     expect(body.paper.outline.map((h) => h.text)).toEqual(['A claim'])
   })
 
-  test('an epic with no paper is a 404 and not an empty document', () => {
-    expect(get('/api/paper', inProject(projectDir, 'epic=nothing-here'))?.status).toBe(404)
+  test('an epic with no paper is an answer — no paper, a sentence, where one would go — and not an error status', () => {
+    /* Most epics have no paper, and the page asks about every epic the canvas
+       opens. A 404 for it was a red line in the console for nothing that had
+       gone wrong; the statuses are for what has. */
+    const reply = get('/api/paper', inProject(projectDir, 'epic=nothing-here'))
+    expect(reply?.status).toBe(200)
+    const body = reply?.body as { ok: boolean; paper?: unknown; error: string; where: string }
+    expect(body.ok).toBe(false)
+    expect(body.paper).toBeUndefined()
+    expect(body.error).toContain('no paper')
+    expect(body.where).toContain('nothing-here')
   })
 
   test('a name that is not an epic name is refused the same way whatever exists', () => {

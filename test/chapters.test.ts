@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 import { chaptersIn, holdingsOf, readChapters, republish, setChapters } from '../chapters.ts'
 import { TICKET, answer } from '../doors.ts'
-import { chaptersOf, chaptersSaid, nameFor, partOfChapter, withChapter } from '../src/chapters.ts'
+import { chaptersOf, chaptersSaid, moveOf, movedWords, nameFor, partOfChapter, withChapter } from '../src/chapters.ts'
 import { inProject } from '../src/focus.ts'
 import { readPaper } from '../store.ts'
 
@@ -87,14 +87,82 @@ describe('what a chapter is, and what the parts the host sends already say', () 
     expect(chaptersSaid(parts, paper(), project)).toEqual({ methods: 'chapters/methods.tex' })
   })
 
-  test('one change to a mapping: the file leaves the part that had it, and the part’s old chapter leaves the part', () => {
+  test('one change to a mapping: a part with no chapter takes the file, “no part” gives it up, and nothing else moves', () => {
     const was = { introduction: 'chapters/intro.tex', methods: 'chapters/methods.tex' }
     expect(withChapter(was, 'results', 'chapters/results.tex')).toEqual({ ...was, results: 'chapters/results.tex' })
-    expect(withChapter(was, 'introduction', 'chapters/methods.tex')).toEqual({ introduction: 'chapters/methods.tex' })
     expect(withChapter(was, null, 'chapters/methods.tex')).toEqual({ introduction: 'chapters/intro.tex' })
+    /* A chapter moved to a part that had none leaves its old part with none: that is what was asked. */
+    expect(withChapter(was, 'results', 'chapters/methods.tex')).toEqual({ introduction: 'chapters/intro.tex', results: 'chapters/methods.tex' })
+    expect(withChapter(was, 'methods', 'chapters/methods.tex')).toEqual(was)
     expect(was).toEqual({ introduction: 'chapters/intro.tex', methods: 'chapters/methods.tex' })
     expect(partOfChapter(was, 'chapters/methods.tex')).toBe('methods')
     expect(partOfChapter(was, 'chapters/results.tex')).toBeNull()
+    for (const [part, file] of [['results', 'chapters/results.tex'], ['methods', 'chapters/methods.tex'], ['results', 'chapters/methods.tex']] as const) expect(moveOf(was, part, file)).toBeNull()
+  })
+
+  test('a chapter given to a part that has one SWAPS with it — and giving it back restores the mapping exactly', () => {
+    const seven = {
+      introduction: 'chapters/1_introduction.tex',
+      'literature-review': 'chapters/2_literature.tex',
+      methods: 'chapters/3_methods.tex',
+      results: 'chapters/4_results.tex',
+      discussion: 'chapters/5_discussion.tex',
+      conclusion: 'chapters/6_conclusion.tex',
+      appendices: 'chapters/appendices.tex',
+    }
+    const as = JSON.stringify(seven)
+    expect(moveOf(seven, 'results', 'chapters/3_methods.tex')).toEqual({ file: 'chapters/4_results.tex', to: 'methods' })
+    const moved = withChapter(seven, 'results', 'chapters/3_methods.tex')
+    expect(moved).toEqual({ ...seven, methods: 'chapters/4_results.tex', results: 'chapters/3_methods.tex' })
+    /* Seven parts, seven chapters: nobody was left with none. */
+    expect(Object.keys(moved)).toEqual(Object.keys(seven))
+    expect(Object.values(moved).sort()).toEqual(Object.values(seven).sort())
+    /* Back: the same entries in the same order, so the same file on disk. */
+    expect(moveOf(moved, 'methods', 'chapters/3_methods.tex')).toEqual({ file: 'chapters/4_results.tex', to: 'results' })
+    expect(JSON.stringify(withChapter(moved, 'methods', 'chapters/3_methods.tex'))).toBe(as)
+    expect(JSON.stringify(seven)).toBe(as)
+  })
+
+  test('the first press adopts what the parts said: all seven parts keep a chapter through a move and back', () => {
+    const names = ['1_introduction', '2_literature', '3_methods', '4_results', '5_discussion', '6_conclusion', 'appendices']
+    const ids = ['introduction', 'literature-review', 'methods', 'results', 'discussion', 'conclusion', 'appendices']
+    const files = names.map((name) => `chapters/${name}.tex`)
+    const seven = {
+      epic: 'thesis',
+      files: ['main.tex', ...files, 'generated/a.tex', 'generated/b.tex'],
+      pulls: {
+        ...Object.fromEntries(files.map((file) => [file, { by: 'main.tex', with: 'include', as: file.replace(/\.tex$/, '') }])),
+        'generated/a.tex': { by: 'chapters/appendices.tex', with: 'input', as: 'generated/a' },
+        'generated/b.tex': { by: 'chapters/appendices.tex', with: 'input', as: 'generated/b' },
+      },
+    }
+    /* As a host sends them: each part with its chapter, and the appendices with what the chapter pulls in. */
+    const parts = ids.map((id, i) => part(id, false, i === 6 ? [files[6]!, 'generated/a.tex', 'generated/b.tex'] : [files[i]!]))
+    const said = chaptersSaid(parts, seven, project)
+    expect(said).toEqual(Object.fromEntries(ids.map((id, i) => [id, files[i]!])))
+    /* The first deliberate press: the whole of that, with the one change. */
+    const first = withChapter(said, 'results', 'chapters/3_methods.tex')
+    expect(Object.keys(first)).toEqual(ids)
+    expect(new Set(Object.values(first)).size).toBe(7)
+    expect(first.methods).toBe('chapters/4_results.tex')
+    expect(JSON.stringify(withChapter(first, 'methods', 'chapters/3_methods.tex'))).toBe(JSON.stringify(said))
+  })
+
+  test('a file that is no part’s chapter, given to a part that has one: that one is left with no part, and it is known beforehand', () => {
+    const was = { introduction: 'chapters/intro.tex', methods: 'chapters/methods.tex' }
+    expect(moveOf(was, 'methods', 'chapters/results.tex')).toEqual({ file: 'chapters/methods.tex', to: null })
+    expect(withChapter(was, 'methods', 'chapters/results.tex')).toEqual({ introduction: 'chapters/intro.tex', methods: 'chapters/results.tex' })
+  })
+
+  test('what the page says after a press that moved another chapter — and nothing after one that did not', () => {
+    const heading = (id: string) => ({ methods: 'Methods', results: 'Results' })[id] ?? id
+    expect(movedWords('chapters/3_methods.tex', 'results', { file: 'chapters/4_results.tex', to: 'methods' }, heading)).toBe(
+      '3_methods.tex is now the chapter of Results, and 4_results.tex of Methods.',
+    )
+    expect(movedWords('chapters/notes.tex', 'results', { file: 'chapters/4_results.tex', to: null }, heading)).toBe(
+      'notes.tex is now the chapter of Results; 4_results.tex is the chapter of no part.',
+    )
+    expect(movedWords('chapters/3_methods.tex', 'results', null, heading)).toBeNull()
   })
 
   test('a part made for a chapter is called by the chapter’s first heading, or by its file', () => {
