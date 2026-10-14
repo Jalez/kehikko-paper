@@ -66,6 +66,8 @@ export function useChapters({
   const [busy, setBusy] = useState(false)
   /** The sentence last said here about a chapter that moved. */
   const spoke = useRef<string | null>(null)
+  const fading = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(fading.current), [])
 
   useEffect(() => {
     let stopped = false
@@ -126,11 +128,21 @@ export function useChapters({
       const words = part === null ? null : movedWords(file, part, moveOf(chapters, part, file), heading)
       try {
         if (await keep(withChapter(chapters, part, file))) {
-          /* Said when another chapter moved, and at no other time; a later press that moved none takes the sentence down, and nothing else that was said. */
+          /* Said when another chapter moved, and at no other time. The line it
+             is said in is a row of the page, so it is given back: after a
+             while, or at once by a later press that moved nothing — and only
+             ever this sentence, never something else said since. */
           const was = spoke.current
+          const down = (sentence: string) => say((now) => (now === sentence ? '' : now))
+          clearTimeout(fading.current)
           spoke.current = words
-          if (words !== null) say(words)
-          else if (was !== null) say((now) => (now === was ? '' : now))
+          if (words !== null) {
+            say(words)
+            fading.current = setTimeout(() => {
+              if (spoke.current === words) spoke.current = null
+              down(words)
+            }, LINGER.ms)
+          } else if (was !== null) down(was)
         }
       } catch (e) {
         say(`The chapter could not be set: ${(e as Error).message}`)
@@ -184,6 +196,9 @@ export function noSuchPart(parts: readonly EpicPart[]): string {
   while (parts.some((part) => part.id === id)) id += '-x'
   return id
 }
+
+/** How long the sentence about a chapter that moved stands before its row is given back. An object, so a test need not wait it out. */
+export const LINGER = { ms: 12_000 }
 
 /** Where the answer is kept for the tab: one key per host, so another host in the same tab is asked for itself. */
 const KEPT = 'kehikot.paper.keeps-parts:'

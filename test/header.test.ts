@@ -132,15 +132,16 @@ describe('a part in “chapter of”', () => {
   })
 
   test('a file with no part to give back says the other chapter is left with none', () => {
-    expect(chapterOption({ id: 'results', heading: 'Results', moves: { file: 'chapters/4_results.tex', to: null } })).toBe('Results · 4_results.tex gets no part')
+    expect(chapterOption({ id: 'results', heading: 'Results', moves: { file: 'chapters/4_results.tex', to: null } })).toBe('Results · no part for 4_results.tex')
   })
 
-  test('long names give way to the consequence, and the label still fits', () => {
+  test('long names: the label still fits, and what is cut is the end of the file’s name', () => {
+    expect(chapterOption({ id: 'l', heading: 'Literature Review', moves: { file: 'chapters/2_literature_review.tex', to: 'methods' } })).toBe('Literature Review · swaps with 2_literature_rev…')
     for (const to of ['methods', null]) {
       const label = chapterOption({ id: 'r', heading: 'Results and a good deal more besides, at length', moves: { file: 'chapters/a_file_named_at_some_considerable_length.tex', to } })
       expect(label.length).toBeLessThanOrEqual(LIMITS.HEADER_LABEL)
-      expect(label).toContain(to === null ? ' gets no part' : ' · swaps with ')
-      expect(label.startsWith('Results')).toBe(true)
+      /* The part and what happens come first and whole; the file's name is what is cut, from its end. */
+      expect(label).toMatch(to === null ? /^Results and a good deal.*… · no part for a_file.*…$/ : /^Results and a good deal.*… · swaps with a_file.*…$/)
     }
   })
 })

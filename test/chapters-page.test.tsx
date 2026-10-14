@@ -9,7 +9,7 @@ import { standIn } from '../src/api.ts'
 import type { EditorProps } from '../src/editor/source-editor.tsx'
 import { inProject } from '../src/focus.ts'
 import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
-import { forgetHost, noSuchPart } from '../src/use-chapters.ts'
+import { LINGER, forgetHost, noSuchPart } from '../src/use-chapters.ts'
 import { usePaper } from '../src/use-paper.ts'
 import { Workspace } from '../src/workspace.tsx'
 import { has, options, press, row } from './menu.ts'
@@ -309,7 +309,7 @@ describe('on a host that keeps the parts', () => {
     await jumpTo('chapters/method.tex')
     await waitFor(() => expect(control()).not.toBeNull())
     expect(control()!.value).toBe('')
-    expect(control()!.words).toEqual(['no part', 'The design · design.tex gets no part', 'The method', 'Results · results.tex gets no part'])
+    expect(control()!.words).toEqual(['no part', 'The design · no part for design.tex', 'The method', 'Results · no part for results.tex'])
     choose('the-results')
     await waitFor(() => expect(said()).toBe('method.tex is now the chapter of Results; results.tex is the chapter of no part.'))
     /* A press that moves no other chapter says nothing, and takes that sentence down. */
@@ -317,6 +317,21 @@ describe('on a host that keeps the parts', () => {
     await waitFor(() => expect(writes()).toHaveLength(2))
     expect(writes()[1]!.body).toEqual({ chapters: { 'the-design': 'chapters/design.tex', 'the-method': 'chapters/method.tex' } })
     await waitFor(() => expect(said()).toBe(''))
+  })
+
+  test('the sentence stands for a while and then gives its row back', async () => {
+    const was = LINGER.ms
+    LINGER.ms = 60
+    try {
+      await framed([part('the-design', 'The design', false, ['chapters/design.tex']), part('the-method', 'The method', true, ['chapters/method.tex'])])
+      listed = [{ id: 'the-design', name: 'The design' }, { id: 'the-method', name: 'The method' }]
+      await waitFor(() => expect(control()?.value).toBe('the-method'))
+      choose('the-design')
+      await waitFor(() => expect(said()).toBe('method.tex is now the chapter of The design, and design.tex of The method.'))
+      await waitFor(() => expect(said()).toBe(''))
+    } finally {
+      LINGER.ms = was
+    }
   })
 
   test('“no part” takes the chapter from its part', async () => {

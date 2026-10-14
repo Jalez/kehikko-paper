@@ -73,15 +73,20 @@ export interface ChapterPart {
  * switch has no place for a result and a press here is not armed, so the
  * option is where a person learns that another chapter moves: it swaps with
  * this file's part, or — this file having none to give back — is left with no
- * part. The name gives way to the consequence, never the other way round.
+ * part.
+ *
+ * In that order — the part, what happens, and the file last — because a host
+ * draws a submenu a good deal narrower than a label may be long, and cuts what
+ * does not fit off the END: what is lost first is the tail of a file's name,
+ * and never the word that says a chapter is about to have no part.
  */
 export function chapterOption(part: ChapterPart): string {
   const name = cut(part.heading || part.id)
   if (!part.moves) return name
-  const [before, after] = part.moves.to === null ? [' · ', ' gets no part'] : [' · swaps with ', '']
-  const room = LIMITS.HEADER_LABEL - before.length - after.length
-  const file = cut(part.moves.file.split('/').pop() || part.moves.file, room - Math.min(name.length, 12))
-  return `${cut(name, room - file.length)}${before}${file}${after}`
+  const says = part.moves.to === null ? ' · no part for ' : ' · swaps with '
+  const room = LIMITS.HEADER_LABEL - says.length
+  const kept = cut(name, Math.max(room - 8, 1))
+  return `${kept}${says}${cut(part.moves.file.split('/').pop() || part.moves.file, room - kept.length)}`
 }
 
 /** A label no longer than a label may be, cut with an ellipsis. Never empty. */
