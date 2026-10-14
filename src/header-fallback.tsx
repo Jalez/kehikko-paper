@@ -10,18 +10,20 @@ import { cn } from '@/lib/utils.ts'
  *
  * Everything this page used to have in a toolbar is declared to the host now
  * (`header.ts`) and drawn in the container's own row. Two pages have nobody to
- * draw it: one opened by its address, and one framed by a host older than the
- * header. The first can be told (`where`). The second cannot: the greeting
- * carries the wire protocol's whole number and nothing about what a host
- * draws, and a host that does not know `kehikot.header` drops it in silence.
+ * draw it: one opened by its address, and one framed by a host that does not
+ * draw it. The first can be told (`where`). The second is told by a host from
+ * protocol 1.4.0 (`drawsHeader`, which then decides alone); an older one says
+ * nothing about what it draws, and a host that does not know `kehikot.header`
+ * drops it in silence.
  *
  * So: ONE control, twenty pixels by sixteen, where it takes no row — at the end of
  * the line over the editor, and over the top left corner of the PDF when that
  * is the only pane (its top right has the zoom) — with the same items behind
  * it and the same handler the host's presses reach. It is there on a page nobody frames, and
- * on a framed page until a press has arrived from a host — which only a host
- * that draws the header sends. That is remembered (`headerDrawn`), so on such
- * a host it is gone from the first press on, for good.
+ * where the host says it draws no header. Where the host does not say (an older
+ * one) it is there until a press has arrived, which only a host that draws the
+ * header sends; that is remembered (`headerDrawn`), so it is gone from the
+ * first press on, for good.
  *
  * It is not the host's menus copied: no Radix, no portal, a plain panel under
  * a button. Long lists are a native select, which is the one control that

@@ -24,8 +24,9 @@ import { chaptersOf, chaptersSaid, moveOf, movedWords, nameFor, partOfChapter, w
  *
  * A host that unions what modules publish also answers `parts.set`. One that
  * does not would leave a chapter set here unheard by everything else on the
- * canvas, and the control would be a switch wired to nothing. So the host is
- * asked, with an edit that cannot change anything — "move the part called <an
+ * canvas, and the control would be a switch wired to nothing. A host from
+ * protocol 1.4.0 says so in its greeting (`answers`), and nothing is asked.
+ * An older one is asked, with an edit that cannot change anything — "move the part called <an
  * id no part of this epic has>", which a host that keeps the parts answers
  * `no-such-part` — and neither control is drawn unless it does. An older host
  * answers `unknown-method`; one that was not granted the capability declines.
@@ -46,6 +47,7 @@ export function useChapters({
   parts,
   projectPath,
   hosted,
+  answers,
   request,
   say,
   sections,
@@ -55,6 +57,8 @@ export function useChapters({
   projectPath: string | null
   /** Whether a host has greeted this page. */
   hosted: boolean
+  /** The methods the host said it answers for this module; null from a host that does not say, which is asked once instead. */
+  answers: readonly string[] | null
   request: (method: string, params?: Record<string, unknown>) => Promise<unknown>
   /** The page's one line of words, for a refusal. */
   say: (words: string | ((now: string) => string)) => void
@@ -87,6 +91,11 @@ export function useChapters({
   partsRef.current = parts
   useEffect(() => {
     if (!hosted) return
+    /* The greeting says (1.4.0): nothing is asked. Only a host that does not say is probed. */
+    if (answers) {
+      setEdits(answers.includes('parts.set'))
+      return
+    }
     let stopped = false
     void keepsParts(epic, partsRef.current, request).then((keeps) => {
       if (!stopped) setEdits(keeps)
@@ -94,7 +103,7 @@ export function useChapters({
     return () => {
       stopped = true
     }
-  }, [epic, hosted, request])
+  }, [epic, hosted, request, answers])
 
   const can = hosted && edits
   const kept = own?.epic === epic ? own.chapters : null

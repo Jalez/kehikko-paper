@@ -494,6 +494,7 @@ export function Workspace({
     parts,
     projectPath: wire.projectPath,
     hosted: wire.where === 'hosted',
+    answers: wire.answers,
     request,
     say: setSaid,
     sections,
@@ -1373,8 +1374,8 @@ export function Workspace({
     },
     [wire.press],
   )
-  /* Whether the page draws its own way to the items: nobody frames it, or no host has pressed one yet. */
-  const fallback = wire.where !== 'hosted' || !wire.pressed
+  /* Whether the page draws its own way to the items: nobody frames it, or the host does not draw them (told by its greeting; from an older host, until a press has arrived). */
+  const fallback = wire.where !== 'hosted' || !wire.hostDraws
 
   return (
     <div className="workspace relative flex min-h-0 flex-1 flex-col" data-pane={tab}>
