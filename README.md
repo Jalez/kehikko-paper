@@ -420,14 +420,24 @@ publication is derived, and can be made again.
 - **Where it is set.** In the line over the editor, for a file `main.tex`
   pulls in: "Editing `chapters/3_methods.tex` · Saved · *chapter of Methods ▾*".
   No row of its own.
+- **A press never quietly takes a chapter from another part.** One chapter to
+  a part, so giving a file to a part that already has a chapter does something
+  with that one. If the file was another part's chapter the two swap, and
+  pressing the old part again restores the record exactly. If the file was no
+  part's, the other chapter is left with none — and the option says which
+  before it is pressed: "Results · swaps with 4_results.tex", "Results · no
+  part for 4_results.tex". Afterwards the page's one line says what else
+  moved ("3_methods.tex is now the chapter of Results, and 4_results.tex of
+  Methods."), for twelve seconds; a press that moved nothing else says nothing.
 - **A part for each chapter.** For an epic with a paper and no parts, the same
   line offers it: one press asks the host for a part to each chapter
   (`parts.set`, under `parts:set`), named by the chapter's first heading, and
   files each chapter under the id the host made.
-- **Only on a host that keeps the parts.** The host is asked once per paper
-  about an id no part of the epic has, which changes nothing (it answers
-  `no-such-part`); one that answers `unknown-method`, or declines, is shown
-  neither control.
+- **Only on a host that keeps the parts.** The host is asked about an id no
+  part of the epic has, which changes nothing (it answers `no-such-part`); one
+  that answers `unknown-method`, or declines, is shown neither control. Asked
+  once a page load at most, and not at all once this host has said yes in
+  this tab (`sessionStorage`, under the host's origin).
 - A host goes on unioning what an epic's record said for a part before it kept
   the list. A chapter taken FROM such a part here is taken out of what this
   module publishes, and stays in the part for as long as that record lists it.
