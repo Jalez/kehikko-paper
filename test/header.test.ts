@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { headerItemsSchema, LIMITS } from 'kehikot-module-protocol'
 
-import { cut, headerOf, placesOf, resultOf, type HeaderState } from '../src/header.ts'
+import { chapterOption, cut, headerOf, placesOf, resultOf, type HeaderState } from '../src/header.ts'
 import type { SectionAt } from '../src/lib/sections.ts'
 
 const section = (file: string, title: string, level = 1): SectionAt => ({ file, title, level, at: 0, end: 0, from: 0, to: 0 })
@@ -41,7 +41,15 @@ describe('what the page declares for the header', () => {
       listed: ['main.tex', 'a.tex'],
       jumps: jumps({ 'main.tex': many, 'a.tex': [] }),
       log: { open: true, warnings: 2 },
-      chapter: { parts: [{ id: 'x'.repeat(200), heading: '' }, { id: 'b', heading: 'B'.repeat(90) }], of: 'b' },
+      chapter: {
+        parts: [
+          { id: 'x'.repeat(200), heading: '' },
+          { id: 'b', heading: 'B'.repeat(90) },
+          { id: 'c', heading: 'C'.repeat(90), moves: { file: `chapters/${'f'.repeat(90)}.tex`, to: 'b' } },
+          { id: 'd', heading: 'D'.repeat(90), moves: { file: `chapters/${'f'.repeat(90)}.tex`, to: null } },
+        ],
+        of: 'b',
+      },
       eachOffered: true,
       compiling: true,
       ran: { ok: false, ms: 12345, first: 'Undefined control sequence \\foo on a line that is long' },
@@ -93,5 +101,46 @@ describe('what the page declares for the header', () => {
     expect(cut('  a\n b  ')).toBe('a b')
     expect(cut('')).toBe('—')
     expect(cut('x'.repeat(60)).length).toBe(LIMITS.HEADER_LABEL)
+  })
+})
+
+describe('a part in “chapter of”', () => {
+  const option = (state: HeaderState, id: string) => {
+    const item = headerOf(state).find((one) => one.id === 'chapter')
+    return item?.kind === 'switch' ? item.options.find((one) => one.id === id)?.label : undefined
+  }
+
+  test('is its name — and, when it already has another chapter, what choosing it does to that one, before it is chosen', () => {
+    const state: HeaderState = {
+      ...base,
+      file: 'chapters/3_methods.tex',
+      chapter: {
+        of: 'methods',
+        parts: [
+          { id: 'introduction', heading: 'Introduction', moves: { file: 'chapters/1_introduction.tex', to: 'methods' } },
+          { id: 'methods', heading: 'Methods', moves: null },
+          { id: 'results', heading: 'Results', moves: { file: 'chapters/4_results.tex', to: 'methods' } },
+          { id: 'notes', heading: 'Notes' },
+        ],
+      },
+    }
+    expect(option(state, 'none')).toBe('no part')
+    expect(option(state, 'p0')).toBe('Introduction · swaps with 1_introduction.tex')
+    expect(option(state, 'p1')).toBe('Methods')
+    expect(option(state, 'p2')).toBe('Results · swaps with 4_results.tex')
+    expect(option(state, 'p3')).toBe('Notes')
+  })
+
+  test('a file with no part to give back says the other chapter is left with none', () => {
+    expect(chapterOption({ id: 'results', heading: 'Results', moves: { file: 'chapters/4_results.tex', to: null } })).toBe('Results · 4_results.tex gets no part')
+  })
+
+  test('long names give way to the consequence, and the label still fits', () => {
+    for (const to of ['methods', null]) {
+      const label = chapterOption({ id: 'r', heading: 'Results and a good deal more besides, at length', moves: { file: 'chapters/a_file_named_at_some_considerable_length.tex', to } })
+      expect(label.length).toBeLessThanOrEqual(LIMITS.HEADER_LABEL)
+      expect(label).toContain(to === null ? ' gets no part' : ' · swaps with ')
+      expect(label.startsWith('Results')).toBe(true)
+    }
   })
 })

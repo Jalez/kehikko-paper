@@ -41,7 +41,7 @@ export interface HeaderState {
   /** The last run's log: whether there is one, whether it is open, and how many warnings it has. */
   log: { open: boolean; warnings: number } | null
   /** Which part the open file is the chapter of, when that can be set. */
-  chapter: { parts: readonly { id: string; heading: string }[]; of: string | null } | null
+  chapter: { parts: readonly ChapterPart[]; of: string | null } | null
   /** Whether "a part for each chapter" is offered. */
   eachOffered: boolean
   chaptersBusy: boolean
@@ -54,6 +54,34 @@ export interface HeaderState {
   pdf: boolean
   /** Null when the paper is in no repository; `why` is the sentence for why it cannot be committed just now, or null. */
   commit: { why: string | null } | null
+}
+
+/**
+ * A part the open file can be made the chapter of. `moves` is what choosing it
+ * would do to the chapter the part already has (`moveOf` in `chapters.ts`):
+ * absent or null when the part has none, or has this file.
+ */
+export interface ChapterPart {
+  id: string
+  heading: string
+  moves?: { file: string; to: string | null } | null
+}
+
+/**
+ * The words for a part in "chapter of": its name — and, when it already has
+ * another chapter, what choosing it does to that one, BEFORE it is chosen. A
+ * switch has no place for a result and a press here is not armed, so the
+ * option is where a person learns that another chapter moves: it swaps with
+ * this file's part, or — this file having none to give back — is left with no
+ * part. The name gives way to the consequence, never the other way round.
+ */
+export function chapterOption(part: ChapterPart): string {
+  const name = cut(part.heading || part.id)
+  if (!part.moves) return name
+  const [before, after] = part.moves.to === null ? [' · ', ' gets no part'] : [' · swaps with ', '']
+  const room = LIMITS.HEADER_LABEL - before.length - after.length
+  const file = cut(part.moves.file.split('/').pop() || part.moves.file, room - Math.min(name.length, 12))
+  return `${cut(name, room - file.length)}${before}${file}${after}`
 }
 
 /** A label no longer than a label may be, cut with an ellipsis. Never empty. */
@@ -137,7 +165,7 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
       label: cut(`${state.file.split('/').pop() ?? state.file} is the chapter of`),
       icon: 'book-open',
       value: on >= 0 ? `p${on}` : 'none',
-      options: [{ id: 'none', label: 'no part' }, ...state.chapter.parts.map((part, i) => ({ id: `p${i}`, label: cut(part.heading || part.id) }))],
+      options: [{ id: 'none', label: 'no part' }, ...state.chapter.parts.map((part, i) => ({ id: `p${i}`, label: chapterOption(part) }))],
     })
   }
 

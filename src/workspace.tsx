@@ -1291,7 +1291,8 @@ export function Workspace({
     jumps,
     auto,
     log: ran ? { open: showLog, warnings: warnings.length } : null,
-    chapter: chapterOf === undefined ? null : { parts, of: chapterOf },
+    /* Each part with what choosing it would do to the chapter it has: the option says it before the press. */
+    chapter: chapterOf === undefined ? null : { parts: parts.map((part) => ({ id: part.id, heading: part.heading, moves: chapters.moveOf(part.id, file) })), of: chapterOf },
     eachOffered: chapters.offer,
     chaptersBusy: chapters.busy,
     engine: build ? build.engine : undefined,

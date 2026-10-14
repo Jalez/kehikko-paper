@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { MESSAGE, PROTOCOL, type EpicPart } from 'kehikot-module-protocol'
 import { createHash } from 'node:crypto'
 
@@ -8,7 +9,7 @@ import { standIn } from '../src/api.ts'
 import type { EditorProps } from '../src/editor/source-editor.tsx'
 import { inProject } from '../src/focus.ts'
 import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
-import { noSuchPart } from '../src/use-chapters.ts'
+import { forgetHost, noSuchPart } from '../src/use-chapters.ts'
 import { usePaper } from '../src/use-paper.ts'
 import { Workspace } from '../src/workspace.tsx'
 import { has, options, press, row } from './menu.ts'
@@ -176,6 +177,7 @@ const control = () => {
 }
 const choose = (id: string) => press('chapter', id === '' ? 'none' : `p${listed.findIndex((one) => one.id === id)}`)
 const offer = () => (has('parts-each') ? row('parts-each') : null)
+const said = () => screen.getByTestId('said').textContent ?? ''
 const openFile = () => document.querySelector('[data-editing]')?.getAttribute('data-editing')
 const writes = () => calls.filter((one) => one.method !== 'GET')
 const asked = (method: string) => asks.filter((one) => one.method === method)
@@ -199,6 +201,7 @@ beforeEach(() => {
   asks = []
   kept = null
   hostIs = 'keeps'
+  forgetHost()
   listed = []
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), 'http://127.0.0.1:7870')
@@ -222,7 +225,8 @@ describe('on a host that keeps the parts', () => {
     await waitFor(() => expect(openFile()).toBe('chapters/method.tex'))
     await waitFor(() => expect(control()).not.toBeNull())
     expect(control()!.value).toBe('the-method')
-    expect(control()!.words).toEqual(['no part', 'The design', 'The method', 'Results'])
+    /* The design already has a chapter, and the option says what choosing it would do to that one. */
+    expect(control()!.words).toEqual(['no part', 'The design · swaps with design.tex', 'The method', 'Results'])
     /* In the line that names the file, and not a row of its own. */
     /* Opening, reading and being narrowed wrote nothing, and told the canvas nothing about content. */
     expect(writes()).toEqual([])
@@ -270,6 +274,51 @@ describe('on a host that keeps the parts', () => {
     expect(writes()[0]!.body).toEqual({ chapters: { 'the-design': 'chapters/design.tex', 'the-results': 'chapters/method.tex' } })
   })
 
+  test('a chapter given to a part that has one swaps with it: the option says so before, the page says what moved, and pressing back restores it exactly', async () => {
+    const every = { 'the-design': 'chapters/design.tex', 'the-method': 'chapters/method.tex', 'the-results': 'chapters/results.tex' }
+    listed = [{ id: 'the-design', name: 'The design' }, { id: 'the-method', name: 'The method' }, { id: 'the-results', name: 'Results' }]
+    /* Read off the parts, with no record yet: the first press is also the one that adopts. */
+    await framed([
+      part('the-design', 'The design', false, ['chapters/design.tex', 'tables/t.tex']),
+      part('the-method', 'The method', true, ['chapters/method.tex']),
+      part('the-results', 'Results', false, ['chapters/results.tex']),
+    ])
+    await waitFor(() => expect(control()?.value).toBe('the-method'))
+    expect(control()!.words).toEqual(['no part', 'The design · swaps with design.tex', 'The method', 'Results · swaps with results.tex'])
+    expect(said()).toBe('')
+
+    choose('the-results')
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    /* Every part still has a chapter: the one that was in the way went to the part this file came from. */
+    expect(writes()[0]!.body).toEqual({ chapters: { ...every, 'the-method': 'chapters/results.tex', 'the-results': 'chapters/method.tex' } })
+    await waitFor(() => expect(said()).toBe('method.tex is now the chapter of Results, and results.tex of The method.'))
+    await waitFor(() => expect(control()!.value).toBe('the-results'))
+    expect(control()!.words).toEqual(['no part', 'The design · swaps with design.tex', 'The method · swaps with results.tex', 'Results'])
+
+    choose('the-method')
+    await waitFor(() => expect(writes()).toHaveLength(2))
+    /* As the parts said it before anything was pressed — the same entries in the same order. */
+    expect(JSON.stringify(writes()[1]!.body)).toBe(JSON.stringify({ chapters: every }))
+    await waitFor(() => expect(said()).toBe('method.tex is now the chapter of The method, and results.tex of Results.'))
+    await waitFor(() => expect(control()!.value).toBe('the-method'))
+  })
+
+  test('a file that is no part’s chapter, given to a part that has one: the option says the other is left with no part, and so does the page after', async () => {
+    kept = { 'the-design': 'chapters/design.tex', 'the-results': 'chapters/results.tex' }
+    await framed(PARTS())
+    await jumpTo('chapters/method.tex')
+    await waitFor(() => expect(control()).not.toBeNull())
+    expect(control()!.value).toBe('')
+    expect(control()!.words).toEqual(['no part', 'The design · design.tex gets no part', 'The method', 'Results · results.tex gets no part'])
+    choose('the-results')
+    await waitFor(() => expect(said()).toBe('method.tex is now the chapter of Results; results.tex is the chapter of no part.'))
+    /* A press that moves no other chapter says nothing, and takes that sentence down. */
+    choose('the-method')
+    await waitFor(() => expect(writes()).toHaveLength(2))
+    expect(writes()[1]!.body).toEqual({ chapters: { 'the-design': 'chapters/design.tex', 'the-method': 'chapters/method.tex' } })
+    await waitFor(() => expect(said()).toBe(''))
+  })
+
   test('“no part” takes the chapter from its part', async () => {
     await framed(PARTS('the-method'))
     await waitFor(() => expect(control()?.value).toBe('the-method'))
@@ -310,6 +359,67 @@ describe('what the host is asked, to learn whether it keeps the parts', () => {
     expect(noSuchPart([])).toBe('no-such-part')
     expect(noSuchPart([called('methods')])).toBe('no-such-part')
     expect(noSuchPart([called('no-such-part'), called('no-such-part-x')])).toBe('no-such-part-x-x')
+  })
+})
+
+describe('how often the host is asked', () => {
+  const probes = () => asked('parts.set').filter((one) => one.params?.move)
+
+  test('once a page load, however many times the page mounts — and React mounts it twice where it is developed', async () => {
+    const canvas = host()
+    render(
+      <StrictMode>
+        <Framed />
+      </StrictMode>,
+    )
+    canvas.greet(PARTS('the-method'))
+    await screen.findByLabelText('LaTeX source')
+    await waitFor(() => expect(control()).not.toBeNull())
+    expect(probes()).toHaveLength(1)
+    cleanup()
+    await framed(PARTS('the-method'))
+    await waitFor(() => expect(control()).not.toBeNull())
+    expect(probes()).toHaveLength(1)
+  })
+
+  test('and not at all on a reload, once this host has said in this tab that it keeps the parts', async () => {
+    const referrer = Object.getOwnPropertyDescriptor(document, 'referrer')
+    Object.defineProperty(document, 'referrer', { value: 'http://localhost:7777/', configurable: true })
+    try {
+      await framed(PARTS('the-method'))
+      await waitFor(() => expect(control()).not.toBeNull())
+      expect(probes()).toHaveLength(1)
+      cleanup()
+      /* A reload: what the page load held is gone, and what the tab holds is not. */
+      forgetHost({ tab: false })
+      await framed(PARTS('the-method'))
+      await waitFor(() => expect(control()).not.toBeNull())
+      expect(probes()).toHaveLength(1)
+      /* Another host around the same page is asked for itself. */
+      cleanup()
+      forgetHost({ tab: false })
+      Object.defineProperty(document, 'referrer', { value: 'http://localhost:8888/', configurable: true })
+      await framed(PARTS('the-method'))
+      await waitFor(() => expect(control()).not.toBeNull())
+      expect(probes()).toHaveLength(2)
+    } finally {
+      if (referrer) Object.defineProperty(document, 'referrer', referrer)
+      else delete (document as unknown as { referrer?: string }).referrer
+    }
+  })
+
+  test('a host that said no is not remembered past the page load', async () => {
+    hostIs = 'older'
+    await framed(PARTS('the-method'))
+    await settle()
+    expect(control()).toBeNull()
+    expect(probes()).toHaveLength(1)
+    cleanup()
+    forgetHost({ tab: false })
+    hostIs = 'keeps'
+    await framed(PARTS('the-method'))
+    await waitFor(() => expect(control()).not.toBeNull())
+    expect(probes()).toHaveLength(2)
   })
 })
 

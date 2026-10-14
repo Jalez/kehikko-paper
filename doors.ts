@@ -958,11 +958,19 @@ export function answer(
        thing at the same door, in the same words, for the same reason. */
     if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
     const paper = readPaper(epic, project)
-    /* `where` rides along on the refusal, because the next thing anybody wants
-       to know is where it would have been — and the page draws a button that
-       needs it. It is on the refusal rather than fetched separately so the two
-       cannot disagree about which epic they are talking about. */
-    if (!paper) return { status: 404, body: { ok: false, error: noPaper(epic, project), where: whereItWouldGo(epic, project) } }
+    /* An epic with no paper is an ANSWER, not a failure: most epics have none,
+       the page asks about every epic the canvas opens, and what it draws for
+       this is its ordinary empty state. A 404 here put a red line in the
+       console of every canvas that opened such an epic, for nothing that had
+       gone wrong. So it is `ok: false` under 200 — still not a paper, still
+       its sentence — and the statuses are kept for what IS wrong: no project
+       (409), a name that is not an epic's (400).
+
+       `where` rides along, because the next thing anybody wants to know is
+       where it would have been — and the page draws a button that needs it.
+       It is on the answer rather than fetched separately so the two cannot
+       disagree about which epic they are talking about. */
+    if (!paper) return ok({ ok: false, error: noPaper(epic, project), where: whereItWouldGo(epic, project) })
     return ok({ ok: true, paper })
   }
 
