@@ -7,6 +7,7 @@ import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { json, post, standIn, standingIn } from './api.ts'
+import { headerDrawn, rememberHeaderDrawn } from './header-fallback.tsx'
 
 /**
  * Which paper this page is on, and the conversation with whatever framed it.
@@ -63,6 +64,10 @@ export type Sight =
   | { at: 'broke'; why: string }
 
 export type GotoHandler = (goto: Goto, answer: (found: boolean, why?: string) => void) => void
+/** What takes a press on one of this page's header items: nothing for "taken", a sentence for "not taken, and why". */
+export type PressHandler = (press: { item: string; value?: string | boolean }) => string | void
+/** With no paper open there is nothing declared, so nothing to press. */
+const NO_PRESS: PressHandler = () => 'No paper is open here.'
 
 export type StartFrom = { template: string } | { folder: string }
 
@@ -120,6 +125,10 @@ export function usePaper(framed: boolean) {
   const [parts, setParts] = useState<readonly EpicPart[]>(NO_PARTS)
 
   const goto = useRef<GotoHandler>(() => {})
+  /* The open paper's workspace puts its handler here, as it does for `goto`,
+     and counts the presses a host sent: a host that sends one draws the header. */
+  const press = useRef<PressHandler>(NO_PRESS)
+  const [pressed, setPressed] = useState(headerDrawn)
   /** What the host kept for this module and handed back on its greeting; after that, what it was last asked to keep. */
   const kept = useRef<string | null>(null)
   const standingOn = useRef<string | null | undefined>(undefined)
@@ -230,10 +239,15 @@ export function usePaper(framed: boolean) {
       },
       onContext: (context) => arrived(context, false),
       onGoto: (message, answer) => goto.current(message, answer),
+      onPress: (pressing) => {
+        rememberHeaderDrawn()
+        setPressed(true)
+        return press.current(pressing)
+      },
     },
     { gotoBackstop: 900, same: { passage: samePassage } },
   )
-  const { where, resize, request, point, passage: pointed } = host
+  const { where, resize, request, point, passage: pointed, header } = host
 
   /** Start a paper for an epic that has none: the plain article, a built-in template, or a copy of a folder. Answers why not, or null. */
   const start = useCallback(async (epic: string, from?: StartFrom): Promise<string | null> => {
@@ -450,6 +464,11 @@ export function usePaper(framed: boolean) {
       request,
       parts,
       goto,
+      /** Where the workspace puts what takes a header press, and how it declares the items (`kehikot.header`). */
+      press,
+      header,
+      /** Whether a host has ever pressed a header item here: it draws the header, and the page's own control goes. */
+      pressed,
       kept,
       keep,
       show,
@@ -468,7 +487,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, pressed],
   )
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { MESSAGE, PROTOCOL, type EpicPart, type Passage } from 'kehikot-module-protocol'
 import { useFocus } from 'kehikot-module-protocol/client/react'
 import { createHash } from 'node:crypto'
@@ -14,6 +14,7 @@ import { keptPlace, placeWas, rememberPlace } from '../src/remembered.ts'
 import type { Paper } from '../store.ts'
 import { usePaper } from '../src/use-paper.ts'
 import { Workspace } from '../src/workspace.tsx'
+import { pane, press } from './menu.ts'
 
 /**
  * A page that is loaded again comes back to where its reader was.
@@ -115,7 +116,7 @@ const PARTS = (...picked: string[]): EpicPart[] => [
 ]
 
 const openFile = () => document.querySelector('[data-editing]')?.getAttribute('data-editing')
-const tabInFront = () => [...document.querySelectorAll('[role="tab"][aria-selected="true"]')].map((one) => one.textContent).join()
+const tabInFront = () => ({ source: 'Source', pdf: 'PDF' })[pane() ?? ''] ?? ''
 const editorText = () => (screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value
 
 /**
@@ -153,13 +154,13 @@ async function load({ epic = 'a-paper', parts = [] as EpicPart[], passage = null
 
 /** Go into the design chapter, select "design" in it, scroll both panes, and put the PDF in front. */
 async function wander() {
-  fireEvent.change(screen.getByLabelText('Sections'), { target: { value: '1' } })
+  press('section', 's1')
   await waitFor(() => expect(editorText()).toBe(TEXT['chapters/design.tex']!))
   const at = TEXT['chapters/design.tex']!.indexOf('design is')
   act(() => lastEditor!.onSelect({ from: at, to: at + 6 }))
   act(() => lastEditor!.onScrolled!(TEXT['chapters/design.tex']!.indexOf('The design'), 7))
   act(() => lastPreview!.onScrolled!(1234.5))
-  fireEvent.click(screen.getByRole('tab', { name: 'PDF' }))
+  press('pane', 'pdf')
   await waitFor(() => expect(JSON.parse(kept ?? '{}')).toEqual({ project: PROJECT, epic: 'a-paper', file: 'chapters/design.tex', tab: 'pdf' }))
   return at
 }

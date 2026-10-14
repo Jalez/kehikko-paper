@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 
 import { Button } from '@/components/ui/button.tsx'
-import { Checkbox } from '@/components/ui/checkbox.tsx'
 
 import { diffWords } from '../latex/diff.ts'
 import type { Proposal } from '../latex/propose.ts'
@@ -23,23 +22,20 @@ import type { Proposal } from '../latex/propose.ts'
  * Nothing in this component writes. Accept and Reject call back to
  * `use-paper.ts`, which posts to a door that demands this page's ticket; the
  * MCP door that filed the suggestion has no tool that reaches that door and
- * no argument that skips it. `Auto` is the person saying yes in advance, here,
- * for this paper, on this machine — remembered in this browser and nowhere an
- * agent can set it.
+ * no argument that skips it. `Auto` is the person saying yes in advance, for
+ * this paper, on this machine — a toggle in the container's View menu that
+ * says nothing about agents (`header.ts`), remembered in this browser and
+ * nowhere an agent can set it.
  */
 export function ProposalsPanel({
   proposals,
   busy,
-  auto,
-  onAuto,
   onDecide,
   onAcceptAll,
   onShow,
 }: {
   proposals: readonly Proposal[]
   busy: boolean
-  auto: boolean
-  onAuto(on: boolean): void
   onDecide(id: string, decision: 'accept' | 'reject'): void
   onAcceptAll(): void
   /** Take the editor to where this one would land. */
@@ -53,10 +49,6 @@ export function ProposalsPanel({
           {proposals.length === 1 ? '1 suggested change' : `${proposals.length} suggested changes`}
         </strong>
         <span className="flex-1" />
-        <label className="text-muted-foreground flex items-center gap-1" title="Accept suggestions for this paper as they arrive">
-          <Checkbox size="container" checked={auto} onCheckedChange={(on) => onAuto(on === true)} />
-          Auto
-        </label>
         {proposals.length > 1 && (
           <Button variant="outline" size="container" disabled={busy} onClick={onAcceptAll}>
             Accept all

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MESSAGE, PROTOCOL, type EpicPart } from 'kehikot-module-protocol'
 import { createHash } from 'node:crypto'
 
@@ -11,6 +11,7 @@ import type { PreviewProps } from '../src/pdf/pdf-view.tsx'
 import { noSuchPart } from '../src/use-chapters.ts'
 import { usePaper } from '../src/use-paper.ts'
 import { Workspace } from '../src/workspace.tsx'
+import { has, options, press, row } from './menu.ts'
 
 /**
  * Setting which chapter is a part's, on the page, against the two hosts.
@@ -166,16 +167,21 @@ const PARTS = (...picked: string[]): EpicPart[] => {
   ]
 }
 
-const control = () => screen.queryByLabelText('The part this file is the chapter of') as HTMLSelectElement | null
-const offer = () => document.querySelector<HTMLButtonElement>('[data-parts-each]')
+/** The "chapter of" switch in the View menu, as the part's id it is on ('' for no part) and the words of its options; null when it is not declared. */
+const control = () => {
+  if (!has('chapter')) return null
+  const all = options('chapter')
+  const at = all.find((one) => one.on)
+  return { value: !at || at.id === 'none' ? '' : listed[Number(at.id.slice(1))]!.id, words: all.map((one) => one.label) }
+}
+const choose = (id: string) => press('chapter', id === '' ? 'none' : `p${listed.findIndex((one) => one.id === id)}`)
+const offer = () => (has('parts-each') ? row('parts-each') : null)
 const openFile = () => document.querySelector('[data-editing]')?.getAttribute('data-editing')
 const writes = () => calls.filter((one) => one.method !== 'GET')
 const asked = (method: string) => asks.filter((one) => one.method === method)
 const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 20)))
 const jumpTo = async (file: string) => {
-  const sections = screen.getByLabelText('Sections') as HTMLSelectElement
-  const option = [...sections.options].find((one) => (one.parentElement as HTMLOptGroupElement).label === file)!
-  fireEvent.change(sections, { target: { value: option.value } })
+  press('section', file)
   await waitFor(() => expect(openFile()).toBe(file))
 }
 
@@ -216,9 +222,8 @@ describe('on a host that keeps the parts', () => {
     await waitFor(() => expect(openFile()).toBe('chapters/method.tex'))
     await waitFor(() => expect(control()).not.toBeNull())
     expect(control()!.value).toBe('the-method')
-    expect([...control()!.options].map((one) => one.textContent)).toEqual(['chapter of no part', 'chapter of The design', 'chapter of The method', 'chapter of Results'])
+    expect(control()!.words).toEqual(['no part', 'The design', 'The method', 'Results'])
     /* In the line that names the file, and not a row of its own. */
-    expect(control()!.closest('[data-editing]')).not.toBeNull()
     /* Opening, reading and being narrowed wrote nothing, and told the canvas nothing about content. */
     expect(writes()).toEqual([])
     expect(asked('content.changed')).toEqual([])
@@ -241,7 +246,7 @@ describe('on a host that keeps the parts', () => {
     await framed(PARTS())
     await jumpTo('chapters/results.tex')
     await waitFor(() => expect(control()).not.toBeNull())
-    fireEvent.change(control()!, { target: { value: 'the-results' } })
+    choose('the-results')
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0]).toEqual({
       method: 'POST',
@@ -259,7 +264,7 @@ describe('on a host that keeps the parts', () => {
     await waitFor(() => expect(control()).not.toBeNull())
     /* The parts still say the method chapter is the method's; this module's record says it is no part's. */
     expect(control()!.value).toBe('')
-    fireEvent.change(control()!, { target: { value: 'the-results' } })
+    choose('the-results')
     await waitFor(() => expect(writes()).toHaveLength(1))
     /* One chapter to a part: the results part gives up the chapter it had. */
     expect(writes()[0]!.body).toEqual({ chapters: { 'the-design': 'chapters/design.tex', 'the-results': 'chapters/method.tex' } })
@@ -268,7 +273,7 @@ describe('on a host that keeps the parts', () => {
   test('“no part” takes the chapter from its part', async () => {
     await framed(PARTS('the-method'))
     await waitFor(() => expect(control()?.value).toBe('the-method'))
-    fireEvent.change(control()!, { target: { value: '' } })
+    choose('')
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0]!.body).toEqual({ chapters: { 'the-design': 'chapters/design.tex' } })
   })
@@ -279,7 +284,7 @@ describe('on a host that keeps the parts', () => {
     expect(offer()!.textContent).toBe('A part for each chapter')
     expect(control()).toBeNull()
     expect(writes()).toEqual([])
-    fireEvent.click(offer()!)
+    press('parts-each')
     await waitFor(() => expect(writes()).toHaveLength(1))
     /* Named by the chapter's first heading, in the paper's order. The table a chapter reads is no
        chapter, and neither is a file main.tex pulls in that has no heading: nobody picks a part called after a file of macros. */

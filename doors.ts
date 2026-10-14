@@ -464,6 +464,19 @@ const PROJECT_ARG = {
  * preamble and expands the paper's own macros. An agent handed only the prose
  * and asked to edit would be guessing at markup it had never been shown.
  */
+/**
+ * What each tool says about its effect, so that a caller need not ask a person
+ * before running one that only reads. Every tool here reads, except
+ * `propose_edit` — and that one writes a suggestion beside the paper and never
+ * the paper: nothing is deleted or overwritten, a second identical call files
+ * a second suggestion, and nothing leaves this machine.
+ */
+const WRITES = new Set(['propose_edit'])
+function annotationsOf(name: string): { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean } {
+  const reads = !WRITES.has(name)
+  return { readOnlyHint: reads, destructiveHint: false, idempotentHint: reads, openWorldHint: false }
+}
+
 const TOOLS: Record<string, { description: string; schema: object; run: ToolCall }> = {
   list_papers: {
     description:
@@ -842,6 +855,7 @@ function mcp(rpc: Rpc): Reply {
         name,
         description: TOOLS[name]!.description,
         inputSchema: TOOLS[name]!.schema,
+        annotations: annotationsOf(name),
       })),
     })
   }
