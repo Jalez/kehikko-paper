@@ -146,7 +146,8 @@ function host() {
   const source = { postMessage: (data: Asked) => void (asks.push(data), answerTo(data)) }
   const context = (parts: EpicPart[]) => ({ epic: EPIC, project: 'project', projectPath: PROJECT, theme: 'light', selection: [], parts, passage: null })
   return {
-    greet: (parts: EpicPart[] = []) => post({ type: MESSAGE.HELLO, protocol: PROTOCOL, session: 's', context: context(parts), state: null }),
+    greet: (parts: EpicPart[] = [], facts: { answers?: string[]; header?: boolean } = {}) =>
+      post({ type: MESSAGE.HELLO, protocol: PROTOCOL, session: 's', context: context(parts), state: null, ...facts }),
     context: (parts: EpicPart[]) => post({ type: MESSAGE.CONTEXT, protocol: PROTOCOL, ...context(parts) }),
   }
 }
@@ -187,10 +188,10 @@ const jumpTo = async (file: string) => {
   await waitFor(() => expect(openFile()).toBe(file))
 }
 
-const framed = async (parts: EpicPart[]) => {
+const framed = async (parts: EpicPart[], facts: { answers?: string[]; header?: boolean } = {}) => {
   const canvas = host()
   render(<Framed />)
-  canvas.greet(parts)
+  canvas.greet(parts, facts)
   await screen.findByLabelText('LaTeX source')
   await settle()
   return canvas
@@ -462,5 +463,49 @@ describe('on a host that cannot answer parts.set', () => {
     await settle()
     expect(offer()).toBeNull()
     expect(control()).toBeNull()
+  })
+})
+
+describe('what the greeting says (1.4.0) replaces the probe', () => {
+  const fallback = () => document.querySelector('[data-header-fallback]')
+
+  /* These two run on `header: false`, because the menu helper presses through the page's own control. */
+  test('answers with parts.set: the controls are offered and the host was never asked', async () => {
+    hostIs = 'keeps'
+    await framed(PARTS('the-method'), { answers: ['parts.set', 'content.changed'], header: false })
+    await waitFor(() => expect(control()).not.toBeNull())
+    expect(asked('parts.set')).toHaveLength(0)
+  })
+
+  test('answers without parts.set: no controls, and nothing asked', async () => {
+    hostIs = 'keeps'
+    await framed(PARTS('the-method'), { answers: ['content.changed'], header: false })
+    await settle()
+    expect(control()).toBeNull()
+    expect(offer()).toBeNull()
+    expect(asked('parts.set')).toHaveLength(0)
+  })
+
+  test('no answers (an older host): probed once, as before', async () => {
+    hostIs = 'keeps'
+    await framed(PARTS('the-method'))
+    await waitFor(() => expect(control()).not.toBeNull())
+    expect(asked('parts.set')).toHaveLength(1)
+  })
+
+  test('drawsHeader true: no fallback control from the first paint, no press needed', async () => {
+    await framed(PARTS(), { answers: ['parts.set'], header: true })
+    await settle()
+    expect(fallback()).toBeNull()
+  })
+
+  test('drawsHeader false: the fallback control is drawn', async () => {
+    await framed(PARTS(), { answers: ['parts.set'], header: false })
+    await waitFor(() => expect(fallback()).not.toBeNull())
+  })
+
+  test('drawsHeader null: shown until the first press, as before', async () => {
+    await framed(PARTS())
+    await waitFor(() => expect(fallback()).not.toBeNull())
   })
 })

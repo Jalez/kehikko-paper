@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { readHoldings } from 'kehikot-module-protocol/serve'
+import { holdingsSpoken, readHoldings } from 'kehikot-module-protocol/serve'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -265,6 +265,14 @@ describe('the first deliberate write', () => {
     expect(readHoldings(project).thesis).toBeUndefined()
     /* `{}` and not null: this module keeps the epic's chapters, and it keeps none. */
     expect(readChapters(project, 'thesis')).toEqual({})
+  })
+
+  test('a last chapter set to no part still counts as spoken: documents are published, refs never claimed', () => {
+    expect(setChapters(project, 'thesis', { methods: 'chapters/methods.tex' })).toMatchObject({ ok: true })
+    expect(holdingsSpoken(project, 'thesis')).toEqual({ documents: true, refs: false })
+    expect(setChapters(project, 'thesis', {})).toMatchObject({ ok: true, published: true })
+    expect(readHoldings(project).thesis).toBeUndefined()
+    expect(holdingsSpoken(project, 'thesis')).toEqual({ documents: true, refs: false })
   })
 
   test('a record that cannot be read is set aside, never written over or read through', () => {

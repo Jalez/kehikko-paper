@@ -125,7 +125,7 @@ export function holdingsOf(paper: Pick<Paper, 'epic' | 'files' | 'pulls'>, chapt
 
 /** Publish what the record says, read against the paper as it is now. Whether `parts.json` was written. */
 function publish(project: string, paper: Paper, chapters: Chapters): boolean {
-  return writeHoldings(project, ID, paper.epic, holdingsOf(paper, chapters))?.changed === true
+  return writeHoldings(project, ID, paper.epic, holdingsOf(paper, chapters), { published: ['documents'] })?.changed === true
 }
 
 export type ChaptersSet = { ok: true; chapters: Chapters; published: boolean } | { ok: false; why: string }

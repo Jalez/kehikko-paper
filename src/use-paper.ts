@@ -247,7 +247,9 @@ export function usePaper(framed: boolean) {
     },
     { gotoBackstop: 900, same: { passage: samePassage } },
   )
-  const { where, resize, request, point, passage: pointed, header } = host
+  const { where, resize, request, point, passage: pointed, header, answers, drawsHeader } = host
+  /* Whether the host draws this module's header: its own word when it has one (1.4.0), else a press having arrived. */
+  const hostDraws = drawsHeader ?? pressed
 
   /** Start a paper for an epic that has none: the plain article, a built-in template, or a copy of a folder. Answers why not, or null. */
   const start = useCallback(async (epic: string, from?: StartFrom): Promise<string | null> => {
@@ -467,8 +469,10 @@ export function usePaper(framed: boolean) {
       /** Where the workspace puts what takes a header press, and how it declares the items (`kehikot.header`). */
       press,
       header,
-      /** Whether a host has ever pressed a header item here: it draws the header, and the page's own control goes. */
-      pressed,
+      /** Whether the host draws the header: its greeting says (`drawsHeader`), and from an older host a press having arrived does. */
+      hostDraws,
+      /** The methods the host answers for this module, or null from a host that does not say. */
+      answers,
       kept,
       keep,
       show,
@@ -487,7 +491,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, pressed],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, hostDraws, answers],
   )
 }
 
