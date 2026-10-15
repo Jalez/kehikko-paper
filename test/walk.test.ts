@@ -79,11 +79,11 @@ describe('the suggestion items in the header', () => {
     expect(got.some((i) => i.id === 'sg-all')).toBe(true)
   })
 
-  test('chosen: position in the label; four are pinned, Edit is not; none is for agents', () => {
+  test('chosen: position in the label; only the walk is pinned (Accept and Reject are on the tag); none is for agents', () => {
     const got = items({ stops: 5, position: '2 of 5', editing: false, busy: false })
     expect(got.find((i) => i.id === 'sg-next')!.label).toBe('Next suggestion · 2 of 5')
     expect(got.find((i) => i.id === 'sg-accept')!.disabled).toBeNull()
-    expect(got.filter((i) => i.pinned === true).map((i) => i.id)).toEqual(['sg-prev', 'sg-next', 'sg-accept', 'sg-reject'])
+    expect(got.filter((i) => i.pinned === true).map((i) => i.id)).toEqual(['sg-prev', 'sg-next'])
     expect(got.some((i) => i.agents === true)).toBe(false)
     expect(got.every((i) => i.group === 'Suggestions')).toBe(true)
   })
