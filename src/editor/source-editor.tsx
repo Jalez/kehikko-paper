@@ -202,7 +202,11 @@ export class TagWidget extends WidgetType {
     toggle.setAttribute('aria-pressed', String(one.after))
     toggle.addEventListener('mousedown', (event) => event.preventDefault())
     toggle.addEventListener('click', () => on.toggle(one.key))
-    tag.append(toggle)
+    /* The three buttons stay together; only a narrow container lets them wrap. */
+    const controls = document.createElement('span')
+    controls.className = 'cm-sugg-controls'
+    controls.append(toggle)
+    tag.append(controls)
     /* Answering THIS suggestion (its group as one): the same function the
        header's Accept and Reject run, so there is one code path. The words
        carry the meaning; the colour only agrees with them. */
@@ -220,7 +224,7 @@ export class TagWidget extends WidgetType {
       button.append(glyph, document.createTextNode(word))
       button.addEventListener('mousedown', (event) => event.preventDefault())
       button.addEventListener('click', () => on.answer(one.key, decision))
-      tag.append(button)
+      controls.append(button)
     }
     answer('accept', 'cm-sugg-accept', '\u2713', 'Accept change')
     answer('reject', 'cm-sugg-cancel', '\u2715', 'Cancel change')

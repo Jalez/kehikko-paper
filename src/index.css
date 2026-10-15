@@ -462,8 +462,19 @@
   color: inherit;
   cursor: pointer;
 }
+.cm-sugg-controls {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 0.3rem;
+  vertical-align: baseline;
+}
+/* Only a narrow container may put the buttons on a second line. */
+@container container (max-width: 420px) {
+  .cm-sugg-controls {
+    flex-wrap: wrap;
+  }
+}
 .cm-sugg-answer {
-  margin-left: 0.3rem;
   white-space: nowrap;
 }
 .cm-sugg-glyph {
