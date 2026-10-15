@@ -58,7 +58,7 @@ type Change = {
   held?: string
   adjusted?: boolean
 }
-type Listing = { proposals: Change[]; auto: boolean; baseline: { mode: string; says: string } | null; accepted: { n: number; file: string; by: string }[]; said?: string }
+type Listing = { proposals: Change[]; auto: boolean; readOnly?: string | null; untracked?: { file: string }[]; baseline: { mode: string; says: string } | null; accepted: { n: number; file: string; by: string }[]; said?: string }
 
 function listing(): Listing {
   return answer('GET', '/api/proposals', params(), null)?.body as Listing
@@ -648,6 +648,45 @@ describe('git is the baseline where there is a repository', () => {
     expect(standing.standing.at).toBe('ready')
   })
 
+  test('in the middle of a merge Paper stages nothing, says so, and recovers when it ends', () => {
+    initRepo()
+    put(MAIN.replace('market', 'bazaar'))
+    writeFileSync(join(project, '.git', 'MERGE_HEAD'), `${git('rev-parse', 'HEAD').out}\n`)
+    const during = listing()
+    expect(during.readOnly).toBe('Git is in the middle of a merge — finish it to review here.')
+    /* Shown, but not answerable, and nothing staged. */
+    expect(during.proposals.filter((c) => c.kind === 'disk')).toHaveLength(1)
+    const refused = decide(disk()[0]!.id, 'accept')
+    expect(refused?.status).toBe(409)
+    expect(String((refused?.body as { error: string }).error)).toContain('middle of a merge')
+    expect(decide(disk()[0]!.id, 'reject')?.status).toBe(409)
+    saveFromEditor(read().replace('last thing', 'last word'))
+    expect(indexOf()).not.toContain('last word')
+    expect(git('diff', '--cached', '--name-only').out).toBe('')
+    rmSync(join(project, '.git', 'MERGE_HEAD'))
+    expect(listing().readOnly).toBeNull()
+    expect(decide(disk()[0]!.id, 'accept')?.status).toBe(200)
+  })
+
+  test.each([
+    ['rebase-merge', 'a rebase'],
+    ['rebase-apply', 'a rebase'],
+    ['CHERRY_PICK_HEAD', 'a cherry-pick'],
+  ])('%s is %s in progress', (marker, words) => {
+    initRepo()
+    if (marker.startsWith('rebase')) mkdirSync(join(project, '.git', marker), { recursive: true })
+    else writeFileSync(join(project, '.git', marker), `${git('rev-parse', 'HEAD').out}\n`)
+    expect(listing().readOnly).toContain(words)
+  })
+
+  test('a file with conflict markers is not diffed as hunks, and is listed as waiting for the conflict to be resolved', () => {
+    initRepo()
+    put(MAIN.replace('\\section{One}\n', '\\section{One}\n<<<<<<< ours\nmarket\n=======\nbazaar\n>>>>>>> theirs\n'))
+    const body = listing()
+    expect(body.proposals.filter((c) => c.file === 'main.tex')).toEqual([])
+    expect(body.untracked?.map((u) => u.file)).toContain('main.tex')
+  })
+
   test('a paper in a repository that does not track it falls back to the machine snapshot', () => {
     git('init', '-q', '-b', 'main', '.')
     expect(listing().baseline?.mode).toBe('snapshot')
@@ -675,11 +714,66 @@ describe('git is the baseline where there is a repository', () => {
   })
 })
 
-describe('what is not tracked', () => {
-  test('a file over the cap is listed as not tracked, never compared', () => {
+describe('no cap on changes', () => {
+  test('more than two dozen suggestions are all accepted by the door and all listed', () => {
+    listing()
+    let text = ''
+    for (let n = 0; n < 60; n++) text += `Sentence number ${n} says a thing about topic ${n}.\n\n`
+    put(`${MAIN.replace('\\input{two}', text + '\\input{two}')}`)
+    listing()
+    for (let n = 0; n < 60; n++) {
+      const said = tool('propose_edit', { file: 'main.tex', find: `a thing about topic ${n}.`, replace: `a point about topic ${n}.`, why: `Reason ${n}.` })
+      expect(said).toContain('Filed as')
+    }
+    expect(changes().filter((c) => c.kind === undefined)).toHaveLength(60)
+  })
+
+  test('a quote or replacement past the limit is refused in words that point at editing the file', () => {
+    const said = tool('propose_edit', { file: 'main.tex', find: 'x'.repeat(250_000), replace: 'y', why: 'big' })
+    expect(said).toContain('Edit the .tex directly')
+    expect(said).toContain('review')
+  })
+
+  test('150 changes across five files are all reviewable, and computing them is quick', () => {
+    const files = ['two.tex', 'three.tex', 'four.tex', 'five.tex']
+    const lines = (tag: string) => Array.from({ length: 40 }, (_, n) => `Line ${n} of ${tag} is plain text that stays put.`).join('\n\n')
+    for (const f of files) put(`${lines(f)}\n`, f)
+    put(MAIN.replace('\\input{two}', files.map((f) => `\\input{${f.replace('.tex', '')}}`).join('\n')))
+    listing()
+    for (const f of [...files]) put(read(f).replace(/is plain text/g, 'is changed text'), f)
+    put(read().replace('market', 'bazaar').replace('farms', 'fields'))
+    const started = performance.now()
+    const found = disk()
+    const took = performance.now() - started
+    expect(found.length).toBe(4 * 40 + 2)
+    expect(took).toBeLessThan(1500)
+    /* A second poll with nothing moved costs a hash, not a diff. */
+    const again = performance.now()
+    disk()
+    expect(performance.now() - again).toBeLessThan(took + 50)
+    expect(new Set(found.map((c) => c.file)).size).toBe(5)
+  })
+
+  test('a huge change degrades to one whole block that still has Accept and Cancel', () => {
+    const big = Array.from({ length: 5000 }, (_, n) => `Row ${n}.`).join('\n')
+    put(`${MAIN}${big}\n`)
+    listing()
+    const rewritten = Array.from({ length: 5000 }, (_, n) => `Row ${5000 - n}.`).join('\n')
+    put(`${MAIN}${rewritten}\n`)
+    const found = disk()
+    expect(found.length).toBeGreaterThan(0)
+    expect(decide(found[0]!.id, 'reject')?.status).toBe(200)
+    expect(read()).toBe(`${MAIN}${big}\n`)
+  })
+})
+
+describe('what is tracked', () => {
+  test('a large file is tracked and compared', () => {
     put(`${MAIN}${'x'.repeat(600 * 1024)}\n`)
-    const body = answer('GET', '/api/proposals', params(), null)?.body as { untracked: { file: string; why: string }[] }
-    expect(body.untracked.map((u) => u.file)).toContain('main.tex')
+    listing()
+    put(`${MAIN.replace('market', 'bazaar')}${'x'.repeat(600 * 1024)}\n`)
+    expect(disk().map((c) => c.was_text)).toEqual(['bazaar'])
+    expect(listing().untracked).toEqual([])
   })
 
   test('baselines of files the paper no longer names are pruned', () => {

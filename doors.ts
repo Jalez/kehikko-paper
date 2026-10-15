@@ -755,8 +755,16 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
          which is most of them, because prose is words separated by spaces — has
          to name that space or it names something else. This is the one place in
          this file where the caller's whitespace is load-bearing. */
-      const find = typeof args.find === 'string' ? args.find.slice(0, MAX_TEXT) : ''
-      const replace = typeof args.replace === 'string' ? args.replace.slice(0, MAX_TEXT) : ''
+      const find = typeof args.find === 'string' ? args.find : ''
+      const replace = typeof args.replace === 'string' ? args.replace : ''
+      /* Said plainly rather than clipped: a clipped quote is a different quote. */
+      if (find.length > MAX_TEXT || replace.length > MAX_TEXT) {
+        return (
+          `That text is longer than ${MAX_TEXT.toLocaleString('en')} characters, which is as much as one suggestion carries. `
+          + 'Edit the .tex directly with your own file tools: Paper shows every changed passage to the author for '
+          + 'review, and explain_change attaches your reason to it.'
+        )
+      }
       const why = str(args.why, MAX_WHY)
       if (!why) return 'A suggestion has to say why, in a sentence. The reader sees it beside the change.'
 
@@ -871,7 +879,10 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const made = reviseOne(named.project, epic, id, token, (current) => {
         if (!hasReplace) return { ...current, why: why || current.why }
         if (!current.asked) return { refuse: 'This suggestion carries no quoted text, so its words cannot be revised. File a new one.' }
-        const replace = (args.replace as string).slice(0, MAX_TEXT)
+        const replace = args.replace as string
+        if (replace.length > MAX_TEXT) {
+          return { refuse: `That text is longer than ${MAX_TEXT.toLocaleString('en')} characters. Edit the .tex directly instead; Paper shows it for review.` }
+        }
         if (replace.includes('\0')) return { refuse: 'That text holds a NUL byte, which a .tex file does not.' }
         const source = readSource(epic, current.file, named.project)
         const was = hashesOf(epic, named.project)?.[current.file]
@@ -1109,6 +1120,7 @@ function reviewFacts(review: Review | null): Record<string, unknown> {
   return {
     auto: review?.auto ?? false,
     jump: review?.jump ?? true,
+    readOnly: review?.readOnly ?? null,
     baseline: review ? { mode: review.mode, says: review.baseline } : null,
     accepted: (review?.accepted ?? []).map((a) => ({ n: a.n, file: a.file, old: a.old.slice(0, 200), new: a.new.slice(0, 200), why: a.why, at: a.at, by: a.by, kind: a.kind })),
     untracked: review?.untracked ?? [],

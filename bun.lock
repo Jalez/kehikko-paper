@@ -5,6 +5,7 @@
     "": {
       "name": "kehikko-paper",
       "dependencies": {
+        "@codemirror/commands": "^6.11.1",
         "@codemirror/language": "^6.13.1",
         "@codemirror/legacy-modes": "^6.5.5",
         "@codemirror/state": "^6.7.6",

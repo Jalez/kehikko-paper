@@ -4,6 +4,7 @@ import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { held } from 'kehikot-module-protocol/client'
 
+import { mergeThree } from '../latex/merge.ts'
 import { json, post, standingIn } from './api.ts'
 import { eolOf, toDisk, toEditor, type Eol } from './lib/offsets.ts'
 
@@ -144,6 +145,7 @@ export function useSource({
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const loading = useRef<Set<string>>(new Set())
   const saveFn = useRef<(name: string) => Promise<boolean>>(async () => true)
+  const editRef = useRef<(text: string, name?: string) => void>(() => {})
   const conflictRef = useRef<Conflict | null>(null)
   conflictRef.current = conflict
 
@@ -259,6 +261,17 @@ export function useSource({
             return true
           }
           if (body.stale === true && typeof body.source === 'string' && typeof body.hash === 'string') {
+            const theirs = toEditor(body.source)
+            const merged = mergeThree(doc.saved, doc.text, theirs)
+            if (merged !== null) {
+              /* The disk moved between this editor's read and its save, in other lines than the ones typed: both kept. */
+              docs.current.set(name, { text: doc.text, saved: theirs, hash: body.hash, eol: eolOf(body.source) })
+              setChanged((was) => changedBy(name, doc.saved, theirs, was))
+              setTaken((n) => n + 1)
+              if (merged === doc.text) void saveFn.current(name)
+              else editRef.current(merged, name)
+              return false
+            }
             setConflict({ file: name, theirs: toEditor(body.source), hash: body.hash, eol: eolOf(body.source) })
             return false
           }
@@ -315,6 +328,8 @@ export function useSource({
     [file, redraw, saveDelay, saveNow, hold],
   )
 
+  editRef.current = edit
+
   /** Save everything typed, now. True when the disk holds what the editor does. */
   const flush = useCallback(async (): Promise<boolean> => {
     for (const one of timers.current.values()) clearTimeout(one)
@@ -337,6 +352,18 @@ export function useSource({
         setChanged((was) => changedBy(name, held.text, got.text, was))
         setTaken((n) => n + 1)
         redraw()
+        return
+      }
+      /* Both changed it. Where what each changed does not touch, both are kept:
+         what was typed stays, what the disk has is added, and the whole is
+         saved over the disk's version. Where it does, a person chooses. */
+      const merged = mergeThree(held.saved, held.text, got.text)
+      if (merged !== null) {
+        docs.current.set(name, { text: held.text, saved: got.text, hash: got.hash, eol: got.eol })
+        setChanged((was) => changedBy(name, held.saved, got.text, was))
+        setTaken((n) => n + 1)
+        if (merged === held.text) void saveFn.current(name)
+        else editRef.current(merged, name)
         return
       }
       setConflict({ file: name, theirs: got.text, hash: got.hash, eol: got.eol })

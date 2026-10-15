@@ -43,7 +43,7 @@ import { MAIN, confine, hashOf, hashesOf, isEpic, paperRoot, writeRange, writeRa
  */
 
 /** A file larger than this is not tracked: it is listed as such and never compared. */
-export const MAX_TRACKED_BYTES = 512 * 1024
+export const MAX_TRACKED_BYTES = 4_000_000
 /** The most files one paper tracks. */
 export const MAX_TRACKED_FILES = 64
 const MAX_ACCEPTED = 40
@@ -112,6 +112,8 @@ export interface Review {
   mode: 'git' | 'snapshot'
   /** In words, what the baseline is: shown beside the count. */
   baseline: string
+  /** Set while git is in the middle of a merge, rebase or the like: changes are shown, and answering them is refused. */
+  readOnly: string | null
   changes: Proposal[]
   /** Files left out of the comparison, with why. */
   untracked: { file: string; why: string }[]
@@ -270,11 +272,14 @@ function trackedView(ctx: Ctx): GitView | null {
   return view && (view.index.has(MAIN) || view.head.has(MAIN)) ? view : null
 }
 
+const diffs = new Map<string, { hash: string; base: string; hunks: Hunk[]; ids: string[] }>()
+
 function compute(ctx: Ctx): Computed {
   const state = stateOf(ctx.project, ctx.epic)
   const view = trackedView(ctx)
   const fresh = new Set<string>()
   const mode: Review['mode'] = view ? 'git' : 'snapshot'
+  const readOnly = view?.operation ? `Git is in the middle of ${view.operation} — finish it to review here.` : null
   const parts = new Map<string, Part>()
   const byId = new Map<string, { part: Part; hunk: Hunk }>()
   const changes: Proposal[] = []
@@ -294,6 +299,12 @@ function compute(ctx: Ctx): Computed {
         file,
         why: `${file} is larger than ${Math.round(MAX_TRACKED_BYTES / 1024)} kB, so changes to it are not tracked for review.`,
       })
+      continue
+    }
+    /* A file with git's conflict markers in it is not a change anybody can
+       review: it is a conflict to resolve. It is left out until it is. */
+    if (/^<{7} /m.test(read.text) && /^>{7} /m.test(read.text)) {
+      untracked.push({ file, why: `${file} has conflict markers in it; resolve the conflict first.` })
       continue
     }
     const hash = hashOf(read.bytes)
@@ -335,8 +346,16 @@ function compute(ctx: Ctx): Computed {
     }
     const crlf = read.text.includes('\r\n') && !baseText.includes('\r')
     const base = crlf ? baseText.replace(/\n/g, '\r\n') : baseText
-    const hunks = hunksOf(base, read.text)
-    const ids = hunkIds(file, base, hunks)
+    /* A poll that finds nothing moved costs a hash, not a diff. */
+    const memo = `${keyOf(ctx.project, ctx.epic)}\0${file}`
+    let cached = diffs.get(memo)
+    if (!cached || cached.hash !== hash || cached.base !== base) {
+      const found = hunksOf(base, read.text)
+      cached = { hash, base, hunks: found, ids: hunkIds(file, base, found) }
+      diffs.set(memo, cached)
+      if (diffs.size > 400) diffs.delete(diffs.keys().next().value as string)
+    }
+    const { hunks, ids } = cached
     const part: Part = { file, text: read.text, hash, base, crlf, mode: fileMode, hunks, ids }
     parts.set(file, part)
     const times = ids.map((id) => {
@@ -416,6 +435,7 @@ function compute(ctx: Ctx): Computed {
   const review: Review = {
     mode,
     baseline: mode === 'git' ? BASELINE_GIT : BASELINE_SNAPSHOT,
+    readOnly,
     changes,
     untracked,
     auto: state.auto,
@@ -495,7 +515,7 @@ function acceptMembers(ctx: Ctx, c: Computed, members: readonly Proposal[], by: 
 export function reviewOf(ctx: Ctx): Review {
   const c = compute(ctx)
   const s = c.state
-  if (s.auto && c.fresh.size) {
+  if (s.auto && c.fresh.size && !c.review.readOnly) {
     const incoming = c.review.changes.filter((one) => c.fresh.has(one.id) && one.kind === 'disk')
     /* Only what ARRIVED: a group-mate that was already waiting is left for a person. */
     if (incoming.length) {
@@ -517,6 +537,7 @@ export function acceptChange(ctx: Ctx, id: string): { ok: true; count: number } 
   const c = compute(ctx)
   const one = c.review.changes.find((m) => m.id === id)
   if (!one) return { ok: false, why: 'There is no change by that name waiting here.' }
+  if (c.review.readOnly) return { ok: false, why: c.review.readOnly }
   return acceptMembers(ctx, c, membersOf(c.review.changes, one), 'author')
 }
 
@@ -529,6 +550,7 @@ export function cancelChange(ctx: Ctx, id: string, confirmed = false): { ok: tru
   const c = compute(ctx)
   const one = c.review.changes.find((m) => m.id === id)
   if (!one) return { ok: false, why: 'There is no change by that name waiting here.' }
+  if (c.review.readOnly) return { ok: false, why: c.review.readOnly }
   const members = membersOf(c.review.changes, one)
   if (one.kind === 'new') {
     if (!confirmed) return { ok: false, needsConfirm: true, why: `Cancelling deletes ${one.file} from the paper. Confirm to delete it.` }
@@ -619,6 +641,11 @@ export function afterWrite(
 ): void {
   const s = stateOf(ctx.project, ctx.epic)
   const view = trackedView(ctx)
+  /* Mid-merge or mid-rebase Paper stages nothing, whoever wrote. */
+  if (view?.operation) {
+    for (const one of staged ?? []) void one
+    return
+  }
   let baseText: string | null
   let mode = '100644'
   if (view) {
@@ -753,6 +780,7 @@ export function markCommitted(project: string, epic: string): void {
 
 /** Forget what is held in memory: a restart, or a test. What is on the machine stays. */
 export function restartReview(): void {
+  diffs.clear()
   states.clear()
   snapshots.clear()
 }

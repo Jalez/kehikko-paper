@@ -247,7 +247,8 @@ describe('saving', () => {
 
   test('a file that moved on disk while it was being edited is not overwritten; a person chooses', async () => {
     const editor = await open()
-    const theirs = MAIN.replace('A claim', 'A claim, restated by somebody else')
+    /* The same line, so what each changed touches: not mergeable. */
+    const theirs = MAIN.replace('tpyo', 'typo, as somebody else has it')
     disk['main.tex'] = theirs
     fireEvent.change(editor, { target: { value: MAIN.replace('tpyo', 'typo') } })
     const alert = await screen.findByRole('alert')
@@ -260,9 +261,21 @@ describe('saving', () => {
     expect(disk['main.tex']).toBe(theirs)
   })
 
+  test('changes to other lines, made in both places, are both kept: nothing typed is lost and nothing on disk is overwritten', async () => {
+    const editor = await open()
+    const theirs = MAIN.replace('Fin', 'Finis')
+    disk['main.tex'] = theirs
+    const mine = MAIN.replace('tpyo', 'typo')
+    fireEvent.change(editor, { target: { value: mine } })
+    const both = theirs.replace('tpyo', 'typo')
+    await waitFor(() => expect(disk['main.tex']).toBe(both))
+    expect(screen.queryByRole('alert')).toBeNull()
+    await waitFor(() => expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(both))
+  })
+
   test('“Keep mine” saves what was typed over what is on disk, knowingly', async () => {
     const editor = await open()
-    disk['main.tex'] = MAIN.replace('A claim', 'Theirs')
+    disk['main.tex'] = MAIN.replace('tpyo', 'theirs')
     const mine = MAIN.replace('tpyo', 'typo')
     fireEvent.change(editor, { target: { value: mine } })
     await screen.findByRole('alert')
@@ -328,7 +341,7 @@ describe('what was typed and not saved, across a reload of the page', () => {
     fireEvent.change(editor, { target: { value: mine } })
     await new Promise((done) => setTimeout(done, 60))
 
-    const theirs = MAIN.replace('A claim', 'A claim, restated by somebody else')
+    const theirs = MAIN.replace('tpyo', 'typo, as somebody else has it')
     disk['main.tex'] = theirs
     restart()
     const after = await reload()

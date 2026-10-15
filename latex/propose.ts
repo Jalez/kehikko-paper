@@ -30,14 +30,13 @@
 import { bytesOf, narrow } from './edit.ts'
 
 /**
- * How many proposals one paper may hold at once.
- *
- * A bound and not a budget, for the reason `MAX_EDIT_BYTES` gives: the caller
- * is whatever on this machine found the port. A hundred pending suggestions is
- * not a conversation with a reader, it is a queue — and a queue is the shape
- * this module's own doors argue at length about not growing.
+ * How many proposals one paper may hold at once: no number. It was 24, and a
+ * limit that refuses an agent's twenty-fifth suggestion is a limit on being
+ * helpful, not a protection. What protects this server is the size of one
+ * request and of one file (`MAX_EDIT_BYTES`, `MAX_TEX_BYTES`); nothing counts
+ * suggestions, and nothing is refused or dropped for there being many.
  */
-export const MAX_PENDING = 24
+export const MAX_PENDING = Number.POSITIVE_INFINITY
 
 /** A change to one file of one paper, suggested and not yet answered. */
 export interface Proposal {

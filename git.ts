@@ -567,6 +567,8 @@ export interface GitView {
   untracked: Set<string>
   /** Mid-merge: no baseline is claimed for these. */
   unmerged: Set<string>
+  /** What git is in the middle of ("a merge", "a rebase", …), or null. Paper stages and restores nothing meanwhile. */
+  operation: string | null
 }
 
 const blobs = new Map<string, string>()
@@ -606,7 +608,24 @@ export function gitView(dir: string): GitView | null {
   const untracked = new Set<string>()
   const other = runRaw(dir, ['ls-files', '--others', '--exclude-standard', '-z'])
   if (other.ok) for (const path of other.out.toString('utf8').split('\0')) if (path) untracked.add(path)
-  return { prefix: prefix.out.toString().trim(), index, head, untracked, unmerged }
+  return { prefix: prefix.out.toString().trim(), index, head, untracked, unmerged, operation: operationIn(dir) }
+}
+
+/** The markers git itself documents for an operation in progress; the filesystem answers, not six processes. */
+function operationIn(dir: string): string | null {
+  const gitDir = runRaw(dir, ['rev-parse', '--absolute-git-dir'])
+  if (!gitDir.ok) return null
+  const at = gitDir.out.toString().trim()
+  const midway: [string, string][] = [
+    ['MERGE_HEAD', 'a merge'],
+    ['rebase-merge', 'a rebase'],
+    ['rebase-apply', 'a rebase'],
+    ['CHERRY_PICK_HEAD', 'a cherry-pick'],
+    ['REVERT_HEAD', 'a revert'],
+    ['BISECT_LOG', 'a bisect'],
+  ]
+  for (const [entry, name] of midway) if (existsSync(join(at, entry))) return name
+  return null
 }
 
 /** The text of a blob, or null. Blobs never change, so what was read is kept. */

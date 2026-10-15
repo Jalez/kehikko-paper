@@ -77,6 +77,8 @@ export interface ReviewFacts {
   auto: boolean
   /** Go to the next change after answering one. */
   jump: boolean
+  /** While git is in the middle of a merge or the like: the sentence, and answering is refused. */
+  readOnly: string | null
   /** What changes are compared with, in words; null before the first answer. */
   baseline: { mode: 'git' | 'snapshot'; says: string } | null
   /** The changes accepted lately that can still be cancelled, newest first. */
@@ -85,13 +87,14 @@ export interface ReviewFacts {
   untracked: { file: string; why: string }[]
 }
 
-const NO_FACTS: ReviewFacts = { auto: false, jump: true, baseline: null, accepted: [], untracked: [] }
+const NO_FACTS: ReviewFacts = { auto: false, jump: true, readOnly: null, baseline: null, accepted: [], untracked: [] }
 
 function factsOf(body: Record<string, unknown>): ReviewFacts | null {
   if (typeof body.auto !== 'boolean') return null
   return {
     auto: body.auto,
     jump: body.jump !== false,
+    readOnly: typeof body.readOnly === 'string' ? body.readOnly : null,
     baseline: (body.baseline as ReviewFacts['baseline']) ?? null,
     accepted: Array.isArray(body.accepted) ? (body.accepted as ReviewFacts['accepted']) : [],
     untracked: Array.isArray(body.untracked) ? (body.untracked as ReviewFacts['untracked']) : [],

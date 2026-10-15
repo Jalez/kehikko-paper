@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 import { tokenize } from './diff.ts'
 
 /**
@@ -158,11 +156,25 @@ export function accept(baseline: string, hunks: readonly Hunk[]): string {
  * from how many hunks before it share that. Never from the new text and never
  * from a position, so a reason written beside a change survives both.
  */
+/** A 53-bit string hash (cyrb53), in hex: names things, secures nothing, and runs in a page as well as in the server. */
+export function fingerprint(text: string): string {
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    h1 = Math.imul(h1 ^ code, 2654435761)
+    h2 = Math.imul(h2 ^ code, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0')
+}
+
 export function hunkIds(file: string, baseline: string, hunks: readonly Hunk[]): string[] {
   const seen = new Map<string, number>()
   return hunks.map((one) => {
     const before = baseline.slice(Math.max(0, one.oldFrom - 40), one.oldFrom)
-    const base = createHash('sha256').update(`${file}\0${before}\0${one.oldText}`).digest('hex').slice(0, 12)
+    const base = fingerprint(`${file}\0${before}\0${one.oldText}`).slice(0, 12)
     const n = (seen.get(base) ?? 0) + 1
     seen.set(base, n)
     return n === 1 ? `d-${base}` : `d-${base}-${n}`

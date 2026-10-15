@@ -1,9 +1,10 @@
 import { StreamLanguage } from '@codemirror/language'
 import { stex } from '@codemirror/legacy-modes/mode/stex'
-import { EditorSelection, Prec, StateEffect, StateField, type Extension } from '@codemirror/state'
+import { historyField } from '@codemirror/commands'
+import { EditorSelection, EditorState, Prec, StateEffect, StateField, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
-import { useEffect, useMemo, useRef, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 
 /**
  * The `.tex` file, in an editor.
@@ -102,6 +103,13 @@ export interface EditorProps {
    * does, and `onScrolled` is said while the top of THAT is inside this editor.
    */
   embedded?: boolean
+  /**
+   * Where the editor's last state is kept for the file, so that undo survives
+   * the editor being unmounted (a region scrolled far away) and mounted again.
+   * Kept in memory only; the page drops a file's entry when the disk's text
+   * replaces the editor's.
+   */
+  memory?: { state: Map<string, EditorState>; key: string }
   /** The nonce of the last jump this editor's file has landed, kept by the page: an editor mounted again does not land it twice. */
   landed?: { current: number }
 }
@@ -503,7 +511,7 @@ const marksField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onWhy, onPickSuggestion, onArmedKey, onDisarm, onStopEditing, embedded, landed }: EditorProps) {
+export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onWhy, onPickSuggestion, onArmedKey, onDisarm, onStopEditing, embedded, landed, memory }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
   const scrolled = useRef(onScrolled)
   scrolled.current = onScrolled
@@ -526,6 +534,19 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
   const stopped = useRef(onStopEditing)
   stopped.current = onStopEditing
   const ownDrafts = useRef(new Map<string, string>())
+  const remembered = useRef(memory)
+  remembered.current = memory
+  /* What the editor starts from: the state it had when it was last on screen,
+     history included, if the text is still exactly what it ended with. */
+  const [restored] = useState(() => {
+    const saved = memory?.state.get(memory.key)
+    if (!saved || saved.doc.toString() !== value) return undefined
+    try {
+      return { json: saved.toJSON({ history: historyField }), fields: { history: historyField } }
+    } catch {
+      return undefined
+    }
+  })
 
   const extensions = useMemo<Extension[]>(
     () => [
@@ -574,6 +595,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
         ]),
       ),
       EditorView.updateListener.of((update: ViewUpdate) => {
+        const kept = remembered.current
+        if (kept && (update.docChanged || update.selectionSet)) kept.state.set(kept.key, update.state)
         if (!update.selectionSet && !update.docChanged) return
         const main = update.state.selection.main
         select.current({ from: main.from, to: main.to })
@@ -661,6 +684,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
       className={embedded ? 'source-editor source-editor-embedded' : 'source-editor h-full min-h-0'}
       {...(embedded ? {} : { height: '100%' })}
       value={value}
+      {...(restored ? { initialState: restored } : {})}
       theme={theme}
       extensions={extensions}
       onChange={onChange}

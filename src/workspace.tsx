@@ -1,5 +1,6 @@
 import { LIMITS, partsOfFile, type ActivityItem, type Passage as WirePassage } from 'kehikot-module-protocol'
 import { useFocus } from 'kehikot-module-protocol/client/react'
+import type { EditorState } from '@codemirror/state'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button.tsx'
@@ -1671,7 +1672,7 @@ export function Workspace({
     proposals: walkable.length,
     suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy, noMore },
     jump: wire.facts.jump,
-    baseline: wire.facts.baseline?.says ?? null,
+    baseline: wire.facts.readOnly ?? wire.facts.baseline?.says ?? null,
     stale: outOfDate.length,
     deleted: deletedFiles.length,
     recent: {
@@ -1857,6 +1858,13 @@ export function Workspace({
   const fallback = wire.where !== 'hosted' || !wire.hostDraws
 
   /** One file's editor: the whole of what the page asks of an editor, for that file. */
+  /* Each file's editor state, history included, kept for as long as this page
+     lives, so that scrolling a region out of the mounted set and back does
+     not lose its undo. A file the disk's text replaced starts afresh. */
+  const histories = useRef(new Map<string, EditorState>())
+  useEffect(() => {
+    if (source.changed) histories.current.delete(`${paper.epic}\0${source.changed.file}`)
+  }, [source.changed?.n])
   const renderRegion = (name: string, embedded: boolean) => {
     const held = source.docs.get(name)
     if (!held) return null
@@ -1870,6 +1878,7 @@ export function Workspace({
         key={`${paper.epic}\0${name}`}
         embedded={embedded}
         landed={landed}
+        memory={{ state: histories.current, key: `${paper.epic}\0${name}` }}
         value={held.text}
         onChange={(text) => {
           /* Typing, Backspace, Delete: the keys are the person's again. */

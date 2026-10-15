@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 
-import { MAX_PENDING, rebase, relocate, type Proposal } from './latex/propose.ts'
+import { rebase, relocate, type Proposal } from './latex/propose.ts'
 import { epicsWithState, paperState, readJson, removeState, writeJson } from './machine.ts'
 import { join } from 'node:path'
 
@@ -88,7 +88,6 @@ function load(at: string): void {
   if (Array.isArray(kept.pending)) {
     const list = (kept.pending as Proposal[])
       .filter((p) => p && typeof p.id === 'string' && typeof p.file === 'string' && typeof p.text === 'string')
-      .slice(0, MAX_PENDING)
     if (list.length) memory.set(at, list)
   }
   if (Array.isArray(kept.outcomes)) memoryOutcomes.set(at, (kept.outcomes as Outcome[]).slice(-MAX_OUTCOMES))
@@ -404,14 +403,6 @@ export function keep(
 ): { ok: true; proposal: Proposal } | { ok: false; why: string } {
   const at = key(project, epic)
   const held = pending.get(at) ?? []
-  if (held.length >= MAX_PENDING) {
-    return {
-      ok: false,
-      why:
-        `There are already ${held.length} suggestions waiting on this paper, which is as many as it holds. `
-        + 'Wait for the reader to answer some of them.',
-    }
-  }
   const filed: Proposal = { ...proposal, id: randomUUID(), at: Date.now() }
   pending.set(at, [...held, filed])
   return { ok: true, proposal: filed }
