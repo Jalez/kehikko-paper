@@ -446,6 +446,11 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
       }),
     })
   }, [suggestions, forDrafts, value])
+  /* What the editor is to draw when it comes into being: an editor mounted
+     with suggestions already in hand (a region scrolled into view) has no
+     change of props to draw them on. */
+  const drawn = useRef({ suggestions, forDrafts })
+  drawn.current = { suggestions, forDrafts }
 
   return (
     <CodeMirror
@@ -457,7 +462,18 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
       extensions={extensions}
       onChange={onChange}
       onCreateEditor={(view) => {
-        view.dispatch({ effects: setMarks.of({ mark, problems }) })
+        view.dispatch({
+          effects: [
+            setMarks.of({ mark, problems }),
+            setSuggestions.of({
+              list: drawn.current.suggestions ?? [],
+              drafts: drawn.current.forDrafts,
+              toggle: (key) => toggled.current?.(key),
+              answer: (key, decision) => answered.current?.(key, decision),
+              draft: () => {},
+            }),
+          ],
+        })
         /* Where the editor is scrolled to, as the offset at its top-left: a
            place in the text, which means the same at another width. Behind the
            other tab it has no height and is "at the top" — which is not where

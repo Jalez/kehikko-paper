@@ -135,13 +135,23 @@ export function SourceColumn({
 
   /* The set follows the regions, the active one and what is measured. */
   const key = regions.map((one) => one.file).join('\n')
+  /* A text arriving changes what the blanks are sized to, and so what is near. */
+  const loadedKey = regions.map((one) => (one.text === null ? '0' : '1')).join('')
+  useLayoutEffect(() => {
+    const el = box.current
+    const kept = anchor.current
+    if (el && kept && el.clientHeight > 0) {
+      const at = Array.from(el.children).find((child) => (child as HTMLElement).dataset.region === kept.file) as HTMLElement | undefined
+      if (at && Math.abs(el.scrollTop - (at.offsetTop + kept.delta)) > 1) el.scrollTop = at.offsetTop + kept.delta
+    }
+  }, [loadedKey])
   useLayoutEffect(() => {
     if (box.current && metrics.current.width === 0 && box.current.clientWidth > 0) {
       metrics.current.width = box.current.clientWidth
       redraw((n) => n + 1)
     }
     settle()
-  }, [settle, key, active])
+  }, [settle, key, active, loadedKey])
 
   /* A file that has gone from the paper has no height to remember. */
   useEffect(() => {
@@ -152,13 +162,27 @@ export function SourceColumn({
   /* Scrolling: which regions are near, and — once it stops — which is at the top. */
   const look = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastTop = useRef(0)
+  /** The region at the top of the column and how far into it: kept still while what is above it changes height. */
+  const anchor = useRef<{ file: string; delta: number } | null>(null)
+  /** The column is where it was told to be but cannot be yet: the text under that place has not arrived, so the scroller is too short. Not the person. */
+  const clamped = (el: HTMLElement): boolean => {
+    const kept = anchor.current
+    if (!kept) return false
+    const at = Array.from(el.children).find((child) => (child as HTMLElement).dataset.region === kept.file) as HTMLElement | undefined
+    return at !== undefined && at.offsetTop + kept.delta > el.scrollHeight - el.clientHeight + 1
+  }
   useEffect(() => {
     const el = box.current
     if (!el) return
     let frame = 0
     const onScroll = () => {
       /* A column that is not shown (the other tab) scrolls to nothing and says nothing. */
-      if (el.clientHeight > 0) lastTop.current = el.scrollTop
+      if (el.clientHeight > 0 && !clamped(el)) {
+        lastTop.current = el.scrollTop
+        let at: HTMLElement | null = null
+        for (const child of Array.from(el.children) as HTMLElement[]) if (child.dataset.region && child.offsetTop <= el.scrollTop) at = child
+        if (at) anchor.current = { file: at.dataset.region!, delta: el.scrollTop - at.offsetTop }
+      }
       if (frame) return
       frame = requestAnimationFrame(() => {
         frame = 0
@@ -167,7 +191,7 @@ export function SourceColumn({
       if (look.current) clearTimeout(look.current)
       look.current = setTimeout(() => {
         look.current = null
-        if (el.clientHeight === 0) return
+        if (el.clientHeight === 0 || clamped(el)) return
         /* A caret in an editor is where the person is, however far they have scrolled. */
         if (el.contains(document.activeElement) && document.activeElement !== el) return
         const line = el.scrollTop + LABEL_PX
@@ -237,7 +261,9 @@ export function SourceColumn({
         }
         measured.current.set(file, next)
         changed = true
-        if (el && was !== null && target.offsetTop + was <= el.scrollTop + 1 && el.clientHeight > 0) el.scrollTop += next - was
+        const known = regionsRef.current.find((one) => one.file === file)
+        const before = was ?? (known ? heightOf(known) : next)
+        if (el && target.offsetTop + before <= el.scrollTop + 1 && el.clientHeight > 0) el.scrollTop += next - before
       }
       if (changed) redraw((n) => n + 1)
     })
@@ -258,7 +284,10 @@ export function SourceColumn({
     const el = box.current
     if (!el || !locate) return
     const section = Array.from(el.children).find((child) => (child as HTMLElement).dataset.region === locate.file) as HTMLElement | undefined
-    if (section) el.scrollTop = section.offsetTop
+    if (section) {
+      el.scrollTop = section.offsetTop
+      anchor.current = { file: locate.file, delta: 0 }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locate?.nonce])
 

@@ -1348,6 +1348,18 @@ export function Workspace({
   }, [doc === null, columnKey, load])
   const [mountedCount, setMountedCount] = useState(0)
   const columned = regions.length > 1
+  /* Where a place is put, and a jump lands, only once every file's text is
+     here: until then the blanks between are the size of no text at all and
+     the place would be a few pixels from nothing. A file that never arrives
+     does not hold the paper up. */
+  const everyText = regions.every((one) => one.text !== null)
+  const [waited, setWaited] = useState(false)
+  useEffect(() => {
+    setWaited(false)
+    const timer = setTimeout(() => setWaited(true), 2500)
+    return () => clearTimeout(timer)
+  }, [paper.epic])
+  const steady = !columned || everyText || waited
 
   /* ---- Suggestions: drawn in the source, answered from the header -------- */
 
@@ -1672,7 +1684,7 @@ export function Workspace({
         onSelect={(next) => selectIn(name, next)}
         onScrolled={(top, past) => onEditorScrolled(top, past, name)}
         onSave={() => void source.flush()}
-        jump={jump && jump.file === name ? jump : null}
+        jump={jump && jump.file === name && (steady || !embedded) ? jump : null}
         mark={
           foreign && foreign.file === name
             ? { from: indexAt(held.text, foreign.from, held.eol), to: indexAt(held.text, foreign.to, held.eol) }
@@ -1775,13 +1787,13 @@ export function Workspace({
             {fallback && <HeaderFallback items={items} onPress={press} className="relative shrink-0" />}
           </div>
           <div ref={editorBox} className="min-h-0 flex-1" data-regions={columned ? regions.length : undefined} data-mounted={columned ? mountedCount : undefined}>
-            {!doc ? (
+            {!doc && !columned ? (
               <p className="text-muted-foreground p-3 text-xs">Opening {file}…</p>
             ) : columned ? (
               <SourceColumn
                 regions={regions}
                 active={file}
-                locate={located}
+                locate={steady ? located : null}
                 render={(name) => renderRegion(name, true)}
                 onLabel={(name) => {
                   wandered()
