@@ -124,7 +124,7 @@ export function useSource({
   const docs = useRef<Map<string, Doc>>(new Map())
   /* The buffers live in a ref — a save in flight must see what was typed
      during it — and this is the tick that redraws when one changes. */
-  const [, setTick] = useState(0)
+  const [rev, setTick] = useState(0)
   const redraw = useCallback(() => setTick((n) => n + 1), [])
   const [file, setFile] = useState<string>(MAIN)
   const [conflict, setConflict] = useState<Conflict | null>(null)
@@ -139,7 +139,11 @@ export function useSource({
   const landed = useRef(onLanded)
   landed.current = onLanded
   const inflight = useRef<Promise<boolean> | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /* One pause per file: typing in two regions of the continuous column must
+     not let the second keystroke's timer swallow the first file's save. */
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const loading = useRef<Set<string>>(new Set())
+  const saveFn = useRef<(name: string) => Promise<boolean>>(async () => true)
   const conflictRef = useRef<Conflict | null>(null)
   conflictRef.current = conflict
 
@@ -156,8 +160,9 @@ export function useSource({
   if (epicRef.current !== epic) {
     epicRef.current = epic
     docs.current = new Map()
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = null
+    for (const one of timers.current.values()) clearTimeout(one)
+    timers.current = new Map()
+    loading.current = new Set()
   }
   useEffect(() => {
     setFile(MAIN)
@@ -182,38 +187,50 @@ export function useSource({
     [epic],
   )
 
+  /** Read one file into the buffers, unless it is there or on its way. */
+  const load = useCallback(
+    (name: string) => {
+      if (epic === null || docs.current.has(name) || loading.current.has(name)) return
+      loading.current.add(name)
+      void read(name)
+        .then((got) => {
+          loading.current.delete(name)
+          if (!got || epicRef.current !== epic || docs.current.has(name)) return
+          const typed = unsaved.at(standingIn()).read(aimedAt(epic, name))
+          if (!typed || typed.text === got.text) {
+            docs.current.set(name, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
+            hold(name)
+          } else if (typed.hash === got.hash) {
+            /* The file is the one these words were typed over: they are back in
+               the editor, unsaved, and saved the way a keystroke would have been. */
+            docs.current.set(name, { text: typed.text, saved: got.text, hash: got.hash, eol: got.eol })
+            const was = timers.current.get(name)
+            if (was) clearTimeout(was)
+            timers.current.set(
+              name,
+              setTimeout(() => {
+                timers.current.delete(name)
+                void saveFn.current(name)
+              }, saveDelay),
+            )
+          } else {
+            /* Somebody has written the file since. Their version is not
+               overwritten and these words are not dropped: it is a conflict. */
+            docs.current.set(name, { text: typed.text, saved: got.text, hash: typed.hash, eol: got.eol })
+            setConflict({ file: name, theirs: got.text, hash: got.hash, eol: got.eol })
+          }
+          redraw()
+        })
+        .catch((e) => {
+          loading.current.delete(name)
+          setFailure(`${name} could not be read: ${(e as Error).message}`)
+        })
+    },
+    [epic, read, redraw, hold, saveDelay],
+  )
   useEffect(() => {
-    if (epic === null || docs.current.has(file)) return
-    let stopped = false
-    void read(file)
-      .then((got) => {
-        if (stopped || !got || epicRef.current !== epic) return
-        const typed = unsaved.at(standingIn()).read(aimedAt(epic, file))
-        if (!typed || typed.text === got.text) {
-          docs.current.set(file, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
-          hold(file)
-        } else if (typed.hash === got.hash) {
-          /* The file is the one these words were typed over: they are back in
-             the editor, unsaved, and saved the way a keystroke would have been. */
-          docs.current.set(file, { text: typed.text, saved: got.text, hash: got.hash, eol: got.eol })
-          if (timer.current) clearTimeout(timer.current)
-          timer.current = setTimeout(() => {
-            timer.current = null
-            void saveNow(file)
-          }, saveDelay)
-        } else {
-          /* Somebody has written the file since. Their version is not
-             overwritten and these words are not dropped: it is a conflict. */
-          docs.current.set(file, { text: typed.text, saved: got.text, hash: typed.hash, eol: got.eol })
-          setConflict({ file, theirs: got.text, hash: got.hash, eol: got.eol })
-        }
-        redraw()
-      })
-      .catch((e) => setFailure(`${file} could not be read: ${(e as Error).message}`))
-    return () => {
-      stopped = true
-    }
-  }, [epic, file, read, redraw])
+    load(file)
+  }, [load, file])
 
   const saveNow = useCallback(
     async (name: string): Promise<boolean> => {
@@ -264,34 +281,44 @@ export function useSource({
     },
     [redraw, hold],
   )
+  saveFn.current = saveNow
 
   const edit = useCallback(
-    (text: string) => {
-      const doc = docs.current.get(file)
+    (text: string, name: string = file) => {
+      const doc = docs.current.get(name)
       if (!doc || doc.text === text) return
       doc.text = text
-      hold(file)
+      hold(name)
       redraw()
-      if (timer.current) clearTimeout(timer.current)
-      const name = file
-      timer.current = setTimeout(() => {
-        timer.current = null
-        void saveNow(name).then(() => {
-          /* Typed during the save: go again, after the same pause. */
-          const now = docs.current.get(name)
-          if (now && now.text !== now.saved && !conflictRef.current && timer.current === null) {
-            timer.current = setTimeout(() => void saveNow(name), saveDelay)
-          }
-        })
-      }, saveDelay)
+      const was = timers.current.get(name)
+      if (was) clearTimeout(was)
+      timers.current.set(
+        name,
+        setTimeout(() => {
+          timers.current.delete(name)
+          void saveNow(name).then(() => {
+            /* Typed during the save: go again, after the same pause. */
+            const now = docs.current.get(name)
+            if (now && now.text !== now.saved && !conflictRef.current && !timers.current.has(name)) {
+              timers.current.set(
+                name,
+                setTimeout(() => {
+                  timers.current.delete(name)
+                  void saveNow(name)
+                }, saveDelay),
+              )
+            }
+          })
+        }, saveDelay),
+      )
     },
     [file, redraw, saveDelay, saveNow, hold],
   )
 
   /** Save everything typed, now. True when the disk holds what the editor does. */
   const flush = useCallback(async (): Promise<boolean> => {
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = null
+    for (const one of timers.current.values()) clearTimeout(one)
+    timers.current.clear()
     let all = true
     for (const name of [...docs.current.keys()]) if (!(await saveNow(name))) all = false
     return all
@@ -412,9 +439,9 @@ export function useSource({
   const state: SaveState = saving ? 'saving' : failure || conflict ? 'failed' : dirty ? 'dirty' : 'saved'
 
   return useMemo(
-    () => ({ file, open: setFile, doc, edit, flush, fresh, state, failure, conflict, takeTheirs, keepMine, taken, changed, docs: docs.current }),
+    () => ({ file, open: setFile, doc, edit, flush, fresh, load, rev, state, failure, conflict, takeTheirs, keepMine, taken, changed, docs: docs.current }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [file, doc, doc?.text, doc?.hash, edit, flush, fresh, state, failure, conflict, takeTheirs, keepMine, taken, changed],
+    [file, doc, doc?.text, doc?.hash, edit, flush, fresh, load, rev, state, failure, conflict, takeTheirs, keepMine, taken, changed],
   )
 }
 

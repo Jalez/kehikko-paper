@@ -277,7 +277,8 @@ describe('a part is picked in the host’s bar', () => {
        one part ticked IS that part's file, with no second choice to make. */
     await waitFor(() => expect(editorText()).toBe(TEXT['chapters/design.tex']!))
     expect(openFile()).toBe('chapters/design.tex')
-    expect(asked('/api/source')).toBe(before.source + 1)
+    /* At most that one: the column has read every file on opening, so the pick finds it already held. */
+    expect(asked('/api/source')).toBeLessThanOrEqual(before.source + 1)
     /* One file is not a switch: no tabs, and no way back to a file outside the tick. */
     expect(tabs()).toEqual([])
     expect(screen.queryByRole('button', { name: 'Back to main.tex' })).toBeNull()

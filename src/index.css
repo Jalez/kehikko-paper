@@ -307,6 +307,48 @@
     outline: none;
   }
 
+  /* The continuous column: files one after another in one scroller. */
+  .source-editor-embedded,
+  .source-editor-embedded .cm-editor {
+    height: auto;
+  }
+
+  .source-editor-embedded .cm-scroller {
+    overflow: visible;
+  }
+
+  .source-region {
+    position: relative;
+  }
+
+  /* A boundary between two files: a divider with the name written into it.
+     Sticky, so the file being read is named at the top of the column. Sixteen
+     pixels, one line, the name giving way first. */
+  .source-boundary {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 0.5rem;
+    overflow: hidden;
+    padding: 0 0.5rem;
+    border-block: 1px solid var(--border);
+    background: color-mix(in oklch, var(--muted) 92%, var(--background));
+    color: var(--muted-foreground);
+    font-size: 0.64rem;
+    line-height: 1;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .source-boundary:hover,
+  .source-boundary-active {
+    color: var(--foreground);
+  }
+
   /* A range somebody else pointed at: a note's anchor, a question's. The same
      amber the old reader marked a passage in, so it is the same sign. */
   .cm-pointed {
