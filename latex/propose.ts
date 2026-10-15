@@ -97,6 +97,24 @@ export interface Proposal {
    * and a delete filed under one group.
    */
   group?: string
+  /**
+   * Set when the quoted text is no longer in the file exactly once, as it was
+   * when this was suggested. The suggestion is KEPT and shown, and `Accept` is
+   * held back, because applying it would be a guess:
+   *
+   *  - `changed`: the text was partly rewritten; `from`..`to` is the nearest
+   *    stretch that still matches, drawn so the person sees where it was about;
+   *  - `ambiguous`: the whole quoted text now appears more than once;
+   *    `from`..`to` is the occurrence nearest where it used to be;
+   *  - `gone`: nothing of it is left to point at. It is listed, never drawn.
+   *
+   * Absent = measured exactly. Cancelling is always possible.
+   */
+  held?: 'changed' | 'ambiguous' | 'gone'
+  /** What kind of reviewable change this is. Absent = a suggestion an agent filed (staged). See `review.ts`. */
+  kind?: 'staged' | 'disk' | 'new' | 'deleted'
+  /** Whether the author wrote the reason (or the new text) rather than the filer. */
+  adjusted?: boolean
 }
 
 /**
@@ -130,7 +148,83 @@ export function refile(proposal: Proposal, source: string, hash: string): Propos
   if (!proposal.asked) return null
   const again = propose(source, proposal.asked.find, proposal.asked.replace)
   if ('why' in again) return null
-  return { ...proposal, from: again.from, to: again.to, text: again.text, was_text: again.was_text, was: hash }
+  const { held: _was, ...rest } = proposal
+  return { ...rest, from: again.from, to: again.to, text: again.text, was_text: again.was_text, was: hash }
+}
+
+/** The shortest stretch of a quote worth pointing at: shorter than this matches by accident. */
+const MIN_ANCHOR = 12
+
+/**
+ * `refile`, and when that finds nothing exactly once, the nearest honest
+ * answer: never a drop.
+ *
+ *  1. The whole quote exactly once: filed again, as `refile` does.
+ *  2. The whole quote more than once: the occurrence nearest where it was,
+ *     `ambiguous`.
+ *  3. Part of it: the longest stretch of its start or its end that is still in
+ *     the file (at least a word's worth, and a fifth of it), nearest where it
+ *     was, `changed`.
+ *  4. Nothing: `gone`, with no place.
+ *
+ * 2 to 4 keep the proposal and hold its Accept back; none of them guesses a
+ * byte to write.
+ */
+export function relocate(proposal: Proposal, source: string, hash: string): Proposal {
+  const exact = refile(proposal, source, hash)
+  if (exact) return exact
+  const keep = (extra: Partial<Proposal>): Proposal => ({ ...proposal, was: hash, ...extra })
+  /* Without the quote there is nothing to look for. */
+  const find = proposal.asked?.find
+  if (!find) return keep({ held: 'gone', from: 0, to: 0, was_text: '' })
+  const hint = proposal.from
+  const near = (needle: string): number => {
+    let best = -1
+    let bestAway = Infinity
+    for (let at = source.indexOf(needle); at !== -1; at = source.indexOf(needle, at + 1)) {
+      const away = Math.abs(bytesOf(source.slice(0, at)) - hint)
+      if (away < bestAway) {
+        best = at
+        bestAway = away
+      }
+    }
+    return best
+  }
+  const placed = (char: number, length: number, held: 'changed' | 'ambiguous'): Proposal => {
+    const text = source.slice(char, char + length)
+    const from = bytesOf(source.slice(0, char))
+    return keep({ held, from, to: from + bytesOf(text), was_text: text })
+  }
+  if (find && source.includes(find)) {
+    const at = near(find)
+    if (at !== -1) return placed(at, find.length, 'ambiguous')
+  }
+  /* Longest agreeing start and end: monotone, so a binary search finds each. */
+  const longest = (of: (n: number) => string): number => {
+    let lo = 0
+    let hi = find.length - 1
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2)
+      if (source.includes(of(mid))) lo = mid
+      else hi = mid - 1
+    }
+    return lo
+  }
+  const floor = Math.max(MIN_ANCHOR, Math.ceil(find.length * 0.2))
+  const head = longest((n) => find.slice(0, n))
+  const tail = longest((n) => find.slice(find.length - n))
+  const useHead = head >= floor && head >= tail
+  const useTail = !useHead && tail >= floor
+  if (useHead) {
+    const at = near(find.slice(0, head))
+    if (at !== -1) return placed(at, head, 'changed')
+  }
+  if (useTail) {
+    const piece = find.slice(find.length - tail)
+    const at = near(piece)
+    if (at !== -1) return placed(at, tail, 'changed')
+  }
+  return keep({ held: 'gone', from: 0, to: 0, was_text: '' })
 }
 
 /**
@@ -291,7 +385,7 @@ export function rebase(
 export function droppedBecause(count: number): string {
   if (count <= 0) return ''
   return count === 1
-    ? 'One other suggestion covered the same words and was dropped, because the text it described has been rewritten.'
-    : `${count} other suggestions covered the same words and were dropped, because the text they described has `
-      + 'been rewritten.'
+    ? 'One other suggestion covered the same words, and the text it described has been rewritten: it is marked out of date.'
+    : `${count} other suggestions covered the same words, and the text they described has been rewritten: they are `
+      + 'marked out of date.'
 }

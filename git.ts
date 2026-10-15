@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 
 /**
@@ -508,4 +508,208 @@ function oneLine(text: string, max: number): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max)
+}
+
+/* ------------------------------------------------------------------ *
+ * Git's own layers as the baseline of a review
+ *
+ * A change is reviewable when the working file differs from what the author
+ * last ACCEPTED, and where there is a repository git already keeps exactly that
+ * in two places: the index (what has been staged) and HEAD (what is committed).
+ * The baseline of a file is its content in the index, or in HEAD when the
+ * index has none. Accepting a change stages it — `hash-object -w` and
+ * `update-index --cacheinfo`, no patch machinery — and committing commits what
+ * was staged. Everything below is argv, no shell, the same trimmed
+ * environment as `run`, and never `add -A`.
+ * ------------------------------------------------------------------ */
+
+interface RanRaw {
+  ok: boolean
+  out: Buffer
+  err: string
+}
+
+function runRaw(dir: string, args: string[], options: { input?: Buffer | string; env?: Record<string, string> } = {}): RanRaw {
+  const env: Record<string, string | undefined> = { ...process.env }
+  delete env.GIT_DIR
+  delete env.GIT_WORK_TREE
+  delete env.GIT_INDEX_FILE
+  delete env.GIT_COMMON_DIR
+  env.GIT_TERMINAL_PROMPT = '0'
+  env.GIT_ASKPASS = ''
+  env.SSH_ASKPASS = ''
+  env.GIT_PAGER = 'cat'
+  Object.assign(env, options.env ?? {})
+  const result = spawnSync('git', args, {
+    cwd: dir,
+    env: env as NodeJS.ProcessEnv,
+    timeout: TIMEOUT_MS,
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+    ...(options.input !== undefined ? { input: options.input } : {}),
+  })
+  if (result.error) return { ok: false, out: Buffer.alloc(0), err: result.error.message }
+  return { ok: result.status === 0, out: Buffer.from(result.stdout ?? ''), err: (result.stderr ?? '').toString().trim() }
+}
+
+export interface IndexEntry {
+  mode: string
+  sha: string
+}
+
+/** What git says about the files under one paper's directory right now. All paths are relative to that directory. */
+export interface GitView {
+  /** The paper's directory relative to the repository root, with a trailing slash ("" at the root). */
+  prefix: string
+  index: Map<string, IndexEntry>
+  head: Map<string, IndexEntry>
+  /** In neither, and not ignored. */
+  untracked: Set<string>
+  /** Mid-merge: no baseline is claimed for these. */
+  unmerged: Set<string>
+}
+
+const blobs = new Map<string, string>()
+
+/**
+ * The repository's view of a paper's directory, or null when there is none to
+ * compare with: no work tree, git missing, or the paper's folder ignored.
+ */
+export function gitView(dir: string): GitView | null {
+  const inside = runRaw(dir, ['rev-parse', '--is-inside-work-tree'])
+  if (!inside.ok || inside.out.toString().trim() !== 'true') return null
+  if (runRaw(dir, ['check-ignore', '--quiet', '--', '.']).ok) return null
+  const prefix = runRaw(dir, ['rev-parse', '--show-prefix'])
+  if (!prefix.ok) return null
+  const index = new Map<string, IndexEntry>()
+  const unmerged = new Set<string>()
+  const staged = runRaw(dir, ['ls-files', '-s', '-z'])
+  if (!staged.ok) return null
+  for (const record of staged.out.toString('utf8').split('\0')) {
+    const tab = record.indexOf('\t')
+    if (tab === -1) continue
+    const [mode, sha, stage] = record.slice(0, tab).split(' ') as [string, string, string]
+    const path = record.slice(tab + 1)
+    if (stage !== '0') unmerged.add(path)
+    else index.set(path, { mode, sha })
+  }
+  const head = new Map<string, IndexEntry>()
+  const tree = runRaw(dir, ['ls-tree', '-r', '-z', 'HEAD'])
+  if (tree.ok) {
+    for (const record of tree.out.toString('utf8').split('\0')) {
+      const tab = record.indexOf('\t')
+      if (tab === -1) continue
+      const [mode, type, sha] = record.slice(0, tab).split(' ') as [string, string, string]
+      if (type === 'blob') head.set(record.slice(tab + 1), { mode, sha })
+    }
+  }
+  const untracked = new Set<string>()
+  const other = runRaw(dir, ['ls-files', '--others', '--exclude-standard', '-z'])
+  if (other.ok) for (const path of other.out.toString('utf8').split('\0')) if (path) untracked.add(path)
+  return { prefix: prefix.out.toString().trim(), index, head, untracked, unmerged }
+}
+
+/** The text of a blob, or null. Blobs never change, so what was read is kept. */
+export function gitBlob(dir: string, sha: string): string | null {
+  const had = blobs.get(sha)
+  if (had !== undefined) return had
+  const got = runRaw(dir, ['cat-file', 'blob', sha])
+  if (!got.ok) return null
+  const text = got.out.toString('utf8')
+  if (blobs.size > 400) blobs.clear()
+  blobs.set(sha, text)
+  return text
+}
+
+/** The path a file has in the index: relative to the repository root. */
+const inIndex = (view: GitView, file: string) => `${view.prefix}${file}`.split('\\').join('/')
+
+/** Stage `text` as the content of `file`: the blob is written, the index entry points at it. */
+export function stageText(dir: string, view: GitView, file: string, text: string, mode = '100644'): boolean {
+  const made = runRaw(dir, ['hash-object', '-w', '--stdin'], { input: text })
+  if (!made.ok) return false
+  const sha = made.out.toString().trim()
+  const put = runRaw(dir, ['update-index', '--add', '--cacheinfo', `${mode},${sha},${inIndex(view, file)}`], { env: {} })
+  return put.ok
+}
+
+/** `git add` of one file by literal path: a new file accepted. */
+export function stageFile(dir: string, view: GitView, file: string): boolean {
+  return runRaw(dir, ['add', '--', `:(literal,top)${inIndex(view, file)}`]).ok
+}
+
+/** Take a deleted file out of the index: a deletion accepted. */
+export function unstageFile(dir: string, view: GitView, file: string): boolean {
+  return runRaw(dir, ['rm', '--cached', '-q', '--', `:(literal,top)${inIndex(view, file)}`]).ok
+}
+
+/** What committing the paper's STAGED files would carry; `clean` when nothing is staged under it. */
+export function standingStaged(dir: string): Standing {
+  const repo = repoOf(dir)
+  if (!repo) return { at: 'nogit' }
+  const no = refusal(dir, repo.root)
+  if (no) return { at: 'refused', why: no }
+  const hasHead = runRaw(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']).ok
+  const changed = hasHead
+    ? runRaw(dir, ['diff', '--cached', '--name-only', '--relative', '-z', '--', '.'])
+    : runRaw(dir, ['ls-files', '-z', '--', '.'])
+  if (!changed.ok) return { at: 'refused', why: `git could not say what is staged here: ${firstLine(changed.err)}` }
+  const files = changed.out.toString('utf8').split('\0').filter(Boolean)
+  return files.length ? { at: 'ready', files } : { at: 'clean' }
+}
+
+/**
+ * Commit what is STAGED under the paper's directory, and nothing else.
+ *
+ * Built in a scratch index: HEAD's tree, with the real index's entries under
+ * the paper laid over it. The commit is made against that index
+ * (`GIT_INDEX_FILE`), so hooks run as they would, what is staged elsewhere in
+ * the repository is not in it and stays staged, and what is only in the
+ * working tree is not in it either — which is the point: an unreviewed change
+ * is not committed. The real index is untouched; its paper entries equal the
+ * new HEAD's afterwards.
+ */
+export function commitStaged(dir: string | null, subject: string, body: string): Committed {
+  if (!dir) return { at: 'nogit' }
+  const where = standingStaged(dir)
+  if (where.at !== 'ready') return where
+  const gitPath = runRaw(dir, ['rev-parse', '--absolute-git-dir'])
+  if (!gitPath.ok) return { at: 'nogit' }
+  const scratch = join(gitPath.out.toString().trim(), `paper-index.${process.pid}.${Math.random().toString(36).slice(2, 8)}`)
+  const env = { GIT_INDEX_FILE: scratch }
+  const cleanup = () => {
+    try {
+      rmSync(scratch, { force: true })
+    } catch {
+      /* a leftover scratch index is only a file in .git */
+    }
+  }
+  try {
+    const hasHead = runRaw(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']).ok
+    const base = runRaw(dir, hasHead ? ['read-tree', 'HEAD'] : ['read-tree', '--empty'], { env })
+    if (!base.ok) return { at: 'refused', why: `git could not prepare the commit: ${firstLine(base.err)}` }
+    const mine = runRaw(dir, ['ls-files', '-z', '--', '.'], { env })
+    const names = mine.out.toString('utf8').split('\0').filter(Boolean)
+    if (names.length) {
+      runRaw(dir, ['update-index', '--force-remove', '-z', '--stdin'], { env, input: `${names.join('\0')}\0` })
+    }
+    const staged = runRaw(dir, ['ls-files', '-s', '-z', '--full-name', '--', '.'])
+    const entries = staged.out.toString('utf8')
+    if (entries) {
+      const put = runRaw(dir, ['update-index', '-z', '--add', '--index-info'], { env, input: entries })
+      if (!put.ok) return { at: 'refused', why: `git could not prepare the commit: ${firstLine(put.err)}` }
+    }
+    const message = body ? `${subject}\n\n${body}` : subject
+    const made = runRaw(dir, ['commit', '--cleanup=whitespace', '-m', message], { env })
+    if (!made.ok) {
+      return {
+        at: 'refused',
+        why: `Your accepted changes are in the index, but git would not commit them: ${firstLine(made.err) || firstLine(made.out.toString())}`,
+      }
+    }
+    const sha = runRaw(dir, ['rev-parse', '--short', 'HEAD'])
+    return { at: 'committed', sha: sha.ok ? sha.out.toString().trim() : '', files: where.files }
+  } finally {
+    cleanup()
+  }
 }

@@ -97,10 +97,10 @@ describe('nothing an agent can reach writes', () => {
    * whoever added it has to come here and say, in this list, whether it writes.
    * That is the point: the list is the claim, and it is checked.
    */
-  test('the MCP door offers exactly these tools, and only three of them are not a read, none of which can accept', () => {
+  test('the MCP door offers exactly these tools, and only four of them are not a read, none of which can accept or toggle Auto accept', () => {
     const reply = answer('POST', '/mcp', new URLSearchParams(), { jsonrpc: '2.0', id: 1, method: 'tools/list' })
     const names = ((reply?.body as { result: { tools: { name: string }[] } }).result.tools).map((t) => t.name)
-    expect(names.sort()).toEqual(['list_papers', 'list_proposals', 'list_sections', 'propose_edit', 'read_paper', 'read_source', 'revise_edit', 'withdraw_edit'])
+    expect(names.sort()).toEqual(['explain_change', 'list_papers', 'list_proposals', 'list_sections', 'propose_edit', 'read_paper', 'read_source', 'revise_edit', 'withdraw_edit'])
   })
 
   test('proposing leaves the file byte-identical', () => {
@@ -253,14 +253,16 @@ describe('two pending in one file', () => {
     expect(after.to - before.to).toBe('typographical'.length - 'tpyo'.length)
   })
 
-  test('one that overlaps what was applied is dropped, and said out loud', () => {
+  test('one that overlaps what was applied is held back as out of date, and said out loud', () => {
     const first = idOf(suggest('tpyo', 'typo'))
     idOf(suggest('a tpyo in', 'a typo in'))
     expect(pending()).toHaveLength(2)
     const reply = decide(first, 'accept')
     expect(reply?.status).toBe(200)
-    expect(pending()).toHaveLength(0)
-    expect((reply?.body as { said: string }).said).toContain('dropped')
+    /* Not dropped: kept, held back, and said. */
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]!.held).toBeDefined()
+    expect((reply?.body as { said: string }).said).toContain('out of date')
     /* Refused for the overlapping one, and applied exactly once for the other. */
     expect(onDisk()).toBe(SOURCE.replace('tpyo', 'typo'))
   })
@@ -285,7 +287,7 @@ describe('two pending in one file', () => {
     expect(onDisk()).toContain('and the prose after them that runs')
   })
 
-  test('a save that rewrites the quoted words drops the suggestion and says so', () => {
+  test('a save that rewrites the quoted words keeps the suggestion, out of date, and says so', () => {
     idOf(suggest('prose after them', 'the prose after them'))
     const paper = answer('GET', '/api/paper', new URLSearchParams({ epic: 'a-paper', project }), null)
     const hash = (paper?.body as { paper: { hashes: Record<string, string> } }).paper.hashes['main.tex']
@@ -295,8 +297,9 @@ describe('two pending in one file', () => {
       was: hash,
       }, TICKET)
     const body = wrote?.body as { proposals: unknown[]; said: string }
-    expect(body.proposals).toHaveLength(0)
-    expect(body.said).toContain('dropped')
+    expect(body.proposals).toHaveLength(1)
+    expect((body.proposals[0] as { held?: string }).held).toBe('gone')
+    expect(body.said).toContain('out of date')
   })
 })
 

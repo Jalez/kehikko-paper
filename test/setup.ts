@@ -11,6 +11,15 @@ import { beforeEach } from 'bun:test'
  */
 GlobalRegistrator.register()
 
+/* This module's machine state (suggestions, baselines, reasons) goes to a
+   directory of the run's own, never to the machine's Kehikot folder. */
+{
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  process.env.PAPER_STATE_DIR = mkdtempSync(join(tmpdir(), 'kehikot-paper-state-'))
+}
+
 /* After the document exists, never as a hoisted import: the client installs its
    one `message` listener as it is evaluated, and with no window yet it would
    install none — every greeting in every test would go unheard. */

@@ -217,13 +217,21 @@ describe('groups', () => {
     void b
   })
 
-  test('a plain accept that rewrites a member’s words drops the whole group', () => {
+  test('a plain accept that rewrites a member’s words leaves the group out of date, and it can still be cancelled whole', () => {
     const plain = file('tpyo in it', 'typo in it')
     const m1 = file('tpyo', 'typo', { group: 'g' })
     // Overlaps `plain`; m2 is elsewhere.
     file('seond', 'second', { group: 'g' })
     expect(m1.said).toContain('Overlaps')
     decide(plain.id, 'accept')
+    /* Both members stay, the rewritten one held back; the group cannot be accepted but can be cancelled. */
+    expect(list()).toHaveLength(2)
+    const held = list().find((p) => p.id === m1.id) as { held?: string }
+    expect(held.held).toBe('gone')
+    const before = disk()
+    expect(decide(m1.id, 'accept')?.status).toBe(409)
+    expect(disk()).toBe(before)
+    expect(decide(m1.id, 'reject')?.status).toBe(200)
     expect(list()).toHaveLength(0)
   })
 

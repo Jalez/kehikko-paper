@@ -170,6 +170,7 @@ describe('the write paths are exactly two, and both are ticketed', () => {
       (t) => t.name,
     )
     expect(tools.sort()).toEqual([
+      'explain_change',
       'list_papers',
       'list_proposals',
       'list_sections',
@@ -181,13 +182,13 @@ describe('the write paths are exactly two, and both are ticketed', () => {
     ])
   })
 
-  test('every tool says whether it only reads, and only the three that file or change a suggestion do not', () => {
+  test('every tool says whether it only reads, and only the four that file, change or explain a suggestion do not', () => {
     const reply = post('/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' })
     const tools = (reply?.body as { result: { tools: { name: string; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }[] } }).result.tools
     expect(tools.every((tool) => typeof tool.annotations?.readOnlyHint === 'boolean' && typeof tool.annotations.destructiveHint === 'boolean')).toBe(true)
-    expect(tools.filter((tool) => !tool.annotations!.readOnlyHint).map((tool) => tool.name).sort()).toEqual(['propose_edit', 'revise_edit', 'withdraw_edit'])
-    /* Only the two that overwrite or remove the agent's OWN pending suggestion are destructive. */
-    expect(tools.filter((tool) => tool.annotations!.destructiveHint).map((tool) => tool.name).sort()).toEqual(['revise_edit', 'withdraw_edit'])
+    expect(tools.filter((tool) => !tool.annotations!.readOnlyHint).map((tool) => tool.name).sort()).toEqual(['explain_change', 'propose_edit', 'revise_edit', 'withdraw_edit'])
+    /* Only those that overwrite or remove the agent's OWN pending suggestion or note are destructive. */
+    expect(tools.filter((tool) => tool.annotations!.destructiveHint).map((tool) => tool.name).sort()).toEqual(['explain_change', 'revise_edit', 'withdraw_edit'])
   })
 })
 
