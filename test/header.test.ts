@@ -145,3 +145,56 @@ describe('a part in “chapter of”', () => {
     }
   })
 })
+
+describe('the review items', () => {
+  const full: HeaderState = {
+    ...base,
+    proposals: 7,
+    auto: true,
+    jump: false,
+    baseline: 'compared with what is staged or committed in git',
+    stale: 2,
+    deleted: 1,
+    recent: {
+      count: 3,
+      auto: 3,
+      last: 'chapters/a-rather-long-chapter-name-indeed.tex',
+      options: [{ n: 3, label: 'a-rather-long-chapter-name-indeed.tex · some words → other words that go on' }],
+    },
+    suggest: { stops: 7, position: '2 of 7', editing: false, busy: false, noMore: true },
+  }
+
+  test('every one parses, and the checkboxes are named as the person reads them', () => {
+    for (const state of [full, { ...full, auto: false, jump: true, suggest: { ...full.suggest!, noMore: false } }]) {
+      const items = headerOf(state)
+      expect(headerItemsSchema.safeParse(items).success).toBe(true)
+      expect(items.find((one) => one.id === 'auto')!.label).toBe('Auto accept changes')
+      expect(items.find((one) => one.id === 'jump')!.label).toStartWith('Jump to next change')
+    }
+  })
+
+  test('jump is on by default, and says why it is idle under Auto accept', () => {
+    const on = headerOf({ ...base, auto: false })
+    expect((on.find((one) => one.id === 'jump') as { checked: boolean }).checked).toBe(true)
+    const idle = headerOf({ ...base, auto: true })
+    expect(idle.find((one) => one.id === 'jump')!.label).toContain('Auto accept is on')
+  })
+
+  test('"No more changes" is the result of Next, and nothing else', () => {
+    const items = headerOf(full)
+    expect((items.find((one) => one.id === 'sg-next') as { result: string | null }).result).toBe('No more changes')
+    expect((items.find((one) => one.id === 'sg-prev') as { result?: string | null }).result ?? null).toBeNull()
+  })
+
+  test('out of date, deleted, accepted lately and the baseline are items; none is offered when there is none', () => {
+    const ids = headerOf(full).map((one) => one.id)
+    for (const id of ['sg-stale', 'sg-deleted-accept', 'sg-deleted-restore', 'ac-undo', 'accepted', 'sg-baseline']) expect(ids).toContain(id)
+    const none = headerOf(base).map((one) => one.id)
+    for (const id of ['sg-stale', 'sg-deleted-accept', 'ac-undo', 'accepted', 'sg-baseline']) expect(none).not.toContain(id)
+  })
+
+  test('no review item may be pressed by an agent', () => {
+    const items = headerOf(full)
+    expect(items.filter((one) => one.agents).map((one) => one.id)).toEqual(['compile'])
+  })
+})

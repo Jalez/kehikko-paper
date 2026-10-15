@@ -80,6 +80,8 @@ export interface Accepted {
 interface State {
   version: 1
   auto: boolean
+  /** Go to the next change after answering one. On unless the person turned it off. */
+  jump: boolean
   autoSince: number
   reasons: Record<string, { why: string; at: number }>
   adjusted: Record<string, number>
@@ -114,6 +116,7 @@ export interface Review {
   /** Files left out of the comparison, with why. */
   untracked: { file: string; why: string }[]
   auto: boolean
+  jump: boolean
   /** The changes accepted lately that can still be cancelled, newest first. */
   accepted: Accepted[]
 }
@@ -128,7 +131,7 @@ const keyOf = (project: string, epic: string) => `${project}\0${epic}`
 const stateFile = (project: string, epic: string) => join(paperState(project, epic), 'review.json')
 
 function fresh(): State {
-  return { version: 1, auto: false, autoSince: 0, reasons: {}, adjusted: {}, seen: {}, accepted: [], next: 1, snap: [] }
+  return { version: 1, auto: false, jump: true, autoSince: 0, reasons: {}, adjusted: {}, seen: {}, accepted: [], next: 1, snap: [] }
 }
 
 function stateOf(project: string, epic: string): State {
@@ -139,6 +142,7 @@ function stateOf(project: string, epic: string): State {
   const made = fresh()
   if (read && typeof read === 'object') {
     if (typeof read.auto === 'boolean') made.auto = read.auto
+    if (typeof read.jump === 'boolean') made.jump = read.jump
     if (typeof read.autoSince === 'number') made.autoSince = read.autoSince
     if (read.reasons && typeof read.reasons === 'object') made.reasons = read.reasons as State['reasons']
     if (read.adjusted && typeof read.adjusted === 'object') made.adjusted = read.adjusted as State['adjusted']
@@ -415,6 +419,7 @@ function compute(ctx: Ctx): Computed {
     changes,
     untracked,
     auto: state.auto,
+    jump: state.jump,
     accepted: [...state.accepted].filter((one) => !one.cancelled).reverse().slice(0, 20),
   }
   return { review, parts, view, state, byId, fresh }
@@ -580,6 +585,16 @@ export function explain(ctx: Ctx, id: string, why: string): boolean {
   s.reasons[id] = { why, at: Date.now() }
   keepState(ctx.project, ctx.epic)
   return true
+}
+
+/** Jump to the next change after a decision: the person's setting, remembered like Auto accept. */
+export function jumpOf(project: string, epic: string): boolean {
+  return stateOf(project, epic).jump
+}
+
+export function setJump(ctx: Ctx, on: boolean): void {
+  stateOf(ctx.project, ctx.epic).jump = on
+  keepState(ctx.project, ctx.epic)
 }
 
 /** Turn Auto accept on or off. What is already waiting when it is turned on is left for a person. */

@@ -98,6 +98,7 @@ function serve(path: string, query: URLSearchParams, body: Record<string, unknow
     return [200, { ok: true, build: buildNow() }]
   }
   if (path === '/api/proposals') return [200, { ok: true, proposals: [], said: '' }]
+  if (path === '/api/review') return [200, { ok: true, proposals: [], auto: body?.action === 'auto' ? body.on === true : false, jump: true, accepted: [], baseline: null, untracked: [] }]
   if (path === '/api/uncommitted') return [200, { ok: true, standing: { at: 'nogit' }, hashes: hashes() }]
   if (path === '/api/file') {
     disk[file] = String(body?.text)
@@ -803,6 +804,7 @@ describe('the header the host draws', () => {
     expect(headers().at(-1)!.items!.map((one) => `${one.kind} ${one.id}`)).toEqual([
       'switch pane',
       'toggle auto',
+      'toggle jump',
       'toggle log',
       'go section',
       'run compile',

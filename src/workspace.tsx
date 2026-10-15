@@ -1,4 +1,4 @@
-import { LIMITS, partsOfFile, type Passage as WirePassage } from 'kehikot-module-protocol'
+import { LIMITS, partsOfFile, type ActivityItem, type Passage as WirePassage } from 'kehikot-module-protocol'
 import { useFocus } from 'kehikot-module-protocol/client/react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
@@ -27,7 +27,7 @@ import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
 import { placement, position as positionOf, stopKeyOf, stopsOf, step as stepOf } from './suggestions.ts'
 import type { InlineSuggestion } from './editor/source-editor.tsx'
-import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
+import { keptPlace, pdfWas, placeWas, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
 import { useChapters } from './use-chapters.ts'
 import type { PressHandler, usePaper } from './use-paper.ts'
@@ -1182,15 +1182,16 @@ export function Workspace({
   /* ---- Suggestions, and the Auto tick ----------------------------------- */
 
   const { proposals, answerOne, acceptAll, busy } = wire
-  const settingKey = autoApproveKey(standingIn(), paper.epic)
-  const [auto, setAuto] = useState(false)
-  useLayoutEffect(() => setAuto(autoApproveWas(settingKey)), [settingKey])
+  /* Auto accept is remembered on the machine, per project and epic (the server
+     holds it; see `review.ts`). A change found in the files is taken in there;
+     an agent's staged suggestion is accepted below, by this page, as a finger
+     would. The checkbox is the person's: no tool reaches it. */
+  const auto = wire.facts.auto
   const changeAuto = useCallback(
     (on: boolean) => {
-      setAuto(on)
-      rememberAutoApprove(settingKey, on)
+      void wire.review({ action: 'auto', on })
     },
-    [settingKey],
+    [wire.review],
   )
   /* Auto accepts what ARRIVES while it is on. What was already waiting when it
      was ticked is left for a person: ticking a box is not reading a diff. */
@@ -1208,7 +1209,7 @@ export function Workspace({
       return
     }
     if (applying.current) return
-    const fresh = proposals.filter((p) => !seen.current.has(p.id))
+    const fresh = proposals.filter((p) => (p.kind ?? 'staged') === 'staged' && !p.held && !seen.current.has(p.id))
     if (!fresh.length) return
     applying.current = true
     void (async () => {
@@ -1263,7 +1264,9 @@ export function Workspace({
     const waiting = notedRef.current?.proposal
     if (waiting && !known.current.has(waiting)) setNoted((now) => (now?.proposal === waiting ? null : now))
     if (was === null || auto) return
-    const fresh = proposals.filter((one) => !was.has(one.id))
+    /* A change found in the files is shown by the page taking the new text
+       (`landedChange` below); only an agent's suggestion arrives here. */
+    const fresh = proposals.filter((one) => (one.kind ?? 'staged') === 'staged' && !one.held && !was.has(one.id))
     const first = fresh[0]
     if (!first) return
     attend(
@@ -1365,7 +1368,10 @@ export function Workspace({
 
   /* What is walked is what is shown (the narrowing rule): a part pick leaves
      the suggestions about the files it shows. A group is one stop. */
-  const stops = useMemo(() => stopsOf(proposals, listed), [proposals, listed])
+  const walkable = useMemo(() => proposals.filter((p) => p.held !== 'gone' && p.kind !== 'deleted'), [proposals])
+  const outOfDate = useMemo(() => proposals.filter((p) => p.held === 'gone'), [proposals])
+  const deletedFiles = useMemo(() => proposals.filter((p) => p.kind === 'deleted'), [proposals])
+  const stops = useMemo(() => stopsOf(walkable, listed), [walkable, listed])
   const [navigated, setNavigated] = useState<string | null>(null)
   const [proposedKeys, setProposedKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [editing, setEditing] = useState<string | null>(null)
@@ -1446,23 +1452,53 @@ export function Workspace({
         tag: stop.lead.id === p.id,
         editing: editing === p.id,
         proposed: p.asked?.replace ?? p.text,
+        kind: p.kind === 'disk' || p.kind === 'new' ? p.kind : 'staged',
+        ...(p.held && p.held !== 'gone' ? { held: p.held } : {}),
+        found: p.at,
+        adjusted: p.adjusted === true,
       })
       }
       return out
     }
   }, [placedBy, stops, proposedKeys, editing, currentKey, armedKey])
 
+  /* The tag the person is led to by "Jump to next change" is armed once the
+     editor has taken the focus: the editor being left blurs, and a blur ends
+     arming, so it is set after the jump has landed. */
+  const [smooth, setSmooth] = useState(0)
+  const armSoon = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visit = useCallback(
-    (stop: { key: string; file: string; lead: Proposal }) => {
+    (stop: { key: string; file: string; lead: Proposal }, options: { arm?: boolean; smooth?: boolean } = {}) => {
       setNavigated(stop.key)
       wandered()
+      if (options.smooth && !(typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)) setSmooth((n) => n + 1)
       /* The same path as Go to a section: the file is opened (what was typed in
          the one left is held, not lost), the place scrolled to and focused. */
       go({ file: stop.file, bytes: { from: stop.lead.from, to: stop.lead.to }, focus: true })
       setTab('source')
+      if (armSoon.current) clearTimeout(armSoon.current)
+      if (options.arm) {
+        armSoon.current = setTimeout(() => {
+          armSoon.current = null
+          if (stopsNow.current.some((one) => one.key === stop.key)) setArmed(stop.key)
+        }, 160)
+      }
     },
     [go, wandered],
   )
+  useEffect(() => () => {
+    if (armSoon.current) clearTimeout(armSoon.current)
+  }, [])
+  /* "No more changes", said briefly in the header's result slot: no banner. */
+  const [noMore, setNoMore] = useState(false)
+  useEffect(() => {
+    if (!noMore) return
+    const timer = setTimeout(() => setNoMore(false), 3500)
+    return () => clearTimeout(timer)
+  }, [noMore])
+  const jumpOn = wire.facts.jump && !auto
+  const jumpNow = useRef(jumpOn)
+  jumpNow.current = jumpOn
   const toggleProposed = useCallback((key: string) => {
     setProposedKeys((now) => {
       const next = new Set(now)
@@ -1480,40 +1516,58 @@ export function Workspace({
   /* Answer a stop: the current one (header, keys) or the one whose tag was
      pressed. One path; `onKey` only says which stop it is. */
   const answerCurrent = useCallback(
-    async (decision: 'accept' | 'reject', onKey?: string) => {
+    async (decision: 'accept' | 'reject', onKey?: string, confirm?: boolean) => {
       const header = onKey === undefined
+      const wasArmed = armedNow.current !== null
       const stop = header ? currentStop : stopsNow.current.find((one) => one.key === onKey)
       if (!stop || (header && !currentId)) return
       const currentKey = stop.key
-      /* The edit box that is open answers with its text; from a tag, only when it is in that tag's stop. */
-      const mine = header ? editing : editing !== null && stop.ids.includes(editing) ? editing : null
-      const asked = mine ?? (header ? currentId! : stop.lead.id)
-      const typed = mine ? drafts.current.get(mine) : undefined
+      const asked = header ? currentId! : stop.lead.id
+      /* What the author typed into the proposed text of any member of this stop
+         is what Accept applies: only where it differs from what was proposed. */
+      const replaces: Record<string, string> = {}
+      for (const m of stop.members) {
+        const typed = drafts.current.get(m.id)
+        if (typed !== undefined && typed !== (m.asked?.replace ?? m.text)) replaces[m.id] = typed
+      }
       const order = stopsNow.current.map((one) => one.key)
       if (decision === 'accept') accepted.current = true
-      const left = await answerOne(asked, decision, decision === 'accept' ? typed : undefined)
+      const left = await answerOne(asked, decision, {
+        ...(decision === 'accept' && Object.keys(replaces).length ? { replaces } : {}),
+        ...(confirm ? { confirm } : {}),
+      })
       if (!left) return
-      if (mine || header) {
-        setEditing(null)
-        drafts.current.clear()
-      }
-      const remain = stopsOf(left, listed)
+      for (const m of stop.members) drafts.current.delete(m.id)
+      if (editingNow.current && stop.ids.includes(editingNow.current)) setEditing(null)
+      const remain = stopsOf(left.filter((p) => p.held !== 'gone' && p.kind !== 'deleted'), listed)
       if (!remain.length) {
         setNavigated(null)
+        setArmed(null)
+        if (jumpNow.current) setNoMore(true)
+        return
+      }
+      /* Jump to next change is the person's setting (default on). Off: stay
+         where the decision was made. The next one is the next in reading order
+         after this one, in whatever file it is, wrapping to the first. */
+      if (!jumpNow.current) {
+        setArmed(null)
         return
       }
       const at = order.indexOf(currentKey)
+      let next = remain[0]!
       for (let n = 1; n <= order.length; n++) {
         const key = order[(at + n) % order.length]
-        const stop = remain.find((one) => one.key === key)
-        if (stop) {
-          visit(stop)
-          return
+        const found = remain.find((one) => one.key === key)
+        if (found) {
+          next = found
+          break
         }
       }
-      visit(remain[0]!)
+      /* Arming is pointer-only, and a jump continues the run the person's
+         pointer started: it stays armed if it was, or if the press was on a tag. */
+      visit(next, { smooth: true, arm: wasArmed || onKey !== undefined })
     },
-    [currentStop, currentId, editing, answerOne, listed, visit],
+    [currentStop, currentId, answerOne, listed, visit],
   )
   const walk = useCallback(
     (by: 1 | -1) => {
@@ -1522,16 +1576,18 @@ export function Workspace({
     },
     [currentKey, visit],
   )
+  /* Header → Edit: the proposed text is always a live field once the new
+     reading is shown; this shows it and puts the caret in it. */
   const editCurrent = useCallback((): string | null => {
     if (editing) {
-      drafts.current.delete(editing)
       setEditing(null)
       return null
     }
     const one = proposals.find((p) => p.id === currentId)
-    if (!one) return 'Choose a suggestion first.'
+    if (!one) return 'Choose a change first.'
+    if ((one.kind ?? 'staged') !== 'staged') return 'That change is already in the file: edit the text where it stands.'
+    if (one.held) return 'That suggestion is out of date, so there is nothing to edit; cancel it.'
     if (!one.asked) return 'That suggestion carries no quoted text to edit; accept or reject it as it is.'
-    drafts.current.delete(one.id)
     setEditing(one.id)
     return null
   }, [editing, proposals, currentId])
@@ -1612,8 +1668,21 @@ export function Workspace({
   const chapterOf = chapters.settable(file) ? chapters.partOf(file) : undefined
   const items = headerOf({
     tab,
-    proposals: proposals.length,
-    suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy },
+    proposals: walkable.length,
+    suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy, noMore },
+    jump: wire.facts.jump,
+    baseline: wire.facts.baseline?.says ?? null,
+    stale: outOfDate.length,
+    deleted: deletedFiles.length,
+    recent: {
+      count: wire.facts.accepted.length,
+      auto: wire.facts.accepted.filter((a) => a.by === 'auto').length,
+      last: wire.facts.accepted[0]?.file ?? null,
+      options: wire.facts.accepted.slice(0, 12).map((a) => ({
+        n: a.n,
+        label: `${a.file.split('/').pop()} · ${(a.old || '∅').replace(/\s+/g, ' ').slice(0, 22)} → ${(a.new || '∅').replace(/\s+/g, ' ').slice(0, 22)}`,
+      })),
+    },
     tabs,
     file,
     listed,
@@ -1654,6 +1723,57 @@ export function Workspace({
   }, [header, itemsKey])
   useEffect(() => () => header([]), [header])
 
+  /* ---- The host's Inbox: what is waiting for the person ----------------- */
+
+  /* One item per paper and file for changes to review, one per paper for a
+     failed compile; the whole list replaces the last (`activity.set`), so an
+     item that is no longer true is simply absent. Nothing is reported while
+     Auto accept takes the changes in. The client drops a list identical to the
+     last and sends nothing to a host that does not answer the method. */
+  const inboxKey = useMemo(() => {
+    const items: ActivityItem[] = []
+    const place = (name: string) => {
+      const part = partsOfFile(parts, inProject(paper.epic, name), paper.epic, wire.projectPath)[0]
+      return { epic: paper.epic, ...(part ? { parts: [part.id] } : {}) }
+    }
+    if (!auto) {
+      const per = new Map<string, number>()
+      for (const one of walkable) per.set(one.file, (per.get(one.file) ?? 0) + 1)
+      for (const [name, n] of per) {
+        items.push({
+          id: `review:${paper.epic}:${name}`.slice(0, 128),
+          state: 'attention',
+          label: `${n} change${n === 1 ? '' : 's'} to review in ${name}`.slice(0, 120),
+          place: place(name),
+          ...(wire.facts.baseline ? { detail: wire.facts.baseline.says.slice(0, 200) } : {}),
+        })
+      }
+    }
+    if (failed && errors[0]) {
+      const first = errors[0]
+      items.push({
+        id: `compile:${paper.epic}`.slice(0, 128),
+        state: 'attention',
+        label: `Compile failed${first.file ? ` in ${first.file}${first.line ? `:${first.line}` : ''}` : ''}: ${first.message}`.slice(0, 120),
+        place: place(first.file ?? MAIN_FILE),
+        detail: first.message.slice(0, 200),
+      })
+    }
+    return JSON.stringify(items)
+  }, [walkable, auto, failed, errors[0]?.message, errors[0]?.file, errors[0]?.line, parts, paper.epic, wire.projectPath, wire.facts.baseline])
+  useEffect(() => {
+    if (wire.answers && !wire.answers.includes('activity.set')) return
+    wire.activity(JSON.parse(inboxKey) as ActivityItem[])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inboxKey, wire.answers])
+  useEffect(
+    () => () => {
+      wire.activity([])
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [paper.epic],
+  )
+
   const press: PressHandler = ({ item, value }) => {
     const nth = (prefix: string) => (typeof value === 'string' && value.startsWith(prefix) ? Number(value.slice(prefix.length)) : -1)
     if (item === 'pane') {
@@ -1672,6 +1792,26 @@ export function Workspace({
       void chapters.set(part === null ? null : part.id, file)
     } else if (item === 'auto') {
       changeAuto(value === true)
+    } else if (item === 'jump') {
+      if (auto) return 'Auto accept is on, so changes are taken in as they arrive and there is no next one to jump to.'
+      void wire.review({ action: 'jump', on: value === true })
+    } else if (item === 'sg-stale') {
+      void (async () => {
+        for (const one of outOfDate) await answerOne(one.id, 'reject')
+      })()
+    } else if (item === 'sg-deleted-accept' || item === 'sg-deleted-restore') {
+      const decision = item === 'sg-deleted-accept' ? 'accept' : 'reject'
+      void (async () => {
+        for (const one of deletedFiles) await answerOne(one.id, decision)
+      })()
+    } else if (item === 'ac-undo') {
+      const last = wire.facts.accepted[0]
+      if (!last) return 'Nothing accepted lately can be cancelled.'
+      void wire.review({ action: 'uncommit', n: last.n })
+    } else if (item === 'accepted') {
+      const one = wire.facts.accepted.find((a) => a.n === nth('a'))
+      if (!one) return 'That change is no longer on the list.'
+      setSaid(`${one.file}: “${one.old || '(nothing)'}” → “${one.new || '(nothing)'}”${one.why ? ` — ${one.why}` : ''}${one.by === 'auto' ? ' (accepted automatically)' : ''}`)
     } else if (item === 'log') {
       setShowLog(value === true)
       if (value === true) setTab('pdf')
@@ -1759,7 +1899,8 @@ export function Workspace({
         suggestions={inlineBy.get(name) ?? NO_SUGGESTIONS}
         drafts={drafts.current}
         onToggleSuggestion={toggleProposed}
-        onAnswerSuggestion={(key, decision) => void answerCurrent(decision, key)}
+        onAnswerSuggestion={(key, decision, confirm) => void answerCurrent(decision, key, confirm)}
+        onWhy={(id, why) => void wire.review({ action: 'why', id, why })}
         onPickSuggestion={armOn}
         onArmedKey={onArmedKey}
         onDisarm={disarm}
@@ -1864,6 +2005,7 @@ export function Workspace({
                   go({ file: name, bytes: { from: 0, to: 0 }, top: 0, past: 0, focus: true })
                 }}
                 onLook={(name) => source.open(name)}
+                smooth={smooth}
                 onCount={setMountedCount}
               />
             ) : (

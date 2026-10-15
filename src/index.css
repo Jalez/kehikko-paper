@@ -464,6 +464,47 @@
   background: color-mix(in oklch, var(--gone) 20%, transparent);
   border-bottom-style: solid;
 }
+/* A change already in the file: what stands there now is the new text (green);
+   what the baseline had, when shown in its place, is the old (red). */
+.cm-sugg.cm-sugg-new {
+  background: color-mix(in oklch, var(--arrived) 12%, transparent);
+  border-bottom-color: var(--arrived);
+}
+.cm-sugg.cm-sugg-new.cm-sugg-current {
+  background: color-mix(in oklch, var(--arrived) 24%, transparent);
+}
+.cm-sugg.cm-sugg-stale {
+  background: color-mix(in oklch, var(--muted-foreground, gray) 14%, transparent);
+  border-bottom: 1px dotted var(--muted-foreground, gray);
+}
+.cm-sugg-after.cm-sugg-old {
+  background: color-mix(in oklch, var(--gone) 14%, transparent);
+  border-bottom-color: var(--gone);
+  text-decoration: line-through;
+}
+.cm-sugg-held {
+  color: var(--gone);
+}
+.cm-sugg-why-edit {
+  font: inherit;
+  color: inherit;
+  color-scheme: inherit;
+  min-width: 5ch;
+  max-width: 100%;
+  padding: 0 0.25rem;
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklch, currentColor 40%, transparent);
+  background: transparent;
+  user-select: text;
+}
+.cm-sugg-why-edit:focus {
+  outline: none;
+  border-bottom-color: currentColor;
+}
+.cm-sugg-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .cm-sugg-after {
   background: color-mix(in oklch, var(--arrived) 16%, transparent);
   border-bottom: 1px dashed var(--arrived);

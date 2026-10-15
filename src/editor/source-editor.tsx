@@ -77,8 +77,10 @@ export interface EditorProps {
   drafts?: Map<string, string>
   /** Switch a suggestion (by stop key) between the current and the proposed reading. */
   onToggleSuggestion?(key: string): void
-  /** Accept change / Cancel change on a tag: answers THAT suggestion (its group, by stop key), not the current one. */
-  onAnswerSuggestion?(key: string, decision: 'accept' | 'reject'): void
+  /** Accept change / Cancel change on a tag: answers THAT suggestion (its group, by stop key), not the current one. `confirm` is said by the second press that deletes a new file. */
+  onAnswerSuggestion?(key: string, decision: 'accept' | 'reject', confirm?: boolean): void
+  /** The author wrote (or changed) the reason on a tag: saved beside the change, by its id. */
+  onWhy?(id: string, why: string): void
   /** The author pressed on a marked passage: it becomes the one answered. */
   onPickSuggestion?(id: string): void
   /**
@@ -130,14 +132,30 @@ export interface InlineSuggestion {
   editing: boolean
   /** What the agent proposed, to tell an adjusted draft from it. */
   proposed: string
+  /**
+   * What is being reviewed:
+   *  - `staged`: an agent's suggestion; the file does not hold it yet. The
+   *    marked passage is what the file holds, `replacement` what would stand there.
+   *  - `disk`: a change already in the file. The marked passage is what the file
+   *    holds now; `replacement` is what the baseline had there.
+   *  - `new`: a whole new file (nothing is marked; the tag stands at the top).
+   */
+  kind: 'staged' | 'disk' | 'new'
+  /** The quoted text changed since it was suggested: Accept is held back; Cancel is not. */
+  held?: 'changed' | 'ambiguous'
+  /** When a change on disk was found (ms), for the tag. */
+  found: number
+  /** The author changed the reason or the new text. */
+  adjusted: boolean
 }
 
 type Suggesting = {
   list: readonly InlineSuggestion[]
   drafts: Map<string, string>
   toggle(key: string): void
-  answer(key: string, decision: 'accept' | 'reject'): void
+  answer(key: string, decision: 'accept' | 'reject', confirm?: boolean): void
   draft(id: string, text: string): void
+  why(id: string, text: string): void
   stopEditing(): void
   /** A press on the proposed text shown in place: the caret goes into the passage, and it is armed. */
   pick(id: string, withCaret: boolean): void
@@ -156,13 +174,14 @@ class ProposedWidget extends WidgetType {
       other.one.id === this.one.id &&
       other.one.replacement === this.one.replacement &&
       other.one.editing === this.one.editing &&
-      other.one.current === this.one.current
+      other.one.current === this.one.current &&
+      other.one.kind === this.one.kind
     )
   }
   toDOM(): HTMLElement {
     const { one, on } = this
     const span = document.createElement('span')
-    span.className = `cm-sugg-after${one.current ? ' cm-sugg-current' : ''}`
+    span.className = `cm-sugg-after${one.current ? ' cm-sugg-current' : ''}${one.kind === 'disk' ? ' cm-sugg-old' : ''}`
     span.setAttribute('data-sugg', one.id)
     span.setAttribute('data-sugg-after', '')
     /* The editor ignores events from a widget (`ignoreEvent`), so its own
@@ -173,7 +192,10 @@ class ProposedWidget extends WidgetType {
       if (!inBox) event.preventDefault()
       on.pick(one.id, !inBox)
     })
-    if (!one.editing) {
+    /* What the baseline had (a change already in the file) is only shown. The
+       words an agent suggested are a live field: typing in it changes what
+       Accept will apply, and Header → Edit just puts the caret in it. */
+    if (one.kind !== 'staged' || one.held) {
       span.textContent = one.replacement
       return span
     }
@@ -182,12 +204,12 @@ class ProposedWidget extends WidgetType {
     area.setAttribute('aria-label', 'Proposed text, editable')
     area.setAttribute('data-sugg-edit', one.id)
     area.value = on.drafts.get(one.id) ?? one.replacement
-    area.rows = Math.min(10, Math.max(2, area.value.split('\n').length))
+    area.rows = Math.min(10, Math.max(1, area.value.split('\n').length))
     area.addEventListener('input', () => {
       on.drafts.set(one.id, area.value)
       on.draft(one.id, area.value)
       const mark = area.ownerDocument.querySelector(`[data-sugg-tag="${CSS.escape(one.id)}"] .cm-sugg-adj`)
-      if (mark instanceof HTMLElement) mark.hidden = area.value === one.proposed
+      if (mark instanceof HTMLElement) mark.hidden = area.value === one.proposed && !one.adjusted
     })
     span.append(area)
     const grow = () => {
@@ -196,7 +218,7 @@ class ProposedWidget extends WidgetType {
     }
     area.addEventListener('input', grow)
     /* A text field: Enter is a newline. Cmd/Ctrl+Enter accepts the edited text;
-       Escape stops editing and rejects nothing. */
+       Escape leaves the field and rejects nothing. */
     area.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.altKey) {
         event.preventDefault()
@@ -206,12 +228,13 @@ class ProposedWidget extends WidgetType {
         event.preventDefault()
         event.stopPropagation()
         on.stopEditing()
+        area.blur()
       }
     })
     queueMicrotask(() => {
       if (!area.isConnected) return
       grow()
-      area.focus()
+      if (one.editing) area.focus()
     })
     return span
   }
@@ -232,32 +255,51 @@ export class TagWidget extends WidgetType {
     const b = other.one
     return (
       a.id === b.id && a.after === b.after && a.current === b.current && a.armed === b.armed && a.why === b.why &&
-      a.revisions === b.revisions && a.count === b.count && a.editing === b.editing
+      a.revisions === b.revisions && a.count === b.count && a.editing === b.editing && a.held === b.held &&
+      a.adjusted === b.adjusted && a.kind === b.kind && a.found === b.found
     )
+  }
+  /* A tag whose reason changed is patched, not rebuilt: a field the person is
+     typing in must not be replaced under their hands by their own save. */
+  updateDOM(dom: HTMLElement): boolean {
+    const field = dom.querySelector<HTMLInputElement>('input.cm-sugg-why-edit')
+    const here = this.one
+    if (!field || dom.getAttribute('data-sugg-tag') !== here.id) return false
+    if (dom.classList.contains('cm-sugg-armed') !== here.armed || dom.classList.contains('cm-sugg-current') !== here.current) return false
+    const anew = dom.getAttribute('data-sugg-state') !== `${here.after}|${here.held ?? ''}|${here.adjusted}|${here.count}|${here.revisions}|${here.kind}|${here.editing}`
+    if (anew) return false
+    if (document.activeElement !== field && field.value !== here.why) field.value = here.why
+    return true
   }
   toDOM(): HTMLElement {
     const { one, on } = this
     const tag = document.createElement('span')
     tag.className = `cm-sugg-tag${one.current ? ' cm-sugg-current' : ''}${one.armed ? ' cm-sugg-armed' : ''}`
     tag.setAttribute('data-sugg-tag', one.id)
-    const toggle = document.createElement('button')
-    toggle.type = 'button'
-    toggle.className = 'cm-sugg-toggle'
-    /* The label says what pressing it will show. */
-    toggle.textContent = one.after ? 'Show old' : 'Show new'
-    toggle.title = one.after ? 'Show the current text' : 'Show the suggested text in place'
-    toggle.setAttribute('aria-pressed', String(one.after))
-    toggle.addEventListener('mousedown', (event) => event.preventDefault())
-    toggle.addEventListener('click', () => on.toggle(one.key))
-    /* The three buttons stay together; only a narrow container lets them wrap. */
+    tag.setAttribute('data-sugg-kind', one.kind)
+    tag.setAttribute('data-sugg-state', `${one.after}|${one.held ?? ''}|${one.adjusted}|${one.count}|${one.revisions}|${one.kind}|${one.editing}`)
+    /* The words on the toggle say what pressing it shows. For a suggestion
+       the new reading is the one in place; for a change already in the file
+       the new reading is what the file holds, and the old one is the baseline. */
+    const showingNew = one.kind === 'disk' ? !one.after : one.after
     const controls = document.createElement('span')
     controls.className = 'cm-sugg-controls'
-    controls.append(toggle)
+    if (one.kind !== 'new' && !one.held) {
+      const toggle = document.createElement('button')
+      toggle.type = 'button'
+      toggle.className = 'cm-sugg-toggle'
+      toggle.textContent = showingNew ? 'Show old' : 'Show new'
+      toggle.title = showingNew ? 'Show the text as it was' : 'Show the new text in place'
+      toggle.setAttribute('aria-pressed', String(one.after))
+      toggle.addEventListener('mousedown', (event) => event.preventDefault())
+      toggle.addEventListener('click', () => on.toggle(one.key))
+      controls.append(toggle)
+    }
     tag.append(controls)
-    /* Answering THIS suggestion (its group as one): the same function the
+    /* Answering THIS change (its group as one): the same function the
        header's Accept and Reject run, so there is one code path. The words
        carry the meaning; the colour only agrees with them. */
-    const about = (one.why.trim().split(/\s+/).slice(0, 6).join(' ') || 'suggestion').slice(0, 60)
+    const about = (one.why.trim().split(/\s+/).slice(0, 6).join(' ') || 'change').slice(0, 60)
     const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
     const hint = (decision: 'accept' | 'reject') => {
       if (one.editing) {
@@ -267,6 +309,7 @@ export class TagWidget extends WidgetType {
       if (!one.armed) return null
       return decision === 'accept' ? { label: '\u23CE', name: 'Enter', aria: 'Enter' } : { label: 'Esc', name: 'Escape', aria: 'Escape' }
     }
+    let deleting = false
     const answer = (decision: 'accept' | 'reject', cls: string, icon: string, word: string) => {
       const button = document.createElement('button')
       button.type = 'button'
@@ -277,10 +320,15 @@ export class TagWidget extends WidgetType {
       glyph.setAttribute('aria-hidden', 'true')
       glyph.className = 'cm-sugg-glyph'
       glyph.textContent = icon
-      button.append(glyph, document.createTextNode(word))
+      const label = document.createTextNode(word)
+      button.append(glyph, label)
+      if (decision === 'accept' && one.held) {
+        button.disabled = true
+        button.title = 'Held back: the text this was about changed since it was suggested'
+      }
       /* The key, only where it would work: armed (Enter / Escape), or editing
          (Cmd/Ctrl+Enter accepts the edit; Escape there is not Cancel change). */
-      const cap = hint(decision)
+      const cap = button.disabled ? null : hint(decision)
       if (cap) {
         const kbd = document.createElement('kbd')
         kbd.className = 'cm-sugg-key'
@@ -291,7 +339,20 @@ export class TagWidget extends WidgetType {
         button.setAttribute('aria-keyshortcuts', cap.aria)
       }
       button.addEventListener('mousedown', (event) => event.preventDefault())
-      button.addEventListener('click', () => on.answer(one.key, decision))
+      button.addEventListener('click', () => {
+        /* A new file is deleted by Cancel, and only on a second, explicit press. */
+        if (decision === 'reject' && one.kind === 'new') {
+          if (!deleting) {
+            deleting = true
+            label.textContent = 'Delete this file? Press again'
+            button.setAttribute('data-sugg-confirm', '')
+            return
+          }
+          on.answer(one.key, decision, true)
+          return
+        }
+        on.answer(one.key, decision)
+      })
       controls.append(button)
     }
     answer('accept', 'cm-sugg-accept', '\u2713', 'Accept change')
@@ -303,11 +364,57 @@ export class TagWidget extends WidgetType {
       el.hidden = hidden
       tag.append(el)
     }
+    if (one.kind === 'disk') {
+      const when = new Date(one.found)
+      const time = Number.isNaN(when.getTime()) ? '' : ` \u00b7 ${when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      note('cm-sugg-disk', `changed on disk${time}`)
+    } else if (one.kind === 'new') note('cm-sugg-disk', 'new file')
+    if (one.held) {
+      note('cm-sugg-held', one.held === 'ambiguous' ? 'the text now appears more than once' : 'the text changed since this was suggested')
+    }
     if (one.count > 1) note('cm-sugg-group', `${one.count} changes`)
-    if (one.revisions) note('cm-sugg-revised', one.revisions > 1 ? `revised ${one.revisions}×` : 'revised')
+    if (one.revisions) note('cm-sugg-revised', one.revisions > 1 ? `revised ${one.revisions}\u00d7` : 'revised')
     const drafted = on.drafts.get(one.id)
-    note('cm-sugg-adj', 'adjusted', !(one.editing && drafted !== undefined && drafted !== one.proposed))
-    if (one.current || one.after) {
+    note('cm-sugg-adj', 'adjusted', !(one.adjusted || (drafted !== undefined && drafted !== one.proposed)))
+    /* The reason. Where the person is (the tag that is current, armed, or
+       showing the new reading) it is a field they can write in; elsewhere it
+       is just the words, so a long paper is not a column of input boxes. */
+    if (one.current || one.armed || one.after) {
+      const field = document.createElement('input')
+      field.type = 'text'
+      field.className = 'cm-sugg-why cm-sugg-why-edit'
+      field.placeholder = 'Why?'
+      field.value = one.why
+      field.setAttribute('aria-label', 'Why this change')
+      field.setAttribute('data-sugg-why', one.id)
+      field.maxLength = 240
+      const size = () => {
+        field.style.width = `${Math.min(36, Math.max(6, field.value.length + 2))}ch`
+      }
+      size()
+      let timer: ReturnType<typeof setTimeout> | null = null
+      field.addEventListener('input', () => {
+        size()
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => on.why(one.id, field.value), 500)
+      })
+      field.addEventListener('blur', () => {
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+          on.why(one.id, field.value)
+        }
+      })
+      field.addEventListener('keydown', (event) => {
+        event.stopPropagation()
+        if (event.key === 'Enter' || event.key === 'Escape') {
+          event.preventDefault()
+          field.blur()
+        }
+      })
+      field.addEventListener('mousedown', (event) => event.stopPropagation())
+      tag.append(field)
+    } else if (one.why) {
       const why = document.createElement('span')
       why.className = 'cm-sugg-why'
       why.textContent = one.why
@@ -328,14 +435,18 @@ function buildSuggestions(doc: { length: number }, on: Suggesting): DecorationSe
     const from = Math.max(0, Math.min(one.from, doc.length))
     const to = Math.max(from, Math.min(one.to, doc.length))
     /* A reading in place replaces its words, and replacements cannot overlap:
-       one that would is left on its current reading (still marked and tagged). */
-    const replaces = one.after && from >= taken && to > from
+       one that would is left on its current reading (still marked and tagged).
+       A passage with no width (a pure insertion, or a deletion already in the
+       file) shows the other reading as text put in at that point. */
+    const replaces = one.after && !one.held && from >= taken && to > from
     if (replaces) {
       ranges.push(Decoration.replace({ widget: new ProposedWidget(one, on) }).range(from, to))
       taken = to
+    } else if (one.after && !one.held && to === from && one.replacement) {
+      ranges.push(Decoration.widget({ widget: new ProposedWidget(one, on), side: 1 }).range(from))
     } else if (to > from) {
       ranges.push(
-        Decoration.mark({ class: `cm-sugg${one.current ? ' cm-sugg-current' : ''}`, attributes: { 'data-sugg': one.id } }).range(from, to),
+        Decoration.mark({ class: `cm-sugg${one.kind === 'disk' ? ' cm-sugg-new' : ''}${one.current ? ' cm-sugg-current' : ''}${one.held ? ' cm-sugg-stale' : ''}`, attributes: { 'data-sugg': one.id } }).range(from, to),
       )
     }
     if (one.tag) ranges.push(Decoration.widget({ widget: new TagWidget(one, on), side: 1 }).range(to))
@@ -392,7 +503,7 @@ const marksField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onPickSuggestion, onArmedKey, onDisarm, onStopEditing, embedded, landed }: EditorProps) {
+export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onWhy, onPickSuggestion, onArmedKey, onDisarm, onStopEditing, embedded, landed }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
   const scrolled = useRef(onScrolled)
   scrolled.current = onScrolled
@@ -406,6 +517,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
   toggled.current = onToggleSuggestion
   const answered = useRef(onAnswerSuggestion)
   answered.current = onAnswerSuggestion
+  const whyNow = useRef(onWhy)
+  whyNow.current = onWhy
   const armedKey = useRef(onArmedKey)
   armedKey.current = onArmedKey
   const disarmed = useRef(onDisarm)
@@ -518,8 +631,9 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     list,
     drafts: draftsNow,
     toggle: (key) => toggled.current?.(key),
-    answer: (key, decision) => answered.current?.(key, decision),
+    answer: (key, decision, confirm) => answered.current?.(key, decision, confirm),
     draft: () => {},
+    why: (id, text) => whyNow.current?.(id, text),
     stopEditing: () => stopped.current?.(),
     pick: (id, withCaret) => {
       if (withCaret) {

@@ -71,6 +71,33 @@ const NO_PRESS: PressHandler = () => 'No paper is open here.'
 
 export type StartFrom = { template: string } | { folder: string }
 
+/** What the server says beside the list of changes waiting for review. */
+export interface ReviewFacts {
+  /** Auto accept, as remembered on this machine for this project and epic. */
+  auto: boolean
+  /** Go to the next change after answering one. */
+  jump: boolean
+  /** What changes are compared with, in words; null before the first answer. */
+  baseline: { mode: 'git' | 'snapshot'; says: string } | null
+  /** The changes accepted lately that can still be cancelled, newest first. */
+  accepted: { n: number; file: string; old: string; new: string; why: string; at: number; by: 'author' | 'auto'; kind: string }[]
+  /** Files left out of the comparison, and why. */
+  untracked: { file: string; why: string }[]
+}
+
+const NO_FACTS: ReviewFacts = { auto: false, jump: true, baseline: null, accepted: [], untracked: [] }
+
+function factsOf(body: Record<string, unknown>): ReviewFacts | null {
+  if (typeof body.auto !== 'boolean') return null
+  return {
+    auto: body.auto,
+    jump: body.jump !== false,
+    baseline: (body.baseline as ReviewFacts['baseline']) ?? null,
+    accepted: Array.isArray(body.accepted) ? (body.accepted as ReviewFacts['accepted']) : [],
+    untracked: Array.isArray(body.untracked) ? (body.untracked as ReviewFacts['untracked']) : [],
+  }
+}
+
 const ID = 'kehikot.paper'
 
 /** One empty list, so that "no parts" is the same value every time it is said. */
@@ -247,7 +274,7 @@ export function usePaper(framed: boolean) {
     },
     { gotoBackstop: 900, same: { passage: samePassage } },
   )
-  const { where, resize, request, point, passage: pointed, header, answers, drawsHeader } = host
+  const { where, resize, request, point, passage: pointed, header, answers, drawsHeader, activity } = host
   /* Whether the host draws this module's header: its own word when it has one (1.4.0), else a press having arrived. */
   const hostDraws = drawsHeader ?? pressed
 
@@ -278,6 +305,7 @@ export function usePaper(framed: boolean) {
   }, [])
 
   const [proposals, setProposals] = useState<Proposal[]>([])
+  const [facts, setFacts] = useState<ReviewFacts>(NO_FACTS)
   /** The paper the list of suggestions has been HEARD for: before that an empty list is not "none waiting". */
   const [heardFor, setHeardFor] = useState<string | null>(null)
   const epicOnScreen = sight.at === 'reading' ? sight.paper.epic : null
@@ -285,6 +313,7 @@ export function usePaper(framed: boolean) {
   useEffect(() => {
     if (epicOnScreen === null) {
       setProposals([])
+      setFacts(NO_FACTS)
       return
     }
     let stopped = false
@@ -295,6 +324,8 @@ export function usePaper(framed: boolean) {
           if (stopped) return
           if (Array.isArray(body.proposals)) {
             setProposals(body.proposals as Proposal[])
+            const next = factsOf(body)
+            if (next) setFacts((was) => (JSON.stringify(was) === JSON.stringify(next) ? was : next))
             setHeardFor(epicOnScreen)
           }
           if (typeof body.said === 'string' && body.said) setSaid(body.said)
@@ -353,7 +384,11 @@ export function usePaper(framed: boolean) {
   const before = useRef<() => Promise<boolean>>(async () => true)
 
   const answerOne = useCallback(
-    async (id: string, decision: 'accept' | 'reject', replace?: string): Promise<Proposal[] | null> => {
+    async (
+      id: string,
+      decision: 'accept' | 'reject',
+      options: { replaces?: Record<string, string>; confirm?: boolean } = {},
+    ): Promise<Proposal[] | null> => {
       const paper = showing.current
       if (!paper || deciding.current) return null
       deciding.current = true
@@ -363,9 +398,20 @@ export function usePaper(framed: boolean) {
           setSaid('The file has to be saved before a suggestion about it can be accepted, and it could not be.')
           return null
         }
-        const body = await post('/api/proposal', { epic: paper.epic }, { id, decision, ...(replace === undefined ? {} : { replace }) })
+        const body = await post(
+          '/api/proposal',
+          { epic: paper.epic },
+          {
+            id,
+            decision,
+            ...(options.replaces && Object.keys(options.replaces).length ? { replaces: options.replaces } : {}),
+            ...(options.confirm ? { confirm: true } : {}),
+          },
+        )
         const left = Array.isArray(body.proposals) ? (body.proposals as Proposal[]) : null
         if (left) setProposals(left)
+        const next = factsOf(body)
+        if (next) setFacts(next)
         if (body.paper) setPaper(body.paper as Paper)
         setSaid(body.ok === true ? String(body.said ?? '') : String(body.error ?? 'That suggestion was not answered.'))
         return left
@@ -381,6 +427,36 @@ export function usePaper(framed: boolean) {
     [askAgain, setPaper],
   )
 
+  /**
+   * The person's own settings and notes about the changes waiting: Auto accept,
+   * a reason, cancelling a change accepted lately. Not on the MCP door.
+   */
+  const review = useCallback(
+    async (body: Record<string, unknown>): Promise<boolean> => {
+      const paper = showing.current
+      if (!paper) return false
+      /* A checkbox answers at once; the server's word replaces it. */
+      if (body.action === 'auto') setFacts((was) => ({ ...was, auto: body.on === true }))
+      if (body.action === 'jump') setFacts((was) => ({ ...was, jump: body.on === true }))
+      try {
+        const answer = await post('/api/review', { epic: paper.epic }, body)
+        if (Array.isArray(answer.proposals)) setProposals(answer.proposals as Proposal[])
+        const next = factsOf(answer)
+        if (next) setFacts(next)
+        if (answer.paper) setPaper(answer.paper as Paper)
+        if (typeof answer.said === 'string' && answer.said) setSaid(answer.said)
+        else if (answer.ok !== true && typeof answer.error === 'string') setSaid(answer.error)
+        return answer.ok === true
+      } catch (e) {
+        setSaid(`That could not be saved: ${(e as Error).message}`)
+        return false
+      } finally {
+        askAgain()
+      }
+    },
+    [askAgain, setPaper],
+  )
+
   const waiting = useRef<Proposal[]>([])
   waiting.current = proposals
 
@@ -388,7 +464,7 @@ export function usePaper(framed: boolean) {
     /* By id, from the list as it stood when the button was pressed: accepting
        one can drop another, and a suggestion that arrives mid-way was not what
        the person said yes to. */
-    const asked = waiting.current.map((p) => p.id)
+    const asked = waiting.current.filter((p) => !p.held && p.kind !== 'deleted').map((p) => p.id)
     let left: Proposal[] = waiting.current
     for (const id of asked) {
       if (!left.some((p) => p.id === id)) continue
@@ -469,6 +545,8 @@ export function usePaper(framed: boolean) {
       /** Where the workspace puts what takes a header press, and how it declares the items (`kehikot.header`). */
       press,
       header,
+      /** What this module's things are doing now, for the host's Inbox (`activity.set`). Replaces the whole list. */
+      activity,
       /** Whether the host draws the header: its greeting says (`drawsHeader`), and from an older host a press having arrived does. */
       hostDraws,
       /** The methods the host answers for this module, or null from a host that does not say. */
@@ -482,6 +560,8 @@ export function usePaper(framed: boolean) {
       proposalsHeard: heardFor !== null && heardFor === epicOnScreen,
       disk,
       proposals,
+      facts,
+      review,
       answerOne,
       acceptAll,
       before,
@@ -491,7 +571,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, hostDraws, answers],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, facts, review, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, activity, hostDraws, answers],
   )
 }
 

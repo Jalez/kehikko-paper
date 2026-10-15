@@ -3,10 +3,10 @@ import { TagWidget, type InlineSuggestion } from '../src/editor/source-editor.ts
 
 const one = (over: Partial<InlineSuggestion> = {}): InlineSuggestion => ({
   id: 'p1', key: 'p1', from: 0, to: 4, replacement: 'x', after: false, current: true, armed: false,
-  why: 'Because.', revisions: 0, count: 1, tag: true, editing: false, proposed: 'x', ...over,
+  why: 'Because.', revisions: 0, count: 1, tag: true, editing: false, proposed: 'x', kind: 'staged', found: 0, adjusted: false, ...over,
 })
 const draw = (s: InlineSuggestion) => {
-  const on = { list: [s], drafts: new Map<string, string>(), toggle() {}, answer() {}, draft() {}, stopEditing() {}, pick() {} }
+  const on = { list: [s], drafts: new Map<string, string>(), toggle() {}, answer() {}, draft() {}, why() {}, stopEditing() {}, pick() {} }
   return new TagWidget(s, on).toDOM()
 }
 const caps = (el: HTMLElement) => [...el.querySelectorAll('button[data-sugg-answer]')].map((b) => b.querySelector('kbd')?.textContent ?? null)

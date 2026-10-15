@@ -49,7 +49,7 @@ describe('what this app claims about itself', () => {
        one press, "a part for each chapter", asked of the host that keeps the
        list; `content:report` says that what this module holds for the parts
        changed, so the host reads it again. */
-    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report'])
+    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report'])
     expect(MANIFEST.declares.prompt).toBe(false)
   })
 

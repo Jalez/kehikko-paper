@@ -508,7 +508,7 @@ describe('a suggested change', () => {
     expect(row('sg-accept')!.textContent).toContain('Accept my version')
     press('sg-accept')
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
-    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept', replace: 'with a typing slip in' })
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept', replaces: { p1: 'with a typing slip in' } })
   })
 
   const second = () => {
@@ -556,7 +556,7 @@ describe('a suggested change', () => {
     lastEditor!.drafts!.set('p1', 'with a typing slip in')
     act(() => lastEditor!.onAnswerSuggestion!(lastEditor!.suggestions![0]!.key, 'accept'))
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
-    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept', replace: 'with a typing slip in' })
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept', replaces: { p1: 'with a typing slip in' } })
   })
 
   test('the keys walk and answer, with the editor focused or not', async () => {

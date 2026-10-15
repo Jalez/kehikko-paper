@@ -81,7 +81,10 @@ export function placement(
   const nt = indexAt(text, p.to, eol)
   const flat = (s: string) => s.replace(/\r\n/g, '\n')
   if (text.slice(nf, nt) !== flat(p.was_text)) return null
-  if (p.asked) {
+  /* A suggestion whose quote changed is drawn where it was found, as a mark and
+     a tag only: nothing is offered to put in its place. */
+  if (p.held) return { from: nf, to: nt, replacement: '', quoted: false }
+  if (p.asked && (p.kind ?? 'staged') === 'staged') {
     const find = flat(p.asked.find)
     /* The quoted passage that CONTAINS the changed range; the nearest one, so a
        repeated sentence cannot be taken for another place. */

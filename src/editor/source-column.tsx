@@ -60,6 +60,7 @@ export function SourceColumn({
   onLabel,
   onLook,
   onCount,
+  smooth = 0,
 }: {
   regions: readonly ColumnRegion[]
   /** The region the person is in: always mounted. */
@@ -73,6 +74,8 @@ export function SourceColumn({
   onLook(file: string): void
   /** How many editors are mounted now: said when it changes. */
   onCount?(mounted: number): void
+  /** Changes when the next scroll should be smooth (a jump to the next change); the column goes back to instant after it. */
+  smooth?: number
 }) {
   const box = useRef<HTMLDivElement>(null)
   /** What a region measured the last time it was mounted, in pixels, label included. */
@@ -290,6 +293,18 @@ export function SourceColumn({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locate?.nonce])
+
+  /* Before the editor's own jump (a passive effect in a child) runs, so that
+     the scroll it makes is animated; instant again once it has settled. */
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!smooth || !el) return
+    el.style.scrollBehavior = 'smooth'
+    const timer = setTimeout(() => {
+      el.style.scrollBehavior = ''
+    }, 900)
+    return () => clearTimeout(timer)
+  }, [smooth])
 
   const open = new Set(mounted)
   return (

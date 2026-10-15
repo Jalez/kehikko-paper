@@ -14,6 +14,7 @@ import {
   markCommitted,
   reviewOf,
   setAuto,
+  setJump,
   setReason,
   type Ctx,
   type Review,
@@ -1107,6 +1108,7 @@ function everything(project: string, epic: string): { proposals: Proposal[]; ctx
 function reviewFacts(review: Review | null): Record<string, unknown> {
   return {
     auto: review?.auto ?? false,
+    jump: review?.jump ?? true,
     baseline: review ? { mode: review.mode, says: review.baseline } : null,
     accepted: (review?.accepted ?? []).map((a) => ({ n: a.n, file: a.file, old: a.old.slice(0, 200), new: a.new.slice(0, 200), why: a.why, at: a.at, by: a.by, kind: a.kind })),
     untracked: review?.untracked ?? [],
@@ -1451,7 +1453,7 @@ export function answer(
        nowhere to have filed anything, so the honest answer is that nothing is
        waiting. The page polls this, and a refusal every four seconds while
        nobody has a project open would be a container that looks broken. */
-    if (project === null) return ok({ ok: true, proposals: [], auto: false, baseline: null, accepted: [], untracked: [] })
+    if (project === null) return ok({ ok: true, proposals: [], auto: false, jump: true, baseline: null, accepted: [], untracked: [] })
     /* Measured against the disk first — see `settled` — and what that holds
        back rides along as a sentence, because a suggestion going out of date
        while somebody was deciding about it reads as the page losing it. Then
@@ -1760,6 +1762,8 @@ export function answer(
     if (action === 'auto') {
       setAuto(ctx, body?.on === true)
       said = body?.on === true ? 'Changes are accepted as they arrive; what is waiting now is left for you.' : ''
+    } else if (action === 'jump') {
+      setJump(ctx, body?.on === true)
     } else if (action === 'why') {
       const id = str(body?.id, 80)
       const why = typeof body?.why === 'string' ? body.why.replace(/\s+/g, ' ').trim().slice(0, MAX_WHY) : ''
