@@ -511,6 +511,54 @@ describe('a suggested change', () => {
     expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept', replace: 'with a typing slip in' })
   })
 
+  const second = () => {
+    const from = Buffer.from(MAIN).indexOf('Fin')
+    return { id: 'p2', file: 'main.tex', from, to: from + 3, text: 'End', was_text: 'Fin', was: hashOf(MAIN), why: 'Say it plainly.', by: 'an agent', at: 2, asked: { find: 'Fin', replace: 'End' } }
+  }
+
+  test('the tag’s Accept change and Cancel change act on THEIR suggestion, not the current one', async () => {
+    proposals = [suggestion(), second()]
+    await open()
+    await waiting(2)
+    /* The caret is in the first; the second's tag is answered. */
+    act(() => lastEditor!.onSelect({ from: suggestion().from, to: suggestion().from }))
+    await waitFor(() => expect(lastEditor!.suggestions!.find((one) => one.id === 'p1')!.current).toBe(true))
+    const other = lastEditor!.suggestions!.find((one) => one.id === 'p2')!
+    expect(other.current).toBe(false)
+    act(() => lastEditor!.onAnswerSuggestion!(other.key, 'accept'))
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p2', decision: 'accept' })
+    act(() => lastEditor!.onAnswerSuggestion!(lastEditor!.suggestions!.find((one) => one.id === 'p1')!.key, 'reject'))
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(2))
+    expect(posted('/api/proposal')[1]!.body).toMatchObject({ id: 'p1', decision: 'reject' })
+  })
+
+  test('a group’s tag answers the group once, by its first passage', async () => {
+    proposals = [{ ...suggestion(), group: 'mv' }, { ...second(), group: 'mv' }] as typeof proposals
+    await open()
+    await waiting(2)
+    const tagged = lastEditor!.suggestions!.filter((one) => one.tag)
+    expect(tagged).toHaveLength(1)
+    expect(tagged[0]!.count).toBe(2)
+    act(() => lastEditor!.onAnswerSuggestion!(tagged[0]!.key, 'accept'))
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: tagged[0]!.id, decision: 'accept' })
+  })
+
+  test('while editing, the tag’s Accept change applies the edited text and Cancel change rejects', async () => {
+    proposals = [suggestion()]
+    await open()
+    await waiting()
+    press('sg-next')
+    await waitFor(() => expect(row('sg-edit')!.disabled).toBe(false))
+    press('sg-edit')
+    await waitFor(() => expect(lastEditor!.suggestions![0]!.editing).toBe(true))
+    lastEditor!.drafts!.set('p1', 'with a typing slip in')
+    act(() => lastEditor!.onAnswerSuggestion!(lastEditor!.suggestions![0]!.key, 'accept'))
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept', replace: 'with a typing slip in' })
+  })
+
   test('the keys walk and answer, with the editor focused or not', async () => {
     proposals = [suggestion()]
     const editor = await open()

@@ -77,6 +77,8 @@ export interface EditorProps {
   drafts?: Map<string, string>
   /** Switch a suggestion (by stop key) between the current and the proposed reading. */
   onToggleSuggestion?(key: string): void
+  /** Accept change / Cancel change on a tag: answers THAT suggestion (its group, by stop key), not the current one. */
+  onAnswerSuggestion?(key: string, decision: 'accept' | 'reject'): void
   /** The author pressed on a marked passage: it becomes the one answered. */
   onPickSuggestion?(id: string): void
   /** One-based lines the engine complained about. */
@@ -111,6 +113,7 @@ type Suggesting = {
   list: readonly InlineSuggestion[]
   drafts: Map<string, string>
   toggle(key: string): void
+  answer(key: string, decision: 'accept' | 'reject'): void
   draft(id: string, text: string): void
 }
 const setSuggestions = StateEffect.define<Suggesting>()
@@ -170,7 +173,7 @@ class ProposedWidget extends WidgetType {
   }
 }
 
-class TagWidget extends WidgetType {
+export class TagWidget extends WidgetType {
   constructor(
     readonly one: InlineSuggestion,
     readonly on: Suggesting,
@@ -193,11 +196,38 @@ class TagWidget extends WidgetType {
     const toggle = document.createElement('button')
     toggle.type = 'button'
     toggle.className = 'cm-sugg-toggle'
-    toggle.textContent = one.after ? 'Show current' : 'Show proposed'
+    /* The label says what pressing it will show. */
+    toggle.textContent = one.after ? 'Show old' : 'Show new'
+    toggle.title = one.after ? 'Show the current text' : 'Show the suggested text in place'
     toggle.setAttribute('aria-pressed', String(one.after))
     toggle.addEventListener('mousedown', (event) => event.preventDefault())
     toggle.addEventListener('click', () => on.toggle(one.key))
-    tag.append(toggle)
+    /* The three buttons stay together; only a narrow container lets them wrap. */
+    const controls = document.createElement('span')
+    controls.className = 'cm-sugg-controls'
+    controls.append(toggle)
+    tag.append(controls)
+    /* Answering THIS suggestion (its group as one): the same function the
+       header's Accept and Reject run, so there is one code path. The words
+       carry the meaning; the colour only agrees with them. */
+    const about = (one.why.trim().split(/\s+/).slice(0, 6).join(' ') || 'suggestion').slice(0, 60)
+    const answer = (decision: 'accept' | 'reject', cls: string, icon: string, word: string) => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = `cm-sugg-toggle cm-sugg-answer ${cls}`
+      button.setAttribute('data-sugg-answer', decision)
+      button.setAttribute('aria-label', `${word}: ${about}`)
+      const glyph = document.createElement('span')
+      glyph.setAttribute('aria-hidden', 'true')
+      glyph.className = 'cm-sugg-glyph'
+      glyph.textContent = icon
+      button.append(glyph, document.createTextNode(word))
+      button.addEventListener('mousedown', (event) => event.preventDefault())
+      button.addEventListener('click', () => on.answer(one.key, decision))
+      controls.append(button)
+    }
+    answer('accept', 'cm-sugg-accept', '\u2713', 'Accept change')
+    answer('reject', 'cm-sugg-cancel', '\u2715', 'Cancel change')
     const note = (cls: string, text: string, hidden = false) => {
       const el = document.createElement('span')
       el.className = `cm-sugg-note ${cls}`
@@ -294,7 +324,7 @@ const marksField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onPickSuggestion }: EditorProps) {
+export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onPickSuggestion }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
   const scrolled = useRef(onScrolled)
   scrolled.current = onScrolled
@@ -306,6 +336,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
   pick.current = onPickSuggestion
   const toggled = useRef(onToggleSuggestion)
   toggled.current = onToggleSuggestion
+  const answered = useRef(onAnswerSuggestion)
+  answered.current = onAnswerSuggestion
   const ownDrafts = useRef(new Map<string, string>())
 
   const extensions = useMemo<Extension[]>(
@@ -397,6 +429,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
         list: suggestions ?? [],
         drafts: forDrafts,
         toggle: (key) => toggled.current?.(key),
+        answer: (key, decision) => answered.current?.(key, decision),
         draft: () => {},
       }),
     })

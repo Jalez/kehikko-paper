@@ -724,17 +724,27 @@ group.
   `state: accepted | rejected | withdrawn | dropped` (and *adjusted by the
   author* when the author changed the text first).
 
-### Answering one: the header, not the page
+### Answering one: on its tag, and from the header
 
-The page draws only content over the source. Answering is the container's
-header (Run menu, under *Suggestions*; the first four are `pinned`, which a
-host that draws pinned buttons shows in the container's own header):
+How a person reaches each action:
+
+- **On the suggestion's tag**, next to the toggle: *Show new* / *Show old*
+  (the label says what pressing it shows), then *Accept change* (green,
+  `--arrived`, check) and *Cancel change* (red, `--gone`, x). They act on THAT
+  suggestion, not on the current one; in a group the tag is on the first
+  passage (*N changes*) and the buttons act on the whole group. With the edit
+  box open, *Accept change* applies the edited text (the *adjusted* mark says
+  so) and *Cancel change* rejects. One press.
+- **In the header**, only the walk is pinned: `sg-prev`, `sg-next`. Accept,
+  Reject and Edit are in the Run menu (under *Suggestions*), with their keys,
+  and run the same functions as the tag's buttons: Run menu, then the item
+  (two presses), or the key (one).
 
 | item | what it does | key |
 |---|---|---|
 | `sg-prev`, `sg-next` | walk the suggestions in reading order: the files as `main.tex` pulls them in (the Go menu's order), then position; a group is one stop; wraps; the label carries *2 of 5*. A stop in another file opens that file, scrolls to it and focuses it (typing in the file left is held). Under a part pick only the shown files are walked | `⌥[`, `⌥]` |
-| `sg-accept` | accept the current one (its group, atomically). While editing, *Accept my version* | `⌥↵` |
-| `sg-reject` | reject the current one (its group). The file is untouched | `⌥⇧↵` |
+| `sg-accept` | accept the current one (its group, atomically). While editing, *Accept my version*. Not pinned: the tag has *Accept change* | `⌥↵` |
+| `sg-reject` | reject the current one (its group). The file is untouched. Not pinned: the tag has *Cancel change* | `⌥⇧↵` |
 | `sg-edit` | the proposed text becomes editable in place; Accept applies the author's text. The record keeps the agent's text and reason; the commit message says it was adjusted; the reader shows *adjusted* | `⌥E` |
 | `sg-all` | accept all, when more than one | |
 
@@ -776,7 +786,7 @@ over the editor names the file, whether it is saved, and the section and page.
 | `compile` | run | Run | `agents: true`; busy and failed show on the trigger; its `result` is the seconds and pages, or the first error |
 | `reveal` | run | Run | show the caret's line in the PDF — the switch cannot be pressed twice, this can |
 | `commit` | run | Run | `confirm: true`, so never an agent's; disabled with the reason when nothing has changed |
-| `sg-prev`, `sg-next`, `sg-accept`, `sg-reject`, `sg-edit`, `sg-all` | run | Run, group *Suggestions* | walk and answer suggestions; see above. Person-only; the first four `pinned` |
+| `sg-prev`, `sg-next`, `sg-accept`, `sg-reject`, `sg-edit`, `sg-all` | run | Run, group *Suggestions* | walk and answer suggestions; see above. Person-only; only `sg-prev` and `sg-next` are `pinned` |
 | `parts-each` | run | Run | a part for each chapter, in an epic that has none |
 
 The list is declared again only when it is a different list: typing declares

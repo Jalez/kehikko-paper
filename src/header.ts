@@ -250,9 +250,9 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
         group: SUGGESTIONS,
         disabled: !q.stops ? none : q.busy ? 'Another suggestion is being answered.' : q.position === null ? noCurrent : null,
         ...extra,
-        /* Edit stays in the Run menu: four buttons are what a host draws, and
-           the rest of a person's choice is not a thing to do in a hurry. */
-        ...(id === 'sg-edit' ? {} : { pinned: true }),
+        /* Accept and Reject are on the suggestion's own tag ("Accept change",
+           "Cancel change"), so the frame pins only the walk; these stay in the
+           Run menu, with their keys. */
         ...(id === 'sg-accept' && q.busy ? { state: 'busy' } : {}),
       }) as HeaderItemInput
     items.push(
