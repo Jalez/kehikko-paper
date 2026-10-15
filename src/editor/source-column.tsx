@@ -79,7 +79,7 @@ export function SourceColumn({
   const measured = useRef(new Map<string, number>())
   const [mounted, setMounted] = useState<readonly string[]>([])
   const mountedRef = useRef<readonly string[]>([])
-  const metrics = useRef({ width: 0, rowPx: 18.7, charPx: 7.5 })
+  const metrics = useRef({ width: 0, rowPx: 18.7, charPx: 7.5, ratio: 1 })
   const [, redraw] = useState(0)
   const activeRef = useRef(active)
   activeRef.current = active
@@ -90,12 +90,17 @@ export function SourceColumn({
   const counted = useRef(onCount)
   counted.current = onCount
 
+  if (box.current && metrics.current.width === 0) metrics.current.width = box.current.clientWidth
+  /** The rows a text is estimated to take at the column's width, before what has been measured is applied. */
+  const rawOf = (text: string | null): number => {
+    if (text === null) return 3
+    const width = metrics.current.width || 480
+    return rowsOf(text, Math.max(24, Math.floor((width - 56) / metrics.current.charPx)))
+  }
   const heightOf = (region: ColumnRegion): number => {
     const known = measured.current.get(region.file)
     if (known !== undefined) return known
-    const { rowPx, charPx, width } = metrics.current
-    const cols = Math.max(24, Math.floor((width - 56) / charPx))
-    return LABEL_PX + (region.text === null ? 3 : rowsOf(region.text, cols)) * rowPx + rowPx
+    return Math.round(LABEL_PX + rawOf(region.text) * metrics.current.rowPx * metrics.current.ratio + metrics.current.rowPx)
   }
 
   /** Which regions should be mounted for what is on screen now. */
@@ -131,6 +136,10 @@ export function SourceColumn({
   /* The set follows the regions, the active one and what is measured. */
   const key = regions.map((one) => one.file).join('\n')
   useLayoutEffect(() => {
+    if (box.current && metrics.current.width === 0 && box.current.clientWidth > 0) {
+      metrics.current.width = box.current.clientWidth
+      redraw((n) => n + 1)
+    }
     settle()
   }, [settle, key, active])
 
@@ -213,11 +222,19 @@ export function SourceColumn({
       for (const entry of entries) {
         const target = entry.target as HTMLElement
         const file = target.dataset.region
-        if (!file || !target.isConnected) continue
+        /* Only an editor's own height is a measurement; a blank is what it was told to be. */
+        if (!file || !target.isConnected || !target.hasAttribute('data-mounted')) continue
         const next = Math.round(target.getBoundingClientRect().height)
         if (next === 0) continue
         const was = measured.current.get(file) ?? null
         if (was === next) continue
+        /* What a mounted editor really takes, against what the estimate said:
+           the others are estimated by the same ratio from then on. */
+        const own = regionsRef.current.find((one) => one.file === file)
+        if (own && own.text !== null && target.hasAttribute('data-mounted')) {
+          const rows = rawOf(own.text) * metrics.current.rowPx
+          if (rows > 0) metrics.current.ratio = Math.min(4, Math.max(0.25, (next - LABEL_PX) / rows))
+        }
         measured.current.set(file, next)
         changed = true
         if (el && was !== null && target.offsetTop + was <= el.scrollTop + 1 && el.clientHeight > 0) el.scrollTop += next - was
@@ -251,7 +268,7 @@ export function SourceColumn({
       {regions.map((region) => {
         const here = open.has(region.file) || region.file === active
         return (
-          <section key={region.file} ref={watched} data-region={region.file} data-mounted={here ? '' : undefined} className="source-region">
+          <section key={region.file} ref={watched} data-region={region.file} data-mounted={here && region.text !== null ? '' : undefined} className="source-region">
             <button
               type="button"
               className={cn('source-boundary', region.file === active && 'source-boundary-active')}
