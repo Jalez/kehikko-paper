@@ -1042,3 +1042,128 @@ describe('a passage another module pointed at', () => {
     expect(placeShown(caret, { section: null, marked: null, mapped: null })).toEqual({ page: null, section: null })
   })
 })
+
+describe('Enter and Escape on a suggestion the person pressed on', () => {
+  const first = () => {
+    const from = Buffer.from(MAIN).indexOf('tpyo')
+    return { id: 'p1', file: 'main.tex', from, to: from + 4, text: 'typo', was_text: 'tpyo', was: hashOf(MAIN), why: 'A misspelling.', by: 'an agent', at: 1, asked: { find: 'with a tpyo in', replace: 'with a typo in' } }
+  }
+  const other = () => {
+    const from = Buffer.from(MAIN).indexOf('Fin')
+    return { id: 'p2', file: 'main.tex', from, to: from + 3, text: 'End', was_text: 'Fin', was: hashOf(MAIN), why: 'Say it plainly.', by: 'an agent', at: 2, asked: { find: 'Fin', replace: 'End' } }
+  }
+  const waiting = (n: number) => waitFor(() => expect(lastEditor!.suggestions?.length).toBe(n))
+  const one = (id: string) => lastEditor!.suggestions!.find((s) => s.id === id)!
+  const inside = (id: string) => ({ from: one(id).from + 2, to: one(id).from + 2 })
+  const key = (decision: 'accept' | 'reject') => {
+    let taken = false
+    act(() => {
+      taken = lastEditor!.onArmedKey!(decision)
+    })
+    return taken
+  }
+
+  test('not armed on load, on the caret landing in it, on Next, or on typing: the keys are not taken', async () => {
+    proposals = [first(), other()]
+    await open()
+    await waiting(2)
+    expect(lastEditor!.suggestions!.every((s) => !s.armed)).toBe(true)
+    act(() => lastEditor!.onSelect(inside('p1')))
+    await waitFor(() => expect(one('p1').current).toBe(true))
+    expect(one('p1').armed).toBe(false)
+    expect(key('accept')).toBe(false)
+    expect(key('reject')).toBe(false)
+    act(() => lastEditor!.onSelect({ from: 0, to: 0 }))
+    press('sg-next')
+    await waitFor(() => expect(one('p2').current || one('p1').current).toBe(true))
+    expect(lastEditor!.suggestions!.every((s) => !s.armed)).toBe(true)
+    expect(key('accept')).toBe(false)
+    expect(posted('/api/proposal')).toHaveLength(0)
+  })
+
+  test('a pointer press arms; Enter accepts it, and the next one is NOT armed', async () => {
+    proposals = [first(), other()]
+    await open()
+    await waiting(2)
+    act(() => lastEditor!.onPickSuggestion!('p1'))
+    act(() => lastEditor!.onSelect(inside('p1')))
+    await waitFor(() => expect(one('p1').armed).toBe(true))
+    expect(one('p2').armed).toBe(false)
+    expect(key('accept')).toBe(true)
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept' })
+    await waitFor(() => expect(lastEditor!.suggestions!.map((s) => s.id)).toEqual(['p2']))
+    expect(one('p2').armed).toBe(false)
+    expect(key('accept')).toBe(false)
+  })
+
+  test('Escape cancels the armed one and leaves the source untouched', async () => {
+    proposals = [first()]
+    await open()
+    await waiting(1)
+    act(() => lastEditor!.onPickSuggestion!('p1'))
+    act(() => lastEditor!.onSelect(inside('p1')))
+    await waitFor(() => expect(one('p1').armed).toBe(true))
+    expect(key('reject')).toBe(true)
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'reject' })
+    expect(posted('/api/file')).toHaveLength(0)
+  })
+
+  test('typing, the caret leaving, and losing focus disarm; moving inside the passage does not', async () => {
+    proposals = [first(), other()]
+    await open()
+    await waiting(2)
+    const arm = async () => {
+      act(() => lastEditor!.onPickSuggestion!('p1'))
+      act(() => lastEditor!.onSelect(inside('p1')))
+      await waitFor(() => expect(one('p1').armed).toBe(true))
+    }
+    await arm()
+    act(() => lastEditor!.onSelect({ from: one('p1').from + 3, to: one('p1').from + 3 }))
+    expect(one('p1').armed).toBe(true)
+    act(() => lastEditor!.onSelect({ from: 0, to: 0 }))
+    await waitFor(() => expect(one('p1').armed).toBe(false))
+    expect(key('accept')).toBe(false)
+    await arm()
+    act(() => lastEditor!.onDisarm!())
+    await waitFor(() => expect(one('p1').armed).toBe(false))
+    await arm()
+    act(() => lastEditor!.onChange(MAIN + 'x'))
+    await waitFor(() => expect(one('p1').armed).toBe(false))
+    expect(key('accept')).toBe(false)
+  })
+
+  test('the key is not taken when the caret is elsewhere, even if armed state lingered', async () => {
+    proposals = [first()]
+    await open()
+    await waiting(1)
+    act(() => lastEditor!.onPickSuggestion!('p1'))
+    expect(key('accept')).toBe(false)
+    expect(posted('/api/proposal')).toHaveLength(0)
+  })
+
+  test('a group is armed as a whole', async () => {
+    proposals = [{ ...first(), group: 'mv' }, { ...other(), group: 'mv' }] as typeof proposals
+    await open()
+    await waiting(2)
+    act(() => lastEditor!.onPickSuggestion!('p2'))
+    act(() => lastEditor!.onSelect(inside('p2')))
+    await waitFor(() => expect(lastEditor!.suggestions!.every((s) => s.armed)).toBe(true))
+    expect(key('accept')).toBe(true)
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+  })
+
+  test('Escape in the edit box stops editing and rejects nothing', async () => {
+    proposals = [first()]
+    await open()
+    await waiting(1)
+    press('sg-next')
+    await waitFor(() => expect(row('sg-edit')!.disabled).toBe(false))
+    press('sg-edit')
+    await waitFor(() => expect(one('p1').editing).toBe(true))
+    act(() => lastEditor!.onStopEditing!())
+    await waitFor(() => expect(one('p1').editing).toBe(false))
+    expect(posted('/api/proposal')).toHaveLength(0)
+  })
+})

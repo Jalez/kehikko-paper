@@ -489,6 +489,24 @@
   color: var(--gone);
   background: color-mix(in oklch, var(--gone) 10%, transparent);
 }
+.cm-sugg-key {
+  margin-left: 0.3rem;
+  padding: 0 0.25rem;
+  font: inherit;
+  font-size: 0.6rem;
+  line-height: 1.25;
+  opacity: 0.8;
+  border: 1px solid color-mix(in oklch, currentColor 45%, transparent);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: color-mix(in oklch, currentColor 8%, transparent);
+}
+/* Armed: Enter and Escape act on this one. A ring on the tag says so. */
+.cm-sugg-tag.cm-sugg-armed {
+  outline: 1.5px solid color-mix(in oklch, var(--muted-foreground, currentColor) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 .cm-sugg-toggle:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 1px;

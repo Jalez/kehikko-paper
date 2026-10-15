@@ -81,6 +81,16 @@ export interface EditorProps {
   onAnswerSuggestion?(key: string, decision: 'accept' | 'reject'): void
   /** The author pressed on a marked passage: it becomes the one answered. */
   onPickSuggestion?(id: string): void
+  /**
+   * Enter ('accept') or Escape ('reject') with the editor focused: true when
+   * the page took it (an armed suggestion, the caret inside it), so the key is
+   * consumed and nothing else handles it; false leaves it to the editor.
+   */
+  onArmedKey?(decision: 'accept' | 'reject'): boolean
+  /** The editor lost focus: the keys above are not the person's to give. */
+  onDisarm?(): void
+  /** Escape in the author's edit box: stop editing, reject nothing. */
+  onStopEditing?(): void
   /** One-based lines the engine complained about. */
   problems: readonly { line: number; severity: 'error' | 'warning'; message: string }[]
   theme: 'light' | 'dark'
@@ -99,6 +109,8 @@ export interface InlineSuggestion {
   replacement: string
   after: boolean
   current: boolean
+  /** The person pressed on it: Enter accepts, Escape cancels, and the tag says so. */
+  armed: boolean
   why: string
   revisions: number
   /** Members of its group (1 = not in one). The tag is drawn on the first only. */
@@ -115,6 +127,9 @@ type Suggesting = {
   toggle(key: string): void
   answer(key: string, decision: 'accept' | 'reject'): void
   draft(id: string, text: string): void
+  stopEditing(): void
+  /** A press on the proposed text shown in place: the caret goes into the passage, and it is armed. */
+  pick(id: string, withCaret: boolean): void
 }
 const setSuggestions = StateEffect.define<Suggesting>()
 
@@ -139,6 +154,14 @@ class ProposedWidget extends WidgetType {
     span.className = `cm-sugg-after${one.current ? ' cm-sugg-current' : ''}`
     span.setAttribute('data-sugg', one.id)
     span.setAttribute('data-sugg-after', '')
+    /* The editor ignores events from a widget (`ignoreEvent`), so its own
+       mousedown handler never sees a press here: the widget says it itself. A
+       press in the edit box leaves the box its focus. */
+    span.addEventListener('mousedown', (event) => {
+      const inBox = event.target instanceof Element && event.target.closest('textarea') !== null
+      if (!inBox) event.preventDefault()
+      on.pick(one.id, !inBox)
+    })
     if (!one.editing) {
       span.textContent = one.replacement
       return span
@@ -161,6 +184,19 @@ class ProposedWidget extends WidgetType {
       area.style.height = `${area.scrollHeight + 2}px`
     }
     area.addEventListener('input', grow)
+    /* A text field: Enter is a newline. Cmd/Ctrl+Enter accepts the edited text;
+       Escape stops editing and rejects nothing. */
+    area.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.altKey) {
+        event.preventDefault()
+        event.stopPropagation()
+        on.answer(one.key, 'accept')
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        on.stopEditing()
+      }
+    })
     queueMicrotask(() => {
       if (!area.isConnected) return
       grow()
@@ -184,14 +220,14 @@ export class TagWidget extends WidgetType {
     const a = this.one
     const b = other.one
     return (
-      a.id === b.id && a.after === b.after && a.current === b.current && a.why === b.why &&
+      a.id === b.id && a.after === b.after && a.current === b.current && a.armed === b.armed && a.why === b.why &&
       a.revisions === b.revisions && a.count === b.count && a.editing === b.editing
     )
   }
   toDOM(): HTMLElement {
     const { one, on } = this
     const tag = document.createElement('span')
-    tag.className = `cm-sugg-tag${one.current ? ' cm-sugg-current' : ''}`
+    tag.className = `cm-sugg-tag${one.current ? ' cm-sugg-current' : ''}${one.armed ? ' cm-sugg-armed' : ''}`
     tag.setAttribute('data-sugg-tag', one.id)
     const toggle = document.createElement('button')
     toggle.type = 'button'
@@ -211,6 +247,15 @@ export class TagWidget extends WidgetType {
        header's Accept and Reject run, so there is one code path. The words
        carry the meaning; the colour only agrees with them. */
     const about = (one.why.trim().split(/\s+/).slice(0, 6).join(' ') || 'suggestion').slice(0, 60)
+    const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+    const hint = (decision: 'accept' | 'reject') => {
+      if (one.editing) {
+        if (decision !== 'accept') return null
+        return mac ? { label: '\u2318\u23CE', name: 'Cmd+Enter', aria: 'Meta+Enter' } : { label: 'Ctrl+\u23CE', name: 'Ctrl+Enter', aria: 'Control+Enter' }
+      }
+      if (!one.armed) return null
+      return decision === 'accept' ? { label: '\u23CE', name: 'Enter', aria: 'Enter' } : { label: 'Esc', name: 'Escape', aria: 'Escape' }
+    }
     const answer = (decision: 'accept' | 'reject', cls: string, icon: string, word: string) => {
       const button = document.createElement('button')
       button.type = 'button'
@@ -222,6 +267,18 @@ export class TagWidget extends WidgetType {
       glyph.className = 'cm-sugg-glyph'
       glyph.textContent = icon
       button.append(glyph, document.createTextNode(word))
+      /* The key, only where it would work: armed (Enter / Escape), or editing
+         (Cmd/Ctrl+Enter accepts the edit; Escape there is not Cancel change). */
+      const cap = hint(decision)
+      if (cap) {
+        const kbd = document.createElement('kbd')
+        kbd.className = 'cm-sugg-key'
+        kbd.setAttribute('aria-hidden', 'true')
+        kbd.textContent = cap.label
+        button.append(kbd)
+        button.title = `${word} \u2014 ${cap.name}`
+        button.setAttribute('aria-keyshortcuts', cap.aria)
+      }
       button.addEventListener('mousedown', (event) => event.preventDefault())
       button.addEventListener('click', () => on.answer(one.key, decision))
       controls.append(button)
@@ -324,7 +381,7 @@ const marksField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onPickSuggestion }: EditorProps) {
+export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onPickSuggestion, onArmedKey, onDisarm, onStopEditing }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
   const scrolled = useRef(onScrolled)
   scrolled.current = onScrolled
@@ -338,6 +395,12 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
   toggled.current = onToggleSuggestion
   const answered = useRef(onAnswerSuggestion)
   answered.current = onAnswerSuggestion
+  const armedKey = useRef(onArmedKey)
+  armedKey.current = onArmedKey
+  const disarmed = useRef(onDisarm)
+  disarmed.current = onDisarm
+  const stopped = useRef(onStopEditing)
+  stopped.current = onStopEditing
   const ownDrafts = useRef(new Map<string, string>())
 
   const extensions = useMemo<Extension[]>(
@@ -356,9 +419,26 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
           if (id) pick.current?.(id)
           return false
         },
+        blur(event, view) {
+          /* Focus moving into the edit box (inside the editor) is not leaving it. */
+          const to = event.relatedTarget
+          if (to instanceof Node && view.dom.contains(to)) return false
+          disarmed.current?.()
+          return false
+        },
       }),
       Prec.highest(
         keymap.of([
+          {
+            key: 'Enter',
+            stopPropagation: true,
+            run: () => armedKey.current?.('accept') ?? false,
+          },
+          {
+            key: 'Escape',
+            stopPropagation: true,
+            run: () => armedKey.current?.('reject') ?? false,
+          },
           {
             key: 'Mod-s',
             preventDefault: true,
@@ -431,6 +511,15 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
         toggle: (key) => toggled.current?.(key),
         answer: (key, decision) => answered.current?.(key, decision),
         draft: () => {},
+        stopEditing: () => stopped.current?.(),
+        pick: (id, withCaret) => {
+          if (withCaret) {
+            const at = (suggestions ?? []).find((one) => one.id === id)
+            if (at) view.dispatch({ selection: { anchor: Math.min(at.from, view.state.doc.length) } })
+            view.focus()
+          }
+          pick.current?.(id)
+        },
       }),
     })
   }, [suggestions, forDrafts, value])
