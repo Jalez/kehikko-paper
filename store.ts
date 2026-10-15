@@ -1462,6 +1462,49 @@ export function writeRange(epic: string, edit: Edit, project: string | null): Wr
 }
 
 /**
+ * Several ranges of one file, in ONE write: all of them or none.
+ *
+ * What accepting a group of suggestions is. Every range is checked against the
+ * file as it is (the hash, the character boundaries, no two overlapping, no
+ * NUL) before a single byte is spliced, and the result is renamed over the
+ * file once, so there is no state of the file with part of a move applied.
+ */
+export function writeRanges(
+  epic: string,
+  edit: { file: string; was: string; edits: { from: number; to: number; text: string }[] },
+  project: string | null,
+): Written {
+  const no = (why: string, stale = false): Written => ({ ok: false, why, stale })
+  const file = opened(epic, edit.file, edit.was, project)
+  if ('why' in file) return no(file.why, file.stale)
+  const { path, bytes } = file
+  if (!edit.edits.length) return no('There is nothing to write there.')
+  const ordered = [...edit.edits].sort((a, b) => a.from - b.from || a.to - b.to)
+  let last = -1
+  let changed = false
+  for (const one of ordered) {
+    if (!Number.isInteger(one.from) || !Number.isInteger(one.to)) return no('That is not a byte range.')
+    if (one.from < 0 || one.to < one.from || one.to > bytes.length) return no('That range is not inside the file.')
+    if (!onBoundary(bytes, one.from) || !onBoundary(bytes, one.to)) {
+      return no('That range cuts a character in half, so it does not name a place in this file.')
+    }
+    if (one.from < last) return no('Two of the changes cover the same words, so they cannot all apply.')
+    last = one.to
+    if (typeof one.text !== 'string' || one.text.includes('\0')) return no('That text holds a NUL byte, which a .tex file does not.')
+    if (!bytes.subarray(one.from, one.to).equals(Buffer.from(one.text, 'utf8'))) changed = true
+  }
+  if (!changed) return no('That edit changes nothing.')
+  const parts: Buffer[] = []
+  let at = 0
+  for (const one of ordered) {
+    parts.push(bytes.subarray(at, one.from), Buffer.from(one.text, 'utf8'))
+    at = one.to
+  }
+  parts.push(bytes.subarray(at))
+  return put(path, Buffer.concat(parts))
+}
+
+/**
  * Replace the whole text of one file of one paper: what Save in the editor does.
  *
  * ## The whole file, guarded by what it was

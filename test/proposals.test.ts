@@ -97,10 +97,10 @@ describe('nothing an agent can reach writes', () => {
    * whoever added it has to come here and say, in this list, whether it writes.
    * That is the point: the list is the claim, and it is checked.
    */
-  test('the MCP door offers exactly these tools, and only one of them is not a read', () => {
+  test('the MCP door offers exactly these tools, and only three of them are not a read, none of which can accept', () => {
     const reply = answer('POST', '/mcp', new URLSearchParams(), { jsonrpc: '2.0', id: 1, method: 'tools/list' })
     const names = ((reply?.body as { result: { tools: { name: string }[] } }).result.tools).map((t) => t.name)
-    expect(names.sort()).toEqual(['list_papers', 'list_proposals', 'list_sections', 'propose_edit', 'read_paper', 'read_source'])
+    expect(names.sort()).toEqual(['list_papers', 'list_proposals', 'list_sections', 'propose_edit', 'read_paper', 'read_source', 'revise_edit', 'withdraw_edit'])
   })
 
   test('proposing leaves the file byte-identical', () => {

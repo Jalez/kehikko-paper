@@ -79,6 +79,24 @@ export interface Proposal {
    * which is the answer it would have got before this field existed.
    */
   asked?: { find: string; replace: string }
+  /**
+   * SHA-256 of the revision token `propose_edit` handed the filer. It is how a
+   * later `revise_edit` / `withdraw_edit` proves it is the same filer: the door
+   * has no other identity. Only the hash is kept, and it never leaves the
+   * server — `pendingFor` strips it from everything a page or an agent reads.
+   * Absent on a suggestion with no filer to speak for it, which therefore
+   * cannot be revised by an agent (the author can still answer it).
+   */
+  tokenHash?: string
+  /** When the filer last revised it, and how many times. Absent = never. */
+  revisedAt?: number
+  revisions?: number
+  /**
+   * Suggestions with the same group are taken together: accepting or rejecting
+   * one answers all of them, and they apply all or none. A move is an insert
+   * and a delete filed under one group.
+   */
+  group?: string
 }
 
 /**
