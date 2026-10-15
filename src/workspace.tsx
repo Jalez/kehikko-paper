@@ -595,9 +595,11 @@ export function Workspace({
      replaces its own, and that is nobody navigating. */
   const held = useRef(selection)
   held.current = selection
+  /* Until when the caret landing on a change this page walked to is not the person wandering off it. */
+  const walkedUntil = useRef(0)
   const onSelect = useCallback(
     (next: { from: number; to: number }) => {
-      if (held.current.from !== next.from || held.current.to !== next.to) wandered()
+      if ((held.current.from !== next.from || held.current.to !== next.to) && Date.now() > walkedUntil.current) wandered()
       setSelection(next)
     },
     [wandered],
@@ -1469,7 +1471,7 @@ export function Workspace({
   const [smooth, setSmooth] = useState(0)
   const armSoon = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visit = useCallback(
-    (stop: { key: string; file: string; lead: Proposal }, options: { arm?: boolean; smooth?: boolean } = {}) => {
+    (stop: { key: string; file: string; lead: Proposal; members?: readonly Proposal[] }, options: { arm?: boolean; smooth?: boolean } = {}) => {
       setNavigated(stop.key)
       wandered()
       if (options.smooth && !(typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)) setSmooth((n) => n + 1)
@@ -1478,6 +1480,16 @@ export function Workspace({
       go({ file: stop.file, bytes: { from: stop.lead.from, to: stop.lead.to }, focus: true })
       setTab('source')
       if (armSoon.current) clearTimeout(armSoon.current)
+      /* The PDF is marked at the change itself, the first member's words to the
+         last member's — not at the caret's line. The caret landing on it is the
+         page going there, which would take that mark down: for a moment that
+         is not the person wandering off. */
+      const ends = (stop.members ?? [stop.lead]).filter((m) => m.file === stop.file)
+      if (ends.some((m) => m.to > m.from)) {
+        walkedUntil.current = Date.now() + 5000
+        setNoted({ file: stop.file, from: Math.min(...ends.map((m) => m.from)), to: Math.max(...ends.map((m) => m.to)), proposal: stop.lead.id })
+      }
+      /* For a run begun with the pointer the tag is armed once the editor has taken the focus: the editor being left blurs, and a blur ends arming. */
       if (options.arm) {
         armSoon.current = setTimeout(() => {
           armSoon.current = null

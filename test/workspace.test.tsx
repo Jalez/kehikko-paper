@@ -45,6 +45,8 @@ interface Call {
 let disk: Record<string, string>
 let calls: Call[]
 let proposals: Record<string, unknown>[]
+let jumpOn = true
+let autoOn = false
 let engine: string | null
 let built: string | null
 /** What the PDF on screen was built from, when that is not the disk as it is now. */
@@ -99,7 +101,12 @@ function serve(method: string, path: string, query: URLSearchParams, body: Recor
     builtFrom = disk['main.tex']!
     return [200, { ok: true, build: buildNow() }]
   }
-  if (path === '/api/proposals') return [200, { ok: true, proposals, said: '' }]
+  if (path === '/api/proposals') return [200, { ok: true, proposals, auto: autoOn, jump: jumpOn, accepted: [], baseline: null, untracked: [], said: '' }]
+  if (path === '/api/review') {
+    if (body?.action === 'jump') jumpOn = body.on === true
+    if (body?.action === 'auto') autoOn = body.on === true
+    return [200, { ok: true, proposals, auto: autoOn, jump: jumpOn, accepted: [], baseline: null, untracked: [], said: '' }]
+  }
   if (path === '/api/uncommitted') return [200, { ok: true, standing: { at: 'nogit' }, hashes: { 'main.tex': hashOf(disk['main.tex']!) } }]
   if (path === '/api/templates') return [200, { ok: true, templates: [] }]
   if (path === '/api/file') {
@@ -142,6 +149,8 @@ function Stub(props: PreviewProps) {
 const posted = (path: string) => calls.filter((one) => one.method === 'POST' && one.path === path)
 
 beforeEach(() => {
+  jumpOn = true
+  autoOn = false
   disk = { 'main.tex': MAIN }
   calls = []
   proposals = []
@@ -1106,8 +1115,62 @@ describe('Enter and Escape on a suggestion the person pressed on', () => {
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
     expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept' })
     await waitFor(() => expect(lastEditor!.suggestions!.map((s) => s.id)).toEqual(['p2']))
+    /* The run the pointer began goes on: the next one is led to and armed, once the editor has the focus. */
+    await waitFor(() => expect(one('p2').armed).toBe(true))
+  })
+
+  test('Jump to next change: Enter, Esc, Enter walk the whole list in reading order, then say there are no more', async () => {
+    const third = () => ({ ...other(), id: 'p3', from: Buffer.from(MAIN).indexOf('claim'), to: Buffer.from(MAIN).indexOf('claim') + 5, was_text: 'claim', text: 'point', asked: { find: 'claim', replace: 'point' }, why: 'Third.' })
+    proposals = [first(), other(), third()]
+    await open()
+    await waiting(3)
+    act(() => lastEditor!.onPickSuggestion!('p1'))
+    act(() => lastEditor!.onSelect(inside('p1')))
+    await waitFor(() => expect(one('p1').armed).toBe(true))
+    const decided = () => posted('/api/proposal').map((c) => `${c.body!.id}:${c.body!.decision}`)
+    expect(key('accept')).toBe(true)
+    await waitFor(() => expect(decided()).toEqual(['p1:accept']))
+    /* Reading order: claim is above tpyo in the source, so the next after tpyo is Fin. */
+    await waitFor(() => expect(lastEditor!.suggestions!.filter((x) => x.armed).length).toBe(1))
+    const next = lastEditor!.suggestions!.find((x) => x.armed)!
+    act(() => lastEditor!.onSelect({ from: next.from, to: next.from }))
+    expect(key('reject')).toBe(true)
+    await waitFor(() => expect(decided()).toHaveLength(2))
+    await waitFor(() => expect(lastEditor!.suggestions!.filter((x) => x.armed).length).toBe(1))
+    const last = lastEditor!.suggestions!.find((x) => x.armed)!
+    act(() => lastEditor!.onSelect({ from: last.from, to: last.from }))
+    expect(key('accept')).toBe(true)
+    await waitFor(() => expect(decided()).toHaveLength(3))
+    await waitFor(() => expect(lastEditor!.suggestions).toHaveLength(0))
+    await waitFor(() => expect(row('sg-next')!.textContent).toContain('No more changes'))
+    expect(new Set(decided().map((d) => d.split(':')[0])).size).toBe(3)
+  })
+
+  test('with Jump to next change off, a decision leaves things where they are: nothing is led to, nothing armed', async () => {
+    jumpOn = false
+    proposals = [first(), other()]
+    await open()
+    await waiting(2)
+    await waitFor(() => expect(row('jump')!.getAttribute('aria-checked')).toBe('false'))
+    act(() => lastEditor!.onPickSuggestion!('p1'))
+    act(() => lastEditor!.onSelect(inside('p1')))
+    await waitFor(() => expect(one('p1').armed).toBe(true))
+    expect(key('accept')).toBe(true)
+    await waitFor(() => expect(lastEditor!.suggestions!.map((s) => s.id)).toEqual(['p2']))
+    await new Promise((done) => setTimeout(done, 300))
     expect(one('p2').armed).toBe(false)
-    expect(key('accept')).toBe(false)
+    expect(one('p2').current).toBe(false)
+  })
+
+  test('the checkbox is the person’s: pressing it saves it, and under Auto accept it says why it is idle', async () => {
+    proposals = [first()]
+    await open()
+    await waiting(1)
+    press('jump', false)
+    await waitFor(() => expect(posted('/api/review')[0]!.body).toMatchObject({ action: 'jump', on: false }))
+    press('auto', true)
+    await waitFor(() => expect(posted('/api/review').at(-1)!.body).toMatchObject({ action: 'auto', on: true }))
+    await waitFor(() => expect(String(row('jump')!.textContent)).toContain('Auto accept is on'))
   })
 
   test('Escape cancels the armed one and leaves the source untouched', async () => {

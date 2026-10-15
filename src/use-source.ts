@@ -4,6 +4,7 @@ import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { held } from 'kehikot-module-protocol/client'
 
+import { hunksOf } from '../latex/hunks.ts'
 import { mergeThree } from '../latex/merge.ts'
 import { json, post, standingIn } from './api.ts'
 import { eolOf, toDisk, toEditor, type Eol } from './lib/offsets.ts'
@@ -481,19 +482,19 @@ export interface Changed {
 }
 
 /**
- * Where two texts differ, as a range of the NEW one.
+ * Where two texts first differ, as a range of the NEW one.
  *
- * What they share at the front and at the back is set aside and the rest is
- * the change: one edit comes back as itself, several as the stretch from the
- * first to the last. Empty when something was only taken out. That is enough
- * to take a person to it, which is all this is for.
+ * ONE change, the first, and not the stretch from the first to the last: an
+ * agent that edited a heading and a sentence three pages below it did not
+ * change everything between them, and a mark on the PDF drawn over all of it
+ * points at text nobody touched. The first change is where a person is taken;
+ * the rest are walked to one at a time. Words, not lines: a changed word in a
+ * long line is that word. Empty (`from === to`) when something was only taken
+ * out there.
  */
 export function changedBy(file: string, old: string, next: string, was: Changed | null): Changed | null {
   if (old === next) return was
-  const most = Math.min(old.length, next.length)
-  let front = 0
-  while (front < most && old.charCodeAt(front) === next.charCodeAt(front)) front += 1
-  let back = 0
-  while (back < most - front && old.charCodeAt(old.length - 1 - back) === next.charCodeAt(next.length - 1 - back)) back += 1
-  return { file, from: front, to: next.length - back, n: (was?.n ?? 0) + 1 }
+  const first = hunksOf(old, next)[0]
+  if (!first) return was
+  return { file, from: first.newFrom, to: first.newTo, n: (was?.n ?? 0) + 1 }
 }
