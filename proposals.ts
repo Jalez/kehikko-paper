@@ -197,6 +197,7 @@ export function overlaps(
   project: string,
   epic: string,
   probe: { file: string; from: number; to: number; window: { from: number; to: number }; find: string },
+  windowOf: (p: Proposal) => { from: number; to: number } | null,
 ): { id: string; conflict: boolean }[] {
   const found: { id: string; conflict: boolean }[] = []
   for (const p of heldFor(project, epic)) {
@@ -208,10 +209,12 @@ export function overlaps(
       (p.from < probe.to && probe.from < p.to) || (p.from === p.to && probe.from === probe.to && p.from === probe.from) ||
       (p.from === p.to && p.from > probe.from && p.from < probe.to) ||
       (probe.from === probe.to && probe.from > p.from && probe.from < p.to)
-    const sameQuote = p.asked?.find === probe.find
-    const inside = p.from >= probe.window.from && p.to <= probe.window.to
-    if (touches || sameQuote) found.push({ id: p.id, conflict: true })
-    else if (inside) found.push({ id: p.id, conflict: false })
+    const quoted = windowOf(p)
+    const sharesQuote =
+      p.asked?.find === probe.find ||
+      (quoted !== null && quoted.from < probe.window.to && probe.window.from < quoted.to)
+    if (touches) found.push({ id: p.id, conflict: true })
+    else if (sharesQuote) found.push({ id: p.id, conflict: false })
   }
   return found
 }

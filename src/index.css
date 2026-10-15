@@ -437,7 +437,8 @@
   min-width: 12rem;
   font: inherit;
   color: inherit;
-  background: color-mix(in oklch, var(--arrived) 10%, var(--background, transparent));
+  color-scheme: inherit;
+  background: color-mix(in oklch, var(--arrived) 12%, Canvas);
   border: 1px solid var(--arrived);
   border-radius: 3px;
   padding: 0.1rem 0.25rem;

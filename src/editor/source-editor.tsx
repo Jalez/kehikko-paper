@@ -153,7 +153,16 @@ class ProposedWidget extends WidgetType {
       if (mark instanceof HTMLElement) mark.hidden = area.value === one.proposed
     })
     span.append(area)
-    queueMicrotask(() => area.isConnected && area.focus())
+    const grow = () => {
+      area.style.height = 'auto'
+      area.style.height = `${area.scrollHeight + 2}px`
+    }
+    area.addEventListener('input', grow)
+    queueMicrotask(() => {
+      if (!area.isConnected) return
+      grow()
+      area.focus()
+    })
     return span
   }
   ignoreEvent(): boolean {

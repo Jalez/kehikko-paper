@@ -756,7 +756,12 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const group = str(args.group, 60)
       const first = source.indexOf(find)
       const window = { from: bytesOf(source.slice(0, first)), to: bytesOf(source.slice(0, first + find.length)) }
-      const touching = overlaps(named.project, epic, { file, from: worked.from, to: worked.to, window, find })
+      const touching = overlaps(named.project, epic, { file, from: worked.from, to: worked.to, window, find }, (p) => {
+        /* Where the other suggestion's quoted passage sits in the file now. */
+        if (!p.asked) return null
+        const at = source.indexOf(p.asked.find)
+        return at === -1 ? null : { from: bytesOf(source.slice(0, at)), to: bytesOf(source.slice(0, at + p.asked.find.length)) }
+      })
       if (group) {
         const mates = pendingFor(named.project, epic).filter((p) => p.group === group)
         if (mates.some((p) => p.file !== file)) {
@@ -796,7 +801,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         lines.push(
           t.conflict
             ? `Overlaps ${t.id}: it covers some of the same words, so only one of the two can apply — accepting one drops the other. Both are pending; nothing was superseded. If ${t.id} is yours, revise_edit it instead.`
-            : `Touches ${t.id}: that suggestion changes words inside the passage you quoted. They may both apply, but check they agree.`,
+            : `Shares a passage with ${t.id}: you quoted overlapping text, but the two change different words, so both can apply. If you meant this to replace ${t.id}, revise_edit it instead.`,
         )
       }
       if (group) lines.push(`Group "${group}": the reader answers every suggestion in the group together.`)

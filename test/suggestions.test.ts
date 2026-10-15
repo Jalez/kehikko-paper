@@ -124,6 +124,14 @@ describe('revise and withdraw', () => {
     expect(list()).toHaveLength(2)
     const c = file('seond', 'second')
     expect(c.said).not.toContain('Overlaps')
+    expect(c.said).not.toContain('Shares a passage')
+  })
+
+  test('quoting the same sentence but changing other words is named too, as able to both apply', () => {
+    const a = file('The claim has a tpyo in it and it runs on', 'The claim has a typo in it and it runs on')
+    const b = file('runs on for long enough', 'runs on for long enough, really')
+    expect(b.said).toContain(`Shares a passage with ${a.id}`)
+    expect(b.said).not.toContain('only one of the two can apply')
   })
 
   test('there is still no tool that accepts', () => {
