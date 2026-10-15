@@ -31,6 +31,13 @@ export function useBuild(epic: string | null) {
   const [part, setPart] = useState<PartHeard | null>(null)
   const [compiling, setCompiling] = useState(false)
   const asked = useRef(0)
+  /* A compile request stays open until its compile ends, and a newer one makes the server drop the older compile: the older request is let go of here at once, or a burst of changes to the files holds every connection the browser allows and nothing else gets through. */
+  const open = useRef<AbortController | null>(null)
+  const supersede = () => {
+    open.current?.abort()
+    open.current = new AbortController()
+    return open.current.signal
+  }
   /** The picked files last asked about, by either door: an answer about any others is about a selection the page has left. */
   const wanted = useRef('')
   const on = useRef(epic)
@@ -72,7 +79,7 @@ export function useBuild(epic: string | null) {
     const mine = (asked.current += 1)
     setCompiling(true)
     try {
-      const body = await post('/api/compile', { epic: epicNow })
+      const body = await post('/api/compile', { epic: epicNow }, {}, supersede())
       if (mine !== asked.current) return
       if (body.ok === true && body.build) setBuild(body.build as BuildStatus)
     } catch {
@@ -112,7 +119,7 @@ export function useBuild(epic: string | null) {
     wanted.current = key
     setCompiling(true)
     try {
-      const body = await post('/api/part', { epic: epicNow }, { files: [...files], ...ask })
+      const body = await post('/api/part', { epic: epicNow }, { files: [...files], ...ask }, supersede())
       if (mine !== asked.current) return
       if (body.ok === true && body.build) setBuild(body.build as BuildStatus)
       if (body.ok === true) setPart({ files: key, status: (body.part as PartStatus | null | undefined) ?? null })

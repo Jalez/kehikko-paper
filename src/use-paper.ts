@@ -460,6 +460,22 @@ export function usePaper(framed: boolean) {
     [askAgain, setPaper],
   )
 
+  /** Ask for the list now, and answer it: after something changed the files, the offsets in the one held are of the old text. */
+  const refreshProposals = useCallback(async (): Promise<Proposal[] | null> => {
+    const paper = showing.current
+    if (!paper) return null
+    try {
+      const body = await json('/api/proposals', { epic: paper.epic })
+      if (!Array.isArray(body.proposals)) return null
+      setProposals(body.proposals as Proposal[])
+      const next = factsOf(body)
+      if (next) setFacts(next)
+      return body.proposals as Proposal[]
+    } catch {
+      return null
+    }
+  }, [])
+
   const waiting = useRef<Proposal[]>([])
   waiting.current = proposals
 
@@ -565,6 +581,7 @@ export function usePaper(framed: boolean) {
       proposals,
       facts,
       review,
+      refreshProposals,
       answerOne,
       acceptAll,
       before,
@@ -574,7 +591,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, facts, review, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, activity, hostDraws, answers],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, facts, review, refreshProposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, activity, hostDraws, answers],
   )
 }
 

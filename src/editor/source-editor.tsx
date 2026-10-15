@@ -1,10 +1,10 @@
 import { StreamLanguage } from '@codemirror/language'
 import { stex } from '@codemirror/legacy-modes/mode/stex'
 import { historyField } from '@codemirror/commands'
-import { EditorSelection, EditorState, Prec, StateEffect, StateField, type Extension } from '@codemirror/state'
+import { EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
+import CodeMirror, { ExternalChange, type ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 
 /**
  * The `.tex` file, in an editor.
@@ -109,9 +109,19 @@ export interface EditorProps {
    * Kept in memory only; the page drops a file's entry when the disk's text
    * replaces the editor's.
    */
-  memory?: { state: Map<string, EditorState>; key: string }
+  memory?: { state: Map<string, EditorState>; key: string; control?: Map<string, EditorControl> }
   /** The nonce of the last jump this editor's file has landed, kept by the page: an editor mounted again does not land it twice. */
   landed?: { current: number }
+}
+
+/**
+ * What the page may ask an open editor to do on its own behalf: put text back
+ * as one undoable step (Cancel on a change that is already in the file), so
+ * that the person's own history holds it and nothing is replaced under them.
+ */
+export interface EditorControl {
+  /** All of these, in one transaction: one step of undo. Offsets into the text as it is now. */
+  replace(changes: readonly { from: number; to: number; insert: string }[]): void
 }
 
 /** The height, in pixels, of the boundary label that lies over the top of the column: a row put at the top is put under it. */
@@ -534,6 +544,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
   const stopped = useRef(onStopEditing)
   stopped.current = onStopEditing
   const ownDrafts = useRef(new Map<string, string>())
+  const typedAt = useRef(0)
   const remembered = useRef(memory)
   remembered.current = memory
   /* What the editor starts from: the state it had when it was last on screen,
@@ -597,6 +608,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
       EditorView.updateListener.of((update: ViewUpdate) => {
         const kept = remembered.current
         if (kept && (update.docChanged || update.selectionSet)) kept.state.set(kept.key, update.state)
+        if (update.docChanged && !update.transactions.some((tr) => tr.annotation(ExternalChange))) typedAt.current = Date.now()
         if (!update.selectionSet && !update.docChanged) return
         const main = update.state.selection.main
         select.current({ from: main.from, to: main.to })
@@ -644,6 +656,46 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     if (!view) return
     view.dispatch({ effects: setMarks.of({ mark, problems }) })
   }, [mark, problems, value])
+
+  /* The text changed from outside (the disk's version, a merge): put in as the
+     SMALLEST change that makes the two equal, so the caret and the scroll stay
+     where they are and what the person has typed is not replaced. Done before
+     the wrapper's own whole-text replacement would be (a layout effect runs
+     first), and not while the person is typing: the wrapper holds those back. */
+  useLayoutEffect(() => {
+    const view = ref.current?.view
+    if (!view) return
+    const now = view.state.doc.toString()
+    if (now === value || Date.now() - typedAt.current < 500) return
+    const room = Math.min(now.length, value.length)
+    let a = 0
+    while (a < room && now.charCodeAt(a) === value.charCodeAt(a)) a++
+    if (a > 0 && now.charCodeAt(a - 1) >= 0xd800 && now.charCodeAt(a - 1) <= 0xdbff) a--
+    let b = 0
+    while (b < room - a && now.charCodeAt(now.length - 1 - b) === value.charCodeAt(value.length - 1 - b)) b++
+    if (b > 0 && now.charCodeAt(now.length - b) >= 0xdc00 && now.charCodeAt(now.length - b) <= 0xdfff) b--
+    view.dispatch({
+      changes: { from: a, to: now.length - b, insert: value.slice(a, value.length - b) },
+      annotations: [ExternalChange.of(true), Transaction.addToHistory.of(false)],
+    })
+  }, [value])
+
+  /* Where the page can reach this editor to put text back as one undoable step. */
+  useEffect(() => {
+    const control = memory?.control
+    if (!control || !memory) return
+    const at = memory.key
+    control.set(at, {
+      replace(changes) {
+        const view = ref.current?.view
+        if (!view) return
+        view.dispatch({ changes: changes.map((one) => ({ from: one.from, to: one.to, insert: one.insert })) })
+      },
+    })
+    return () => {
+      control.delete(at)
+    }
+  }, [memory?.control, memory?.key])
 
   /* Suggestions are decorations over the text, set after `value` for the same
      reason marks are, and mapped through typing by the editor itself — so a

@@ -1237,6 +1237,21 @@ export function answer(
   body: Record<string, unknown> | null,
   ticket: string | null = null,
 ): Reply | null {
+  if (!process.env.PAPER_TIMING) return answerOf(method, path, query, body, ticket)
+  const at = performance.now()
+  const reply = answerOf(method, path, query, body, ticket)
+  const took = performance.now() - at
+  if (took > 150) console.log(`SLOW ${method} ${path} ${Math.round(took)}ms`)
+  return reply
+}
+
+function answerOf(
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: Record<string, unknown> | null,
+  ticket: string | null = null,
+): Reply | null {
   if (path === '/healthz') return ok({ ok: true, id: ID, version: VERSION })
 
   if (path === '/mcp') {

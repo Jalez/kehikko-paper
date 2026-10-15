@@ -16,7 +16,7 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import { SourceColumn, type ColumnRegion } from './editor/source-column.tsx'
-import type { Editor } from './editor/source-editor.tsx'
+import type { Editor, EditorControl } from './editor/source-editor.tsx'
 import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, heldBy, inProject, narrowed, noPage, pageOfSheet, pagesDrawn, pagesOfSheets, partOf, tabsOf, ticksOf } from './focus.ts'
 import { HeaderFallback } from './header-fallback.tsx'
 import { headerOf } from './header.ts'
@@ -1533,7 +1533,24 @@ export function Workspace({
       }
       const order = stopsNow.current.map((one) => one.key)
       if (decision === 'accept') accepted.current = true
-      const left = await answerOne(asked, decision, {
+      /* Cancelling a change that is already in the file, in an editor that is
+         open: the old text goes back as ONE step of the person's own undo, and
+         the save that follows is theirs like any other. The baseline is not
+         touched, so the change is simply gone. */
+      let left: Proposal[] | null = null
+      if (decision === 'reject' && stop.members.every((m) => m.kind === 'disk')) {
+        const control = controls.current.get(`${paper.epic}\0${stop.file}`)
+        const spots = (placedBy.get(stop.file) ?? NO_PLACED).filter(({ p }) => stop.ids.includes(p.id))
+        if (control && spots.length === stop.members.length && spots.every(({ at }) => at !== null)) {
+          control.replace(spots.map(({ at }) => ({ from: at!.from, to: at!.to, insert: at!.replacement })))
+          if (await source.flush()) {
+            wire.askAgain()
+            /* The offsets of what is still waiting are of the text before this: ask again. */
+            left = (await wire.refreshProposals()) ?? proposalsNow.current.filter((p) => !stop.ids.includes(p.id))
+          }
+        }
+      }
+      left ??= await answerOne(asked, decision, {
         ...(decision === 'accept' && Object.keys(replaces).length ? { replaces } : {}),
         ...(confirm ? { confirm } : {}),
       })
@@ -1568,7 +1585,7 @@ export function Workspace({
          pointer started: it stays armed if it was, or if the press was on a tag. */
       visit(next, { smooth: true, arm: wasArmed || onKey !== undefined })
     },
-    [currentStop, currentId, answerOne, listed, visit],
+    [currentStop, currentId, answerOne, listed, visit, paper.epic, placedBy, source, wire],
   )
   const walk = useCallback(
     (by: 1 | -1) => {
@@ -1862,6 +1879,7 @@ export function Workspace({
      lives, so that scrolling a region out of the mounted set and back does
      not lose its undo. A file the disk's text replaced starts afresh. */
   const histories = useRef(new Map<string, EditorState>())
+  const controls = useRef(new Map<string, EditorControl>())
   useEffect(() => {
     if (source.changed) histories.current.delete(`${paper.epic}\0${source.changed.file}`)
   }, [source.changed?.n])
@@ -1878,7 +1896,7 @@ export function Workspace({
         key={`${paper.epic}\0${name}`}
         embedded={embedded}
         landed={landed}
-        memory={{ state: histories.current, key: `${paper.epic}\0${name}` }}
+        memory={{ state: histories.current, key: `${paper.epic}\0${name}`, control: controls.current }}
         value={held.text}
         onChange={(text) => {
           /* Typing, Backspace, Delete: the keys are the person's again. */
