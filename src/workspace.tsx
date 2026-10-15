@@ -1338,17 +1338,26 @@ export function Workspace({
   }, [])
   const stopsNow = useRef(stops)
   stopsNow.current = stops
+  /* Answer a stop: the current one (header, keys) or the one whose tag was
+     pressed. One path; `onKey` only says which stop it is. */
   const answerCurrent = useCallback(
-    async (decision: 'accept' | 'reject') => {
-      if (!currentId || !currentKey) return
-      const asked = editing ?? currentId
-      const typed = editing ? drafts.current.get(editing) : undefined
+    async (decision: 'accept' | 'reject', onKey?: string) => {
+      const header = onKey === undefined
+      const stop = header ? currentStop : stopsNow.current.find((one) => one.key === onKey)
+      if (!stop || (header && !currentId)) return
+      const currentKey = stop.key
+      /* The edit box that is open answers with its text; from a tag, only when it is in that tag's stop. */
+      const mine = header ? editing : editing !== null && stop.ids.includes(editing) ? editing : null
+      const asked = mine ?? (header ? currentId! : stop.lead.id)
+      const typed = mine ? drafts.current.get(mine) : undefined
       const order = stopsNow.current.map((one) => one.key)
       if (decision === 'accept') accepted.current = true
       const left = await answerOne(asked, decision, decision === 'accept' ? typed : undefined)
       if (!left) return
-      setEditing(null)
-      drafts.current.clear()
+      if (mine || header) {
+        setEditing(null)
+        drafts.current.clear()
+      }
       const remain = stopsOf(left, listed)
       if (!remain.length) {
         setNavigated(null)
@@ -1365,7 +1374,7 @@ export function Workspace({
       }
       visit(remain[0]!)
     },
-    [currentId, currentKey, editing, answerOne, listed, visit],
+    [currentStop, currentId, editing, answerOne, listed, visit],
   )
   const walk = useCallback(
     (by: 1 | -1) => {
@@ -1640,6 +1649,7 @@ export function Workspace({
                 suggestions={inline}
                 drafts={drafts.current}
                 onToggleSuggestion={toggleProposed}
+                onAnswerSuggestion={(key, decision) => void answerCurrent(decision, key)}
                 onPickSuggestion={(id) => {
                   const one = proposals.find((p) => p.id === id)
                   if (one) setNavigated(stopKeyOf(one))

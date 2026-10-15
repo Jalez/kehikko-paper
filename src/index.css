@@ -462,6 +462,26 @@
   color: inherit;
   cursor: pointer;
 }
+.cm-sugg-answer {
+  margin-left: 0.3rem;
+  white-space: nowrap;
+}
+.cm-sugg-glyph {
+  margin-right: 0.2rem;
+  font-weight: 700;
+}
+.cm-sugg-accept {
+  color: var(--arrived);
+  background: color-mix(in oklch, var(--arrived) 10%, transparent);
+}
+.cm-sugg-cancel {
+  color: var(--gone);
+  background: color-mix(in oklch, var(--gone) 10%, transparent);
+}
+.cm-sugg-toggle:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
 .cm-sugg-note {
   margin-left: 0.3rem;
   font-style: italic;
