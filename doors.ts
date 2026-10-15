@@ -6,11 +6,27 @@ import { readChapters, republish, setChapters } from './chapters.ts'
 import { buildStatus, compile, compilePart, partStatus, readPdf, syncForward, syncReverse } from './compile/build.ts'
 import { installer } from './compile/install.ts'
 import type { PieceId } from './compile/toolchain.ts'
-import { MAX_EDIT_BYTES } from './latex/edit.ts'
+import { MAX_EDIT_BYTES, bytesOf } from './latex/edit.ts'
 import { plainText, spanOf } from './latex/parse.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
-import { drop, keep, lostBecause, pendingFor, proposalById, rebaseAll, remeasure } from './proposals.ts'
+import type { Proposal } from './latex/propose.ts'
+import {
+  groupOf,
+  keep,
+  lostBecause,
+  mintToken,
+  outcomesFor,
+  overlaps,
+  pendingFor,
+  proposalById,
+  rebaseAll,
+  remeasure,
+  reviseOne,
+  settle,
+  withdraw,
+  findInProject,
+} from './proposals.ts'
 import {
   MAIN,
   PAPERS_AT,
@@ -27,6 +43,7 @@ import {
   whereItWouldGo,
   writeFile,
   writeRange,
+  writeRanges,
   type StartFrom,
 } from './store.ts'
 import { templateList } from './templates.ts'
@@ -471,10 +488,13 @@ const PROJECT_ARG = {
  * the paper: nothing is deleted or overwritten, a second identical call files
  * a second suggestion, and nothing leaves this machine.
  */
-const WRITES = new Set(['propose_edit'])
+const WRITES = new Set(['propose_edit', 'revise_edit', 'withdraw_edit'])
+/* Overwriting or removing the agent's OWN pending suggestion is destructive in
+   the `toolEffect` sense: the earlier text is gone. Neither touches a paper. */
+const DESTRUCTIVE = new Set(['revise_edit', 'withdraw_edit'])
 function annotationsOf(name: string): { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean } {
   const reads = !WRITES.has(name)
-  return { readOnlyHint: reads, destructiveHint: false, idempotentHint: reads, openWorldHint: false }
+  return { readOnlyHint: reads, destructiveHint: DESTRUCTIVE.has(name), idempotentHint: reads || name === 'withdraw_edit', openWorldHint: false }
 }
 
 const TOOLS: Record<string, { description: string; schema: object; run: ToolCall }> = {
@@ -684,6 +704,13 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         find: { type: 'string', description: 'The exact text to replace. Must appear exactly once in that file.' },
         replace: { type: 'string', description: 'What goes there. Empty deletes it.' },
         why: { type: 'string', description: 'One sentence the reader sees beside the change, saying why.' },
+        group: {
+          type: 'string',
+          description:
+            'Optional. Suggestions filed with the same group id are taken together: the reader accepts or rejects '
+            + 'them as one, and they apply all or none. Use it for a move (an insertion and a deletion). A group '
+            + 'lives in one file.',
+        },
       },
       required: ['project', 'epic', 'find', 'replace', 'why'],
     },
@@ -726,6 +753,27 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const worked = propose(source, find, replace)
       if ('why' in worked) return worked.why
 
+      const group = str(args.group, 60)
+      const first = source.indexOf(find)
+      const window = { from: bytesOf(source.slice(0, first)), to: bytesOf(source.slice(0, first + find.length)) }
+      const touching = overlaps(named.project, epic, { file, from: worked.from, to: worked.to, window, find }, (p) => {
+        /* Where the other suggestion's quoted passage sits in the file now. */
+        if (!p.asked) return null
+        const at = source.indexOf(p.asked.find)
+        return at === -1 ? null : { from: bytesOf(source.slice(0, at)), to: bytesOf(source.slice(0, at + p.asked.find.length)) }
+      })
+      if (group) {
+        const mates = pendingFor(named.project, epic).filter((p) => p.group === group)
+        if (mates.some((p) => p.file !== file)) {
+          return `Group "${group}" already has a suggestion in another file. A group lives in one file, so it can be applied in one atomic write.`
+        }
+        const clash = touching.find((t) => t.conflict && mates.some((p) => p.id === t.id))
+        if (clash) {
+          return `That change covers the same words as ${clash.id}, which is in group "${group}", so the group could never apply as a whole. Revise that one instead.`
+        }
+      }
+      const issued = mintToken()
+
       const filed = keep(named.project, epic, {
         file,
         from: worked.from,
@@ -738,12 +786,133 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         /* Kept so the suggestion can be measured again if the file changes
            under it before anybody answers — see `refile`. */
         asked: { find, replace },
+        tokenHash: issued.hash,
+        ...(group ? { group } : {}),
       })
       if (!filed.ok) return filed.why
+      const lines = [
+        `Filed as ${filed.proposal.id}. It is shown in the source where it sits, and nothing is written until the `
+          + 'person accepts it. Nothing on this door can accept it for them.',
+        `Revision token: ${issued.token}`,
+        'Keep that token. revise_edit and withdraw_edit need it, it is shown nowhere else and cannot be recovered. '
+          + 'To change this suggestion while it is pending, revise it rather than filing a second one.',
+      ]
+      for (const t of touching) {
+        lines.push(
+          t.conflict
+            ? `Overlaps ${t.id}: it covers some of the same words, so only one of the two can apply — accepting one drops the other. Both are pending; nothing was superseded. If ${t.id} is yours, revise_edit it instead.`
+            : `Shares a passage with ${t.id}: you quoted overlapping text, but the two change different words, so both can apply. If you meant this to replace ${t.id}, revise_edit it instead.`,
+        )
+      }
+      if (group) lines.push(`Group "${group}": the reader answers every suggestion in the group together.`)
+      return lines.join('\n')
+    },
+  },
+
+  /**
+   * Change the words or the reason of a suggestion YOU filed, while it waits.
+   *
+   * The boundary of this door is unchanged: this touches only a pending
+   * suggestion, proves it is the filer's by the token `propose_edit` returned,
+   * and cannot accept anything. The paper on disk is never opened for writing.
+   */
+  revise_edit: {
+    description:
+      'Revise a suggestion you filed with propose_edit, while it is still pending: new replace text and/or a new '
+      + 'why, keeping its id. Needs the revision token propose_edit returned. The find text is fixed — a different '
+      + 'find is a new suggestion. The reader sees it marked as revised. Refused, with the reason, if it was '
+      + 'already accepted, rejected or withdrawn, or the token is not its own. This cannot accept anything.',
+    schema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_ARG,
+        epic: { type: 'string', description: 'Optional; the suggestion is found by id within the project.' },
+        id: { type: 'string', description: 'The id propose_edit returned.' },
+        token: { type: 'string', description: 'The revision token propose_edit returned for that id.' },
+        replace: { type: 'string', description: 'The new text that goes where find is. Empty deletes it.' },
+        why: { type: 'string', description: 'The new one-sentence reason.' },
+      },
+      required: ['project', 'id', 'token'],
+    },
+    run(args) {
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const id = str(args.id, 80)
+      const token = typeof args.token === 'string' ? args.token.slice(0, 200) : ''
+      const hasReplace = typeof args.replace === 'string'
+      const why = str(args.why, MAX_WHY)
+      if (!hasReplace && !why) return 'Nothing to revise: give a new replace, a new why, or both.'
+      const found = findInProject(named.project, id)
+      if (!found) {
+        const r = reviseOne(named.project, str(args.epic, MAX_SLUG), id, token, () => ({ refuse: '' }))
+        return r.ok ? '' : r.why
+      }
+      const { epic } = found
+      /* Measure against the disk first, so a revision is made against the file as it is. */
+      settled(named.project, epic)
+      const made = reviseOne(named.project, epic, id, token, (current) => {
+        if (!hasReplace) return { ...current, why: why || current.why }
+        if (!current.asked) return { refuse: 'This suggestion carries no quoted text, so its words cannot be revised. File a new one.' }
+        const replace = (args.replace as string).slice(0, MAX_TEXT)
+        if (replace.includes('\0')) return { refuse: 'That text holds a NUL byte, which a .tex file does not.' }
+        const source = readSource(epic, current.file, named.project)
+        const was = hashesOf(epic, named.project)?.[current.file]
+        if (source === null || !was) return { refuse: `${current.file} can no longer be read, so the suggestion cannot be measured.` }
+        const worked = propose(source, current.asked.find, replace)
+        if ('why' in worked) return { refuse: worked.why }
+        const mates = groupOf(named.project, epic, current).filter((p) => p.id !== current.id)
+        if (mates.some((p) => p.from < worked.to && worked.from < p.to)) {
+          return { refuse: 'That would cover the same words as another suggestion in its group, so the group could not apply as a whole.' }
+        }
+        return {
+          ...current,
+          from: worked.from,
+          to: worked.to,
+          text: worked.text,
+          was_text: worked.was_text,
+          was,
+          why: why || current.why,
+          asked: { find: current.asked.find, replace },
+        }
+      })
+      if (!made.ok) return made.why
       return (
-        `Filed as ${filed.proposal.id}. It is shown beside the source as a diff, in green and red, and `
-        + 'nothing is written until the person accepts it. Nothing on this door can accept it for them.'
+        `Revised ${made.proposal.id} (revision ${made.proposal.revisions}). It stays pending under the same id and `
+        + 'the reader sees it marked as revised. Nothing is written until the person accepts it.'
       )
+    },
+  },
+
+  /**
+   * Take back a suggestion YOU filed, while it waits. It leaves the reader's
+   * view and is kept only as a "withdrawn" line in list_proposals.
+   */
+  withdraw_edit: {
+    description:
+      'Withdraw a suggestion you filed with propose_edit, while it is still pending. Needs its revision token. It '
+      + 'disappears from the reader and is listed by list_proposals as withdrawn. If it belongs to a group, the '
+      + 'whole group is withdrawn. Refused, with the reason, if it was already answered or the token is not its '
+      + 'own. This cannot accept anything.',
+    schema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_ARG,
+        epic: { type: 'string', description: 'Optional; the suggestion is found by id within the project.' },
+        id: { type: 'string', description: 'The id propose_edit returned.' },
+        token: { type: 'string', description: 'The revision token propose_edit returned for that id.' },
+      },
+      required: ['project', 'id', 'token'],
+    },
+    run(args) {
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const id = str(args.id, 80)
+      const token = typeof args.token === 'string' ? args.token.slice(0, 200) : ''
+      const done = withdraw(named.project, id, token)
+      if (!done.ok) return done.why
+      return done.ids.length === 1
+        ? `Withdrew ${done.ids[0]}. It is no longer shown to the reader.`
+        : `Withdrew ${done.ids.length} suggestions that were filed together as a group (${done.ids.join(', ')}). They are no longer shown to the reader.`
     },
   },
 
@@ -776,12 +945,39 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       if ('error' in named) return named.error
       const gone = lostBecause(settled(named.project, epic))
       const held = pendingFor(named.project, epic)
-      if (!held.length) return gone || 'Nothing is waiting on that paper.'
+      const recent = outcomesFor(named.project, epic).slice(0, 10).map((o) => {
+        const how =
+          o.state === 'accepted' && o.editedByAuthor
+            ? 'accepted, adjusted by the author'
+            : o.state === 'dropped'
+              ? 'dropped, the text it was about changed'
+              : o.state
+        return `${o.id}\t${o.file}\tstate: ${how}`
+      })
+      if (!held.length) return [gone || 'Nothing is waiting on that paper.', ...recent].join('\n')
       /* What was dropped is said first, because an agent reading the list to
-         learn "was mine accepted" has to be able to tell dropped from taken. */
-      return [...(gone ? [gone] : []), ...held.map((p) => `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}`)].join(
-        '\n',
-      )
+         learn "was mine accepted" has to be able to tell dropped from taken.
+         Never the token: `pendingFor` has already stripped it. */
+      /* The reading order a person walks them in: the paper's files as the
+         paper names them, then position in the file; a group is one stop. */
+      const files = readPaper(epic, named.project)?.files ?? []
+      const walked = [...held].sort((x, y) => files.indexOf(x.file) - files.indexOf(y.file) || x.from - y.from)
+      const orderOf = new Map<string, number>()
+      const seen = new Map<string, number>()
+      for (const p of walked) {
+        const stop = p.group ? `g:${p.group}` : `p:${p.id}`
+        if (!seen.has(stop)) seen.set(stop, seen.size + 1)
+        orderOf.set(p.id, seen.get(stop)!)
+      }
+      const lines = held.map((p) => {
+        const extras = [
+          `order: ${orderOf.get(p.id)} of ${seen.size}`,
+          p.revisions ? `revised ${p.revisions}x` : '',
+          p.group ? `group: ${p.group}` : '',
+        ].filter(Boolean)
+        return `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}\t(${extras.join(', ')})`
+      })
+      return [...(gone ? [gone] : []), ...lines, ...recent].join('\n')
     },
   },
 }
@@ -835,12 +1031,15 @@ function mcp(rpc: Rpc): Reply {
       serverInfo: { name: ID, version: VERSION },
       instructions:
         'The papers the epics in this workspace are aimed at: LaTeX on disk, edited as source beside its compiled ' +
-        'PDF. Four tools read, one lists what is waiting and one suggests. There is deliberately no tool that ' +
+        'PDF. Four tools read, one lists what is waiting, one suggests and two revise or withdraw your own pending suggestion. There is deliberately no tool that ' +
         'EDITS: propose_edit puts a change in front of the person working on the paper as a diff of the .tex, and ' +
         'the file is untouched until they accept it — nothing on this door can accept it for them, and there is ' +
         'no argument that skips them. Use it for a change somebody should see before it lands; it takes markup as ' +
         'well as prose. For a new file or a restructuring, edit the .tex directly with the tools you already ' +
-        'have: a paper lives in a repository with a history. It reads no tracker and holds no credential, so ' +
+        'have: a paper lives in a repository with a history. propose_edit returns a revision token: to change or ' +
+        'take back a suggestion while it is pending, call revise_edit or withdraw_edit with that token rather than ' +
+        'filing a replacement — they touch only your own pending suggestion and cannot accept it. A move is an ' +
+        'insertion and a deletion filed with the same group. It reads no tracker and holds no credential, so ' +
         'nothing here can tell you whether the work a paper cites has landed.',
     })
   }
@@ -1190,8 +1389,10 @@ export function answer(
        never opened. A rejected suggestion leaves the paper byte-identical
        because there is no path from here to a filesystem call at all. */
     if (decision === 'reject') {
-      if (!proposalById(project, epic, id)) return bad('There is no suggestion by that name waiting here.', 404)
-      drop(project, epic, id)
+      const one = proposalById(project, epic, id)
+      if (!one) return bad('There is no suggestion by that name waiting here.', 404)
+      /* A group is answered as one: half a move is not a change anybody asked for. */
+      for (const member of groupOf(project, epic, one)) settle(project, epic, member.id, 'rejected')
       return ok({ ok: true, proposals: pendingFor(project, epic) })
     }
 
@@ -1200,11 +1401,72 @@ export function answer(
     const proposal = proposalById(project, epic, id)
     if (!proposal) return bad('There is no suggestion by that name waiting here.', 404)
 
-    const written = writeRange(
-      epic,
-      { file: proposal.file, from: proposal.from, to: proposal.to, text: proposal.text, was: proposal.was },
-      project,
-    )
+    /* The author's own wording, where they changed the proposed text before
+       accepting. `replaces` is id -> the whole replacement for what the agent
+       quoted (the window the person saw and edited, not the narrowed middle);
+       `replace` is shorthand for the suggestion `id` names. A value equal to
+       what the agent proposed is not an edit. */
+    const given: Record<string, string> = {}
+    if (body?.replaces && typeof body.replaces === 'object') {
+      for (const [k, v] of Object.entries(body.replaces as Record<string, unknown>)) {
+        if (typeof v === 'string' && v.length <= MAX_TEXT && !v.includes('\0')) given[k.slice(0, 80)] = v
+      }
+    }
+    if (typeof body?.replace === 'string' && body.replace.length <= MAX_TEXT && !body.replace.includes('\0')) {
+      given[id] = body.replace
+    }
+    const edited = (m: Proposal) => Object.hasOwn(given, m.id) && given[m.id] !== (m.asked?.replace ?? m.text)
+
+    let members = groupOf(project, epic, proposal)
+    const ranges = new Map<string, { from: number; to: number; text: string }>()
+    const adjusted = members.some(edited)
+    let was = proposal.was
+    if (adjusted) {
+      /* Measured against the disk FIRST, so the author's words are laid over
+         the text as it is now — or refused in words, with nothing accepted. */
+      const lostNow = lostBecause(settled(project, epic))
+      const again = proposalById(project, epic, id)
+      if (!again) {
+        return {
+          status: 409,
+          body: {
+            ok: false,
+            error:
+              (lostNow || 'The text this suggestion was about is no longer in the file, so it was dropped.')
+              + ' Nothing was accepted.',
+            stale: true,
+            paper: readPaper(epic, project),
+            proposals: pendingFor(project, epic),
+          },
+        }
+      }
+      members = groupOf(project, epic, again)
+      was = again.was
+      const source = readSource(epic, again.file, project)
+      for (const m of members) {
+        if (!edited(m)) continue
+        const worked = m.asked && source !== null ? propose(source, m.asked.find, given[m.id]!) : null
+        if (!worked || 'why' in worked) {
+          return bad(
+            `${worked && 'why' in worked ? worked.why : 'That suggestion cannot be adjusted.'} Nothing was accepted.`,
+            409,
+          )
+        }
+        ranges.set(m.id, { from: worked.from, to: worked.to, text: worked.text })
+      }
+    }
+    const edits = members.map((m) => ranges.get(m.id) ?? { from: m.from, to: m.to, text: m.text })
+    const stamps = new Set(members.map((m) => `${m.file}\0${m.was}`))
+    if (stamps.size !== 1) {
+      for (const m of members) settle(project, epic, m.id, 'dropped')
+      return bad('The suggestions in this group no longer describe the same version of one file, so none of them was applied.', 409)
+    }
+    const lead = members.find((m) => m.id === id) ?? members[0]!
+
+    const written =
+      members.length === 1
+        ? writeRange(epic, { file: lead.file, from: edits[0]!.from, to: edits[0]!.to, text: edits[0]!.text, was }, project)
+        : writeRanges(epic, { file: lead.file, was, edits }, project)
     if (!written.ok) {
       /*
        * A refused suggestion is dropped rather than left greyed out on the page.
@@ -1212,24 +1474,40 @@ export function answer(
        * The alternative was considered: keep it, mark it stale, let the reader
        * see that it existed. It is refused because a suggestion that cannot be
        * applied is not a decision anybody can still make — pressing Accept on
-       * it will refuse again, identically, for as long as it sits there, and an
-       * affordance that never works in the middle of somebody's paper is worse
-       * than an empty space. The reason travels back to the reader in this same
-       * answer, and the agent learns of it by `list_proposals` finding it gone.
+       * it will refuse again, identically, for as long as it sits there. The
+       * reason travels back to the reader in this same answer, and the agent
+       * learns of it by `list_proposals` finding it gone.
+       *
+       * An ADJUSTED accept is the exception: the author's typed words would be
+       * lost with it. The list is measured against the disk instead, which
+       * re-finds the quoted text where it still is and drops the suggestion only
+       * where it is not, and the answer says which — nothing is accepted.
        */
-      drop(project, epic, id)
+      let said = ''
+      if (adjusted && written.stale) {
+        said = lostBecause(settled(project, epic))
+        if (!proposalById(project, epic, id)) {
+          said = said || 'The text this suggestion was about is no longer in the file, so it was dropped.'
+        } else {
+          said = 'The file changed on disk since this page read it. Nothing was accepted; the suggestion now sits on the text as it is, and your edit is still here to accept again.'
+        }
+      } else {
+        for (const m of members) settle(project, epic, m.id, 'dropped')
+      }
       return {
         status: written.stale ? 409 : 400,
         body: {
           ok: false,
-          error: written.why,
+          error: said || written.why,
           stale: written.stale,
           paper: readPaper(epic, project),
           proposals: pendingFor(project, epic),
         },
       }
     }
-    drop(project, epic, id)
+    for (const m of members) {
+      settle(project, epic, m.id, 'accepted', edited(m) ? { editedByAuthor: true, final: given[m.id] } : {})
+    }
     /*
      * One accepted suggestion is one commit, and it is made HERE — after the
      * bytes are on disk and before anything else.
@@ -1258,7 +1536,17 @@ export function answer(
      * which is more of a reason to record it, not less: the commit is the only
      * place that change is written down as having happened.
      */
-    const message = acceptMessage(proposal.file, proposal.why, proposal.by)
+    const message = acceptMessage(
+      lead.file,
+      members.length > 1 ? members.map((m) => m.why).join('; ') : proposal.why,
+      proposal.by,
+    )
+    if (adjusted) {
+      message.body += `\n\nAdjusted by the author before accepting. The agent proposed: ${members
+        .filter((m) => edited(m))
+        .map((m) => JSON.stringify(m.asked?.replace ?? m.text))
+        .join(', ')}`
+    }
     /*
      * ONE FILE, and not the whole paper.
      *
@@ -1277,12 +1565,11 @@ export function answer(
      * rest belongs.
      */
     const made = commitPaper(paperRoot(epic, project), message.subject, message.body, [proposal.file])
-    const lost = rebaseAll(
-      project,
-      epic,
-      { file: proposal.file, from: proposal.from, to: proposal.to, text: proposal.text },
-      written.hash,
-    )
+    /* Latest range first, so the ranges still to be moved are above the one
+       just applied and keep their coordinates. */
+    let lost = 0
+    const applied = members.map((m, i) => ({ file: m.file, ...edits[i]! }))
+    for (const one of applied.sort((x, y) => y.from - x.from)) lost += rebaseAll(project, epic, one, written.hash)
     return ok({
       ok: true,
       paper: readPaper(epic, project),
@@ -1290,7 +1577,7 @@ export function answer(
       /* Two sentences that can both be true — a suggestion was dropped by the
          rebase AND the commit was refused — and the reader needs both. Joined
          rather than one overwriting the other. */
-      said: [droppedBecause(lost), aboutCommit(made)].filter((one) => one.length > 0).join(' '),
+      said: [adjusted ? 'Accepted with your changes.' : '', droppedBecause(lost), aboutCommit(made)].filter((one) => one.length > 0).join(' '),
     })
   }
 

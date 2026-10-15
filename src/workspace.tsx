@@ -24,7 +24,8 @@ import { pdfIsOf } from './pdf/of.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
 import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
-import { ProposalsPanel } from './proposals-panel.tsx'
+import { placement, position as positionOf, stopKeyOf, stopsOf, step as stepOf } from './suggestions.ts'
+import type { InlineSuggestion } from './editor/source-editor.tsx'
 import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
 import { useChapters } from './use-chapters.ts'
@@ -1220,7 +1221,7 @@ export function Workspace({
     attend(
       { file: first.file, from: first.from, to: first.to, proposal: first.id },
       `${fresh.length === 1 ? 'A change was suggested' : `${fresh.length} changes were suggested`} in ${first.file}. `
-        + 'What it would replace is marked; accept or reject it above the source.',
+        + 'It is marked where it sits; Accept or Reject it from the Run menu, under Suggestions.',
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proposals, wire.proposalsHeard])
@@ -1249,15 +1250,6 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [landedChange?.n])
 
-  const showProposal = useCallback(
-    (proposal: Proposal) => {
-      wandered()
-      go({ file: proposal.file, bytes: { from: proposal.from, to: proposal.to }, select: true, focus: true })
-      setTab('source')
-    },
-    [go, wandered],
-  )
-
   /* The files offered: all of them, or under a focus what the rule left —
      the picked parts' own, and the one in hand. */
   const listed = focus ? focus.shown : paper.files
@@ -1274,6 +1266,161 @@ export function Workspace({
      a press on the PDF or a section has taken the editor into another file. */
   const awayFromMain = focus === null && file !== MAIN_FILE && paper.files.includes(MAIN_FILE)
 
+  /* ---- Suggestions: drawn in the source, answered from the header -------- */
+
+  /* What is walked is what is shown (the narrowing rule): a part pick leaves
+     the suggestions about the files it shows. A group is one stop. */
+  const stops = useMemo(() => stopsOf(proposals, listed), [proposals, listed])
+  const [navigated, setNavigated] = useState<string | null>(null)
+  const [proposedKeys, setProposedKeys] = useState<ReadonlySet<string>>(() => new Set())
+  const [editing, setEditing] = useState<string | null>(null)
+  const drafts = useRef(new Map<string, string>())
+  const placed = useMemo(
+    () => (doc ? proposals.filter((p) => p.file === file).map((p) => ({ p, at: placement(p, doc.text, doc.eol) })) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [proposals, doc?.text, doc?.eol, file],
+  )
+  /* The one the caret is in, else the one last walked to. Compared by id, so a
+     keystroke inside a passage changes nothing declared to the host. */
+  const caretId = useMemo(() => {
+    const hit = placed.find(({ at }) => at !== null && selection.from >= at.from && selection.to <= at.to)
+    return hit ? hit.p.id : null
+  }, [placed, selection])
+  const caretStop = caretId ? stopKeyOf(proposals.find((p) => p.id === caretId)!) : null
+  const currentKey = caretStop ?? (navigated !== null && stops.some((one) => one.key === navigated) ? navigated : null)
+  const currentStop = stops.find((one) => one.key === currentKey) ?? null
+  const currentId = currentStop ? (caretId && currentStop.ids.includes(caretId) ? caretId : currentStop.lead.id) : null
+
+  const inline = useMemo<InlineSuggestion[]>(() => {
+    const out: InlineSuggestion[] = []
+    for (const { p, at } of placed) {
+      if (!at) continue
+      const key = stopKeyOf(p)
+      const stop = stops.find((one) => one.key === key)
+      if (!stop) continue
+      out.push({
+        id: p.id,
+        key,
+        from: at.from,
+        to: at.to,
+        replacement: at.replacement,
+        after: proposedKeys.has(key) || editing === p.id,
+        current: key === currentKey,
+        why: p.why,
+        revisions: p.revisions ?? 0,
+        count: stop.members.length,
+        tag: stop.lead.id === p.id,
+        editing: editing === p.id,
+        proposed: p.asked?.replace ?? p.text,
+      })
+    }
+    return out
+  }, [placed, stops, proposedKeys, editing, currentKey])
+
+  const visit = useCallback(
+    (stop: { key: string; file: string; lead: Proposal }) => {
+      setNavigated(stop.key)
+      wandered()
+      /* The same path as Go to a section: the file is opened (what was typed in
+         the one left is held, not lost), the place scrolled to and focused. */
+      go({ file: stop.file, bytes: { from: stop.lead.from, to: stop.lead.to }, focus: true })
+      setTab('source')
+    },
+    [go, wandered],
+  )
+  const toggleProposed = useCallback((key: string) => {
+    setProposedKeys((now) => {
+      const next = new Set(now)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+  const stopsNow = useRef(stops)
+  stopsNow.current = stops
+  const answerCurrent = useCallback(
+    async (decision: 'accept' | 'reject') => {
+      if (!currentId || !currentKey) return
+      const asked = editing ?? currentId
+      const typed = editing ? drafts.current.get(editing) : undefined
+      const order = stopsNow.current.map((one) => one.key)
+      if (decision === 'accept') accepted.current = true
+      const left = await answerOne(asked, decision, decision === 'accept' ? typed : undefined)
+      if (!left) return
+      setEditing(null)
+      drafts.current.clear()
+      const remain = stopsOf(left, listed)
+      if (!remain.length) {
+        setNavigated(null)
+        return
+      }
+      const at = order.indexOf(currentKey)
+      for (let n = 1; n <= order.length; n++) {
+        const key = order[(at + n) % order.length]
+        const stop = remain.find((one) => one.key === key)
+        if (stop) {
+          visit(stop)
+          return
+        }
+      }
+      visit(remain[0]!)
+    },
+    [currentId, currentKey, editing, answerOne, listed, visit],
+  )
+  const walk = useCallback(
+    (by: 1 | -1) => {
+      const to = stepOf(stopsNow.current, currentKey, by)
+      if (to) visit(to)
+    },
+    [currentKey, visit],
+  )
+  const editCurrent = useCallback((): string | null => {
+    if (editing) {
+      drafts.current.delete(editing)
+      setEditing(null)
+      return null
+    }
+    const one = proposals.find((p) => p.id === currentId)
+    if (!one) return 'Choose a suggestion first.'
+    if (!one.asked) return 'That suggestion carries no quoted text to edit; accept or reject it as it is.'
+    drafts.current.delete(one.id)
+    setEditing(one.id)
+    return null
+  }, [editing, proposals, currentId])
+  /* What was being edited is gone with the suggestion. */
+  useEffect(() => {
+    if (editing && !proposals.some((p) => p.id === editing)) {
+      drafts.current.delete(editing)
+      setEditing(null)
+    }
+  }, [proposals, editing])
+  useLayoutEffect(() => {
+    setNavigated(null)
+    setEditing(null)
+    setProposedKeys(new Set())
+    drafts.current.clear()
+  }, [paper.epic])
+  /* Keys, with the editor focused or not: Alt-] and Alt-[ walk, Alt-Enter
+     accepts, Alt-Shift-Enter rejects, Alt-E edits. By `code`, since Alt turns
+     these into other characters on a Mac. None is in the editor's own keymap. */
+  const acting = useRef({ walk, answerCurrent, editCurrent })
+  acting.current = { walk, answerCurrent, editCurrent }
+  useEffect(() => {
+    const on = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return
+      const run = (fn: () => void) => {
+        event.preventDefault()
+        fn()
+      }
+      if (event.code === 'BracketRight') run(() => acting.current.walk(1))
+      else if (event.code === 'BracketLeft') run(() => acting.current.walk(-1))
+      else if (event.code === 'Enter') run(() => void acting.current.answerCurrent(event.shiftKey ? 'reject' : 'accept'))
+      else if (event.code === 'KeyE' && !event.shiftKey) run(() => void acting.current.editCurrent())
+    }
+    window.addEventListener('keydown', on)
+    return () => window.removeEventListener('keydown', on)
+  }, [])
+
   const saved =
     source.state === 'saving' ? 'Saving…' : source.state === 'dirty' ? 'Unsaved' : source.state === 'failed' ? 'Not saved' : 'Saved'
 
@@ -1286,6 +1433,7 @@ export function Workspace({
   const items = headerOf({
     tab,
     proposals: proposals.length,
+    suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy },
     tabs,
     file,
     listed,
@@ -1361,6 +1509,19 @@ export function Workspace({
       void source.flush().then(() => (pickedKey !== null ? compilePart(pickedKey.split('\n'), { force: true }) : compile()))
     } else if (item === 'commit') {
       void source.flush().then(() => wire.save())
+    } else if (item === 'sg-next') {
+      walk(1)
+    } else if (item === 'sg-prev') {
+      walk(-1)
+    } else if (item === 'sg-accept') {
+      void answerCurrent('accept')
+    } else if (item === 'sg-reject') {
+      void answerCurrent('reject')
+    } else if (item === 'sg-all') {
+      accepted.current = true
+      void acceptAll()
+    } else if (item === 'sg-edit') {
+      return editCurrent() ?? undefined
     } else if (item === 'parts-each') {
       void chapters.each()
     } else {
@@ -1459,19 +1620,6 @@ export function Workspace({
             </span>
             {fallback && <HeaderFallback items={items} onPress={press} className="relative shrink-0" />}
           </div>
-          <ProposalsPanel
-            proposals={proposals}
-            busy={busy}
-            onDecide={(id, decision) => {
-              if (decision === 'accept') accepted.current = true
-              void answerOne(id, decision)
-            }}
-            onAcceptAll={() => {
-              accepted.current = true
-              void acceptAll()
-            }}
-            onShow={showProposal}
-          />
           <div ref={editorBox} className="min-h-0 flex-1">
             {doc ? (
               <EditorPane
@@ -1489,6 +1637,13 @@ export function Workspace({
                 }
                 problems={inThisFile}
                 theme={theme}
+                suggestions={inline}
+                drafts={drafts.current}
+                onToggleSuggestion={toggleProposed}
+                onPickSuggestion={(id) => {
+                  const one = proposals.find((p) => p.id === id)
+                  if (one) setNavigated(stopKeyOf(one))
+                }}
               />
             ) : (
               <p className="text-muted-foreground p-3 text-xs">Opening {file}…</p>

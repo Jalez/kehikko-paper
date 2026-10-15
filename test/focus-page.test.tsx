@@ -806,6 +806,11 @@ describe('the header the host draws', () => {
       'go section',
       'run compile',
       'run reveal',
+      'run sg-prev',
+      'run sg-next',
+      'run sg-accept',
+      'run sg-reject',
+      'run sg-edit',
     ])
     expect(declared('pane')!.value).toBe('source')
     /* Compile is the one an agent may press; nothing else says so, and a confirmed run could not. */

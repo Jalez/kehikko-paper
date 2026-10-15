@@ -458,38 +458,105 @@ describe('a suggested change', () => {
     return { id: 'p1', file: 'main.tex', from, to: from + 4, text: 'typo', was_text: 'tpyo', was: hashOf(MAIN), why: 'A misspelling.', by: 'an agent', at: 1, asked: { find: 'with a tpyo in', replace: 'with a typo in' } }
   }
 
-  test('is a diff of the source with its reason, and writes nothing by being shown', async () => {
+  const waiting = (n = 1) => waitFor(() => expect(lastEditor!.suggestions?.length).toBe(n))
+
+  test('is drawn in the source where it sits, with its reason, and writes nothing by being shown', async () => {
     proposals = [suggestion()]
     await open()
-    expect(await screen.findByText('A misspelling.')).toBeDefined()
-    const diff = document.querySelector('.proposal-diff')!
-    expect(diff.querySelector('del')?.textContent).toBe('tpyo')
-    expect(diff.querySelector('ins')?.textContent).toBe('typo')
-    expect(diff.textContent).toBe('with a tpyotypo in')
+    await waiting()
+    const one = lastEditor!.suggestions![0]!
+    /* The passage the agent quoted, and what would stand there: content only. */
+    expect(MAIN.slice(one.from, one.to)).toBe('with a tpyo in')
+    expect(one.replacement).toBe('with a typo in')
+    expect(one.why).toBe('A misspelling.')
+    expect(one.after).toBe(false)
     expect(posted('/api/proposal')).toHaveLength(0)
     expect(posted('/api/file')).toHaveLength(0)
     expect(disk['main.tex']).toBe(MAIN)
+    /* No Accept or Reject in the page's own view. */
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull()
   })
 
-  test('Accept and Reject are the person’s, and each is one post naming the decision', async () => {
-    proposals = [suggestion(), { ...suggestion(), id: 'p2', why: 'Another.' }]
+  test('Accept and Reject are the header’s, act on the one walked to, and each is one post naming the decision', async () => {
+    proposals = [suggestion(), { ...suggestion(), id: 'p2', asked: { find: 'with a tpyo in', replace: 'with a typo in!' }, why: 'Another.' }]
     await open()
-    await screen.findByText('A misspelling.')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Reject' })[0]!)
+    await waiting(2)
+    expect(row('sg-accept')!.disabled).toBe(true)
+    press('sg-next')
+    await waitFor(() => expect(row('sg-accept')!.disabled).toBe(false))
+    expect(row('sg-next')!.textContent).toContain('1 of 2')
+    press('sg-reject')
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
     expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'reject' })
-    await waitFor(() => expect(screen.queryByText('A misspelling.')).toBeNull())
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
+    /* After an answer the view moves to the next one that is left. */
+    await waitFor(() => expect(row('sg-accept')!.disabled).toBe(false))
+    press('sg-accept')
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(2))
     expect(posted('/api/proposal')[1]!.body).toMatchObject({ id: 'p2', decision: 'accept' })
+  })
+
+  test('Edit makes the proposed text the author’s, and Accept sends it', async () => {
+    proposals = [suggestion()]
+    await open()
+    await waiting()
+    press('sg-next')
+    await waitFor(() => expect(row('sg-edit')!.disabled).toBe(false))
+    press('sg-edit')
+    await waitFor(() => expect(lastEditor!.suggestions![0]!.editing).toBe(true))
+    lastEditor!.drafts!.set('p1', 'with a typing slip in')
+    expect(row('sg-accept')!.textContent).toContain('Accept my version')
+    press('sg-accept')
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'accept', replace: 'with a typing slip in' })
+  })
+
+  test('the keys walk and answer, with the editor focused or not', async () => {
+    proposals = [suggestion()]
+    const editor = await open()
+    await waiting()
+    editor.focus()
+    fireEvent.keyDown(editor, { code: 'BracketRight', altKey: true })
+    await waitFor(() => expect(row('sg-accept')!.disabled).toBe(false))
+    fireEvent.keyDown(editor, { code: 'Enter', altKey: true, shiftKey: true })
+    await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
+    expect(posted('/api/proposal')[0]!.body).toMatchObject({ id: 'p1', decision: 'reject' })
+  })
+
+  test('typing sends no header message and changes nothing declared', async () => {
+    proposals = [suggestion()]
+    const editor = await open()
+    await waiting()
+    for (const ch of 'abcdefghijklmn') fireEvent.change(editor, { target: { value: (editor as HTMLTextAreaElement).value + ch } })
+    expect(posted('/api/proposal')).toHaveLength(0)
+    /* Let the save the typing owes land here, not in the next test. */
+    await waitFor(() => expect(posted('/api/file').length).toBeGreaterThan(0), { timeout: 4000 })
+  })
+
+  test('without one chosen there is nothing to answer, and the reason is given', async () => {
+    await open()
+    expect(row('sg-accept')!.disabled).toBe(true)
+    expect(row('sg-accept')!.getAttribute('title')).toContain('No suggestion')
+    expect(row('sg-next')!.disabled).toBe(true)
+  })
+
+  test('the toggle switches a passage between the current and the proposed reading, in place', async () => {
+    proposals = [suggestion()]
+    await open()
+    await waiting()
+    act(() => lastEditor!.onToggleSuggestion!(lastEditor!.suggestions![0]!.key))
+    await waitFor(() => expect(lastEditor!.suggestions![0]!.after).toBe(true))
+    expect(lastEditor!.value).toBe(MAIN)
   })
 
   test('what was typed is saved BEFORE a suggestion is accepted, so the accept lands on the text on screen', async () => {
     proposals = [suggestion()]
     const editor = await open()
-    await screen.findByText('A misspelling.')
+    await waiting()
+    press('sg-next')
+    await waitFor(() => expect(row('sg-accept')!.disabled).toBe(false))
     fireEvent.change(editor, { target: { value: MAIN.replace('Fin', 'The end') } })
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
+    press('sg-accept')
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
     const order = calls.filter((one) => one.method === 'POST' && (one.path === '/api/file' || one.path === '/api/proposal')).map((one) => one.path)
     expect(order).toEqual(['/api/file', '/api/proposal'])
@@ -511,7 +578,7 @@ describe('a change that arrives', () => {
   test('a suggestion already waiting when the paper is opened takes nobody anywhere', async () => {
     proposals = [suggestion()]
     await open()
-    await screen.findByText('A misspelling.')
+    await waitFor(() => expect(lastEditor!.suggestions?.length).toBe(1))
     expect(source().getAttribute('data-mark')).toBe('')
     expect(source().getAttribute('data-jump')).toBe('')
   })
@@ -531,7 +598,9 @@ describe('a change that arrives', () => {
     await waitFor(() => expect(lastPreview!.marks.some((mark) => mark.foreign)).toBe(true))
     /* Rejected: there is nothing left to point at. */
     press('pane', 'source')
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    press('sg-next')
+    await waitFor(() => expect(row('sg-reject')!.disabled).toBe(false))
+    press('sg-reject')
     await waitFor(() => expect(source().getAttribute('data-mark')).toBe(''))
   })
 
@@ -593,7 +662,6 @@ describe('a change that arrives', () => {
     expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`)
     /* Its file name selects it in the source — the real editor reports that
        selection, as here — and a selection is followed on the PDF. */
-    fireEvent.click(screen.getByRole('button', { name: 'main.tex' }))
     act(() => lastEditor!.onSelect({ from: at, to: at + 4 }))
     await waitFor(() => expect(lastPreview!.reveal?.nonce).not.toBe(was))
   })
@@ -610,7 +678,9 @@ describe('a change that arrives', () => {
     await new Promise((done) => setTimeout(done, 40))
     expect(lastPreview!.reveal?.nonce).toBe(was)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
+    press('sg-next')
+    await waitFor(() => expect(row('sg-accept')!.disabled).toBe(false))
+    press('sg-accept')
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
     disk['main.tex'] = disk['main.tex']!.replace('tpyo', 'typo')
     wake()

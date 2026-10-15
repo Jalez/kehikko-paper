@@ -192,6 +192,6 @@ describe('/api/proposals is measured against the disk', () => {
     writeFileSync(main, SOURCE.replace('the one an agent will suggest a change to', 'rewritten by the author'))
     const said = tool('list_proposals', { project, epic })
     expect(said).toContain('One suggestion was dropped')
-    expect(tool('list_proposals', { project, epic })).toBe('Nothing is waiting on that paper.')
+    expect(tool('list_proposals', { project, epic })).toStartWith('Nothing is waiting on that paper.')
   })
 })

@@ -244,8 +244,8 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     'what the code does, your change can make that sentence false, and the paper is then part of ' +
     'the work rather than documentation of it. Cite by section when you say a change follows from ' +
     'the paper, so a reader can check you. To change the paper while somebody has it open, use ' +
-    'propose_edit on this module\'s MCP door: it shows the change as a diff of the .tex and the person ' +
-    'decides — nothing you can call there writes to a .tex, and it takes LaTeX markup as well as prose. ' +
+    'propose_edit on this module\'s MCP door: it shows the change in the .tex where it sits and the person ' +
+    'decides — nothing you can call there writes to a .tex (revise_edit and withdraw_edit change only your own pending suggestion), and it takes LaTeX markup as well as prose. ' +
     'Accepting one commits it to the paper\'s own repository. For a new file or a restructuring, edit the ' +
     '.tex on disk with the tools you already have. Never restate here what the paper already says, ' +
     'because two copies of an argument drift.',

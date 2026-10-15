@@ -353,7 +353,7 @@ export function usePaper(framed: boolean) {
   const before = useRef<() => Promise<boolean>>(async () => true)
 
   const answerOne = useCallback(
-    async (id: string, decision: 'accept' | 'reject'): Promise<Proposal[] | null> => {
+    async (id: string, decision: 'accept' | 'reject', replace?: string): Promise<Proposal[] | null> => {
       const paper = showing.current
       if (!paper || deciding.current) return null
       deciding.current = true
@@ -363,7 +363,7 @@ export function usePaper(framed: boolean) {
           setSaid('The file has to be saved before a suggestion about it can be accepted, and it could not be.')
           return null
         }
-        const body = await post('/api/proposal', { epic: paper.epic }, { id, decision })
+        const body = await post('/api/proposal', { epic: paper.epic }, { id, decision, ...(replace === undefined ? {} : { replace }) })
         const left = Array.isArray(body.proposals) ? (body.proposals as Proposal[]) : null
         if (left) setProposals(left)
         if (body.paper) setPaper(body.paper as Paper)
