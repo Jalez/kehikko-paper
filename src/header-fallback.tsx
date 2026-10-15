@@ -1,5 +1,5 @@
 import type { HeaderItemInput } from 'kehikot-module-protocol'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils.ts'
 
@@ -131,18 +131,24 @@ export function HeaderFallback({
             return (
               <div key={menu.title} role="group" aria-label={menu.title} className="border-b py-0.5 last:border-b-0">
                 <p className="text-muted-foreground px-1.5 text-[0.65rem]">{menu.title}</p>
-                {mine.map((item) => (
-                  <Rows
-                    key={item.id}
-                    item={item}
-                    armed={armed === item.id}
-                    onArm={setArmed}
-                    onPress={(press, stay) => {
-                      setArmed(null)
-                      if (!stay) setOpen(false)
-                      void onPress(press)
-                    }}
-                  />
+                {mine.map((item, i) => (
+                  <Fragment key={item.id}>
+                    {item.group && item.group !== mine[i - 1]?.group ? (
+                      <p className="text-muted-foreground truncate px-1.5 pt-0.5 text-[0.65rem]" data-group={item.group}>
+                        {item.group}
+                      </p>
+                    ) : null}
+                    <Rows
+                      item={item}
+                      armed={armed === item.id}
+                      onArm={setArmed}
+                      onPress={(press, stay) => {
+                        setArmed(null)
+                        if (!stay) setOpen(false)
+                        void onPress(press)
+                      }}
+                    />
+                  </Fragment>
                 ))}
               </div>
             )

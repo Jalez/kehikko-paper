@@ -953,12 +953,24 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       /* What was dropped is said first, because an agent reading the list to
          learn "was mine accepted" has to be able to tell dropped from taken.
          Never the token: `pendingFor` has already stripped it. */
-      const lines = held.map((p, i) => {
+      /* The reading order a person walks them in: the paper's files as the
+         paper names them, then position in the file; a group is one stop. */
+      const files = readPaper(epic, named.project)?.files ?? []
+      const walked = [...held].sort((x, y) => files.indexOf(x.file) - files.indexOf(y.file) || x.from - y.from)
+      const orderOf = new Map<string, number>()
+      const seen = new Map<string, number>()
+      for (const p of walked) {
+        const stop = p.group ? `g:${p.group}` : `p:${p.id}`
+        if (!seen.has(stop)) seen.set(stop, seen.size + 1)
+        orderOf.set(p.id, seen.get(stop)!)
+      }
+      const lines = held.map((p) => {
         const extras = [
+          `order: ${orderOf.get(p.id)} of ${seen.size}`,
           p.revisions ? `revised ${p.revisions}x` : '',
           p.group ? `group: ${p.group}` : '',
         ].filter(Boolean)
-        return `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}${extras.length ? `\t(${extras.join(', ')})` : ''}`
+        return `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}\t(${extras.join(', ')})`
       })
       return [...(gone ? [gone] : []), ...lines, ...recent].join('\n')
     },

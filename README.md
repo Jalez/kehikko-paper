@@ -33,7 +33,7 @@ Between them:
   **a press on the PDF goes to the line it came from**.
 - **An engine's complaint is a line to press.** A compile that fails shows the
   error with its file and line, and the last PDF that compiled stays on screen.
-- **A change an agent suggests is a diff** of the `.tex`, which a person accepts
+- **A change an agent suggests is drawn in the `.tex`**, where it sits, which a person accepts
   or rejects.
 
 Until version 2 this module parsed LaTeX itself and drew it as prose, and
@@ -688,25 +688,73 @@ own accord: places the caret, picks a file or a section, presses the PDF.
 ## A change an agent suggests
 
 The MCP door has `list_papers`, `list_sections`, `read_paper`, `read_source`,
-`list_proposals` and `propose_edit`, and **no tool that writes a `.tex`**.
+`list_proposals`, `propose_edit`, `revise_edit` and `withdraw_edit`, and **no
+tool that writes a `.tex`**. Nothing on it accepts a suggestion.
 
-`propose_edit` names the text to replace and what replaces it. The suggestion
-is held in this server's memory and shown above the source as a diff — what
-leaves in red, what arrives in green, the agent's reason beside it — with
-Accept and Reject. The file is untouched until a person presses Accept, which
-is an HTTP POST carrying a ticket printed into this page and never emitted on
-the MCP door. Accepting saves what the editor holds first, then splices, then
-commits to the paper's own repository when it has one.
+`propose_edit { project, epic, file?, find, replace, why, group? }` names the
+text to replace and what replaces it. The suggestion is held in this server's
+memory and drawn **in the source, where it sits**: the quoted passage is
+marked, and a button on it switches that passage between the current text and
+the proposed text, shown in place (the document itself is not changed). The
+agent's reason is beside it. The result is text: `Filed as <id>.`, then
+`Revision token: <token>`, then one line per overlapping suggestion
+(`Overlaps <id>: ... only one of the two can apply`), and a line for the
+group.
 
-Since version 2 a suggestion may contain LaTeX markup. It was refused before
-because a suggestion was drawn into rendered prose and a change inside
-`\cite{…}` had nowhere to be drawn; a diff of the source shows exactly the
-bytes that would change.
+- **Revise or withdraw.** The token is the proof that the same agent is
+  asking; the door has no other identity. `revise_edit { project, id, token,
+  replace?, why? }` changes the replacement and/or the reason of a still
+  pending suggestion, keeping its id (`find` is fixed; a different `find` is a
+  new suggestion). `withdraw_edit { project, id, token }` takes it back. Both
+  refuse in words unless the suggestion is pending and the token is its own
+  (not found, already accepted, already rejected, already withdrawn, not
+  yours). A revised suggestion is marked *revised* to the reader. Withdrawing
+  one of a group withdraws the group. Only the token's SHA-256 is kept, in
+  memory beside the suggestion; no read ever returns it. A suggestion with no
+  token cannot be revised by an agent; the author can still answer it.
+- **Overlap.** A new suggestion that covers words a pending one covers is
+  still filed, and the result names the other id and says only one can apply.
+  Nothing is silently superseded.
+- **Group.** Suggestions filed with the same `group` (a move is an insertion
+  and a deletion) are one decision: one mark says *2 changes*, they are
+  accepted or rejected together, and applied in one atomic write of one file —
+  if any no longer applies none does. A group lives in one file.
+- **`list_proposals`** lists what is pending with `order: n of m` (the
+  reading order below), `revised`, `group`, and recent outcomes with
+  `state: accepted | rejected | withdrawn | dropped` (and *adjusted by the
+  author* when the author changed the text first).
+
+### Answering one: the header, not the page
+
+The page draws only content over the source. Answering is the container's
+header (Run menu, under *Suggestions*; the first four are `pinned`, which a
+host that draws pinned buttons shows in the container's own header):
+
+| item | what it does | key |
+|---|---|---|
+| `sg-prev`, `sg-next` | walk the suggestions in reading order: the files as `main.tex` pulls them in (the Go menu's order), then position; a group is one stop; wraps; the label carries *2 of 5*. A stop in another file opens that file, scrolls to it and focuses it (typing in the file left is held). Under a part pick only the shown files are walked | `⌥[`, `⌥]` |
+| `sg-accept` | accept the current one (its group, atomically). While editing, *Accept my version* | `⌥↵` |
+| `sg-reject` | reject the current one (its group). The file is untouched | `⌥⇧↵` |
+| `sg-edit` | the proposed text becomes editable in place; Accept applies the author's text. The record keeps the agent's text and reason; the commit message says it was adjusted; the reader shows *adjusted* | `⌥E` |
+| `sg-all` | accept all, when more than one | |
+
+The current one is the one the caret is in, else the one last walked to, and is
+drawn a little stronger. With none current, Accept and Reject are disabled and
+say how to choose. After an answer the view moves to the next remaining
+suggestion. All of these are person-only (no `agents`). The keys are handled by
+the page (`event.code`, with the editor focused or not) and none is in the
+editor's own keymap. If the text the agent quoted has changed, accepting an
+adjusted text says so in words and accepts nothing; where it is still there it
+applies to it.
+
+A suggestion is accepted by an HTTP POST carrying a ticket printed into this
+page and never emitted on the MCP door. Accepting saves what the editor holds
+first, then splices, then commits to the paper's own repository when it has
+one.
 
 *Accept suggestions as they arrive* (View) accepts suggestions that arrive
-while it is ticked. It is the person
-saying yes in advance, for this paper, in this browser; nothing an agent can
-call sets it.
+while it is ticked. It is the person saying yes in advance, for this paper, in
+this browser; nothing an agent can call sets it.
 
 ## The controls are the container's menus
 
@@ -728,6 +776,7 @@ over the editor names the file, whether it is saved, and the section and page.
 | `compile` | run | Run | `agents: true`; busy and failed show on the trigger; its `result` is the seconds and pages, or the first error |
 | `reveal` | run | Run | show the caret's line in the PDF — the switch cannot be pressed twice, this can |
 | `commit` | run | Run | `confirm: true`, so never an agent's; disabled with the reason when nothing has changed |
+| `sg-prev`, `sg-next`, `sg-accept`, `sg-reject`, `sg-edit`, `sg-all` | run | Run, group *Suggestions* | walk and answer suggestions; see above. Person-only; the first four `pinned` |
 | `parts-each` | run | Run | a part for each chapter, in an epic that has none |
 
 The list is declared again only when it is a different list: typing declares

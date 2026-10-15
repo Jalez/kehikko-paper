@@ -54,7 +54,16 @@ export interface HeaderState {
   pdf: boolean
   /** Null when the paper is in no repository; `why` is the sentence for why it cannot be committed just now, or null. */
   commit: { why: string | null } | null
+  /**
+   * The suggestions as the person walks them. `stops` is how many there are to
+   * walk (a group is one), `position` is "2 of 5" for the current one, null
+   * when none is current; `editing` while the author's own text is being typed.
+   */
+  suggest?: { stops: number; position: string | null; editing: boolean; busy: boolean }
 }
+
+/** The heading the suggestion items stand under in the Run menu. */
+export const SUGGESTIONS = 'Suggestions'
 
 /**
  * A part the open file can be made the chapter of. `moves` is what choosing it
@@ -215,6 +224,54 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
       confirm: true,
       disabled: state.commit.why === null ? null : cut(state.commit.why, LIMITS.REASON),
     })
+  }
+  if (state.suggest) {
+    const q = state.suggest
+    const none = 'No suggestion is waiting on this paper.'
+    const noCurrent = 'Put the caret in a marked passage, or press Next suggestion, to choose which one.'
+    const move = (id: string, label: string, icon: string, shortcut: string): HeaderItemInput =>
+      ({
+        kind: 'run',
+        id,
+        label: cut(q.position ? `${label} · ${q.position}` : q.stops ? `${label} · ${q.stops} waiting` : label),
+        icon,
+        shortcut,
+        group: SUGGESTIONS,
+        disabled: q.stops ? null : none,
+        pinned: true,
+      }) as HeaderItemInput
+    const act = (id: string, label: string, icon: string, shortcut: string, extra: Partial<{ disabled: string | null }> = {}) =>
+      ({
+        kind: 'run',
+        id,
+        label,
+        icon,
+        shortcut,
+        group: SUGGESTIONS,
+        disabled: !q.stops ? none : q.busy ? 'Another suggestion is being answered.' : q.position === null ? noCurrent : null,
+        ...extra,
+        /* Edit stays in the Run menu: four buttons are what a host draws, and
+           the rest of a person's choice is not a thing to do in a hurry. */
+        ...(id === 'sg-edit' ? {} : { pinned: true }),
+        ...(id === 'sg-accept' && q.busy ? { state: 'busy' } : {}),
+      }) as HeaderItemInput
+    items.push(
+      move('sg-prev', 'Previous suggestion', 'chevron-left', '⌥['),
+      move('sg-next', 'Next suggestion', 'chevron-right', '⌥]'),
+      act('sg-accept', q.editing ? 'Accept my version' : 'Accept suggestion', 'check', '⌥↵'),
+      act('sg-reject', 'Reject suggestion', 'x', '⌥⇧↵'),
+      act('sg-edit', q.editing ? 'Stop editing suggestion' : 'Edit suggestion', 'pencil', '⌥E'),
+    )
+    if (q.stops > 1) {
+      items.push({
+        kind: 'run',
+        id: 'sg-all',
+        label: `Accept all ${q.stops} suggestions`,
+        group: SUGGESTIONS,
+        confirm: true,
+        disabled: q.busy ? 'Another suggestion is being answered.' : null,
+      })
+    }
   }
   if (state.eachOffered) {
     items.push({
