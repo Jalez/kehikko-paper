@@ -128,6 +128,8 @@ type Suggesting = {
   answer(key: string, decision: 'accept' | 'reject'): void
   draft(id: string, text: string): void
   stopEditing(): void
+  /** A press on the proposed text shown in place: the caret goes into the passage, and it is armed. */
+  pick(id: string, withCaret: boolean): void
 }
 const setSuggestions = StateEffect.define<Suggesting>()
 
@@ -152,6 +154,14 @@ class ProposedWidget extends WidgetType {
     span.className = `cm-sugg-after${one.current ? ' cm-sugg-current' : ''}`
     span.setAttribute('data-sugg', one.id)
     span.setAttribute('data-sugg-after', '')
+    /* The editor ignores events from a widget (`ignoreEvent`), so its own
+       mousedown handler never sees a press here: the widget says it itself. A
+       press in the edit box leaves the box its focus. */
+    span.addEventListener('mousedown', (event) => {
+      const inBox = event.target instanceof Element && event.target.closest('textarea') !== null
+      if (!inBox) event.preventDefault()
+      on.pick(one.id, !inBox)
+    })
     if (!one.editing) {
       span.textContent = one.replacement
       return span
@@ -502,6 +512,14 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
         answer: (key, decision) => answered.current?.(key, decision),
         draft: () => {},
         stopEditing: () => stopped.current?.(),
+        pick: (id, withCaret) => {
+          if (withCaret) {
+            const at = (suggestions ?? []).find((one) => one.id === id)
+            if (at) view.dispatch({ selection: { anchor: Math.min(at.from, view.state.doc.length) } })
+            view.focus()
+          }
+          pick.current?.(id)
+        },
       }),
     })
   }, [suggestions, forDrafts, value])
