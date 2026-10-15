@@ -492,10 +492,9 @@ export function reviewOf(ctx: Ctx): Review {
   const s = c.state
   if (s.auto && c.fresh.size) {
     const incoming = c.review.changes.filter((one) => c.fresh.has(one.id) && one.kind === 'disk')
-    const take = new Map<string, Proposal>()
-    for (const one of incoming) for (const m of membersOf(c.review.changes, one)) take.set(m.id, m)
-    if (take.size) {
-      const done = acceptMembers(ctx, c, [...take.values()], 'auto')
+    /* Only what ARRIVED: a group-mate that was already waiting is left for a person. */
+    if (incoming.length) {
+      const done = acceptMembers(ctx, c, incoming, 'auto')
       if (done.ok) return compute(ctx).review
     }
   }

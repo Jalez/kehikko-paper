@@ -261,7 +261,7 @@ describe('two pending in one file', () => {
     expect(reply?.status).toBe(200)
     /* Not dropped: kept, held back, and said. */
     expect(pending()).toHaveLength(1)
-    expect(pending()[0]!.held).toBeDefined()
+    expect((pending()[0] as { held?: string }).held).toBeDefined()
     expect((reply?.body as { said: string }).said).toContain('out of date')
     /* Refused for the overlapping one, and applied exactly once for the other. */
     expect(onDisk()).toBe(SOURCE.replace('tpyo', 'typo'))
