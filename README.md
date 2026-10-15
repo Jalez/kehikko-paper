@@ -748,6 +748,23 @@ How a person reaches each action:
 | `sg-edit` | the proposed text becomes editable in place; Accept applies the author's text. The record keeps the agent's text and reason; the commit message says it was adjusted; the reader shows *adjusted* | `⌥E` |
 | `sg-all` | accept all, when more than one | |
 
+**Enter and Escape, only when the person pressed on it.** A suggestion is
+*armed* by one thing: a pointer press (click or tap) inside its marked passage,
+or inside the proposed text shown by *Show new*. Nothing else arms it: not
+loading or reloading, not the caret happening to sit in it, not a file switch,
+not typing, not *Previous* / *Next* (`⌥[`, `⌥]`, the header buttons), and not the
+move to the next suggestion after an answer (the view goes there as before; it
+is not armed, so a person presses on it to review the next one). One is armed at
+a time; a group is armed as a whole.
+
+| | |
+|---|---|
+| armed, editor focused, caret in the passage | `Enter` = *Accept change*, `Esc` = *Cancel change* (same code path as the buttons; consumed, so no newline and no other Escape handling). `Shift+Enter` still inserts a newline |
+| the tag while armed | a ring on the tag, a small `⏎` keycap on *Accept change* and `Esc` on *Cancel change*, the keys in the buttons' titles and `aria-keyshortcuts`. Not armed: no keycaps |
+| edit box open (its text field) | `Enter` is a newline; `⌘↵` / `Ctrl+↵` = accept the edited text (the keycap shows it on *Accept change*); `Esc` stops editing and rejects nothing (no keycap on *Cancel change*) |
+| disarmed by | typing a character, Backspace or Delete; the caret leaving the passage (arrow keys out, a click elsewhere; arrows inside keep it); the editor losing focus; the suggestion answered, withdrawn or dropped; a file or paper switch |
+| unaffected | `⌥↵`, `⌥⇧↵`, `⌥E`, `⌥]`, `⌥[` work armed or not |
+
 The current one is the one the caret is in, else the one last walked to, and is
 drawn a little stronger. With none current, Accept and Reject are disabled and
 say how to choose. After an answer the view moves to the next remaining

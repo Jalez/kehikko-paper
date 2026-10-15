@@ -1369,6 +1369,11 @@ export function Workspace({
   const [navigated, setNavigated] = useState<string | null>(null)
   const [proposedKeys, setProposedKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [editing, setEditing] = useState<string | null>(null)
+  /* Armed: the stop key of the suggestion the person PRESSED on (the marked
+     passage, or the proposed text shown in place). Only a pointer press arms;
+     walking, answering, landing, loading and typing never do. While armed,
+     Enter accepts and Escape cancels it. See `disarm` below for what ends it. */
+  const [armed, setArmed] = useState<string | null>(null)
   const drafts = useRef(new Map<string, string>())
   /* Where each suggestion sits in the text of ITS file, for every file in the column. */
   const placedBy = useMemo(() => {
@@ -1395,6 +1400,15 @@ export function Workspace({
   const currentStop = stops.find((one) => one.key === currentKey) ?? null
   const currentId = currentStop ? (caretId && currentStop.ids.includes(caretId) ? caretId : currentStop.lead.id) : null
 
+  /* Armed only while its stop still exists: answered, withdrawn or dropped ends it. */
+  const armedKey = armed !== null && stops.some((one) => one.key === armed) ? armed : null
+  useEffect(() => {
+    if (armed !== null && armedKey === null) setArmed(null)
+  }, [armed, armedKey])
+  /* A file switch ends it too. */
+  useEffect(() => {
+    setArmed(null)
+  }, [file])
   const inlineCache = useRef(new Map<string, { key: string; list: InlineSuggestion[] }>())
   const inlineBy = useMemo(() => {
     const result = new Map<string, InlineSuggestion[]>()
@@ -1425,6 +1439,7 @@ export function Workspace({
         replacement: at.replacement,
         after: proposedKeys.has(key) || editing === p.id,
         current: key === currentKey,
+        armed: key === armedKey,
         why: p.why,
         revisions: p.revisions ?? 0,
         count: stop.members.length,
@@ -1435,7 +1450,7 @@ export function Workspace({
       }
       return out
     }
-  }, [placedBy, stops, proposedKeys, editing, currentKey])
+  }, [placedBy, stops, proposedKeys, editing, currentKey, armedKey])
 
   const visit = useCallback(
     (stop: { key: string; file: string; lead: Proposal }) => {
@@ -1458,6 +1473,10 @@ export function Workspace({
   }, [])
   const stopsNow = useRef(stops)
   stopsNow.current = stops
+  const proposalsNow = useRef(proposals)
+  proposalsNow.current = proposals
+  const editingNow = useRef(editing)
+  editingNow.current = editing
   /* Answer a stop: the current one (header, keys) or the one whose tag was
      pressed. One path; `onKey` only says which stop it is. */
   const answerCurrent = useCallback(
@@ -1524,6 +1543,7 @@ export function Workspace({
     }
   }, [proposals, editing])
   useLayoutEffect(() => {
+    setArmed(null)
     setNavigated(null)
     setEditing(null)
     setProposedKeys(new Set())
@@ -1534,6 +1554,37 @@ export function Workspace({
      these into other characters on a Mac. None is in the editor's own keymap. */
   const acting = useRef({ walk, answerCurrent, editCurrent })
   acting.current = { walk, answerCurrent, editCurrent }
+  /* Enter and Escape from the editor: act only while armed AND the caret is
+     still inside that suggestion's passage (a group: any member's). Returns
+     whether the key was consumed; unconsumed, the editor does what it always does. */
+  const placedNow = useRef(placed)
+  placedNow.current = placed
+  const caretNow = useRef(selection)
+  caretNow.current = selection
+  const armedNow = useRef(armedKey)
+  armedNow.current = armedKey
+  const answerNow = useRef(answerCurrent)
+  answerNow.current = answerCurrent
+  const onArmedKey = useCallback((decision: 'accept' | 'reject'): boolean => {
+    const key = armedNow.current
+    if (key === null) return false
+    const at = caretNow.current
+    const inside = placedNow.current.some(({ p, at: where }) => where !== null && stopKeyOf(p) === key && at.from >= where.from && at.to <= where.to)
+    if (!inside) return false
+    void answerNow.current(decision, key)
+    return true
+  }, [])
+  const armOn = useCallback((id: string) => {
+    const one = proposalsNow.current.find((p) => p.id === id)
+    if (!one) return
+    const key = stopKeyOf(one)
+    setNavigated(key)
+    setArmed(key)
+  }, [])
+  const disarm = useCallback(() => setArmed(null), [])
+  const stopEditing = useCallback(() => {
+    if (editingNow.current) acting.current.editCurrent()
+  }, [])
   useEffect(() => {
     const on = (event: KeyboardEvent) => {
       if (!event.altKey || event.ctrlKey || event.metaKey) return
@@ -1680,8 +1731,21 @@ export function Workspace({
         embedded={embedded}
         landed={landed}
         value={held.text}
-        onChange={(text) => source.edit(text, name)}
-        onSelect={(next) => selectIn(name, next)}
+        onChange={(text) => {
+          /* Typing, Backspace, Delete: the keys are the person's again. */
+          disarm()
+          source.edit(text, name)
+        }}
+        onSelect={(next) => {
+          selectIn(name, next)
+          /* The caret left the armed passage (arrow keys, a click elsewhere). */
+          if (armedNow.current !== null && name === fileNow.current) {
+            const stays = (placedBy.get(name) ?? NO_PLACED).some(
+              ({ p, at }) => at !== null && stopKeyOf(p) === armedNow.current && next.from >= at.from && next.to <= at.to,
+            )
+            if (!stays) disarm()
+          }
+        }}
         onScrolled={(top, past) => onEditorScrolled(top, past, name)}
         onSave={() => void source.flush()}
         jump={jump && jump.file === name && (steady || !embedded) ? jump : null}
@@ -1696,10 +1760,10 @@ export function Workspace({
         drafts={drafts.current}
         onToggleSuggestion={toggleProposed}
         onAnswerSuggestion={(key, decision) => void answerCurrent(decision, key)}
-        onPickSuggestion={(id) => {
-          const one = proposals.find((p) => p.id === id)
-          if (one) setNavigated(stopKeyOf(one))
-        }}
+        onPickSuggestion={armOn}
+        onArmedKey={onArmedKey}
+        onDisarm={disarm}
+        onStopEditing={stopEditing}
       />
     )
   }
