@@ -82,7 +82,18 @@ export interface EditorProps {
   /** One-based lines the engine complained about. */
   problems: readonly { line: number; severity: 'error' | 'warning'; message: string }[]
   theme: 'light' | 'dark'
+  /**
+   * One of several editors stacked in the continuous column (`source-column.tsx`):
+   * it is as tall as its text and does not scroll itself; the column's scroller
+   * does, and `onScrolled` is said while the top of THAT is inside this editor.
+   */
+  embedded?: boolean
+  /** The nonce of the last jump this editor's file has landed, kept by the page: an editor mounted again does not land it twice. */
+  landed?: { current: number }
 }
+
+/** The height, in pixels, of the boundary label that lies over the top of the column: a row put at the top is put under it. */
+export const EMBED_TOP = 16
 
 export type Editor = ComponentType<EditorProps>
 
@@ -294,7 +305,7 @@ const marksField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onPickSuggestion }: EditorProps) {
+export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onPickSuggestion, embedded, landed }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
   const scrolled = useRef(onScrolled)
   scrolled.current = onScrolled
@@ -350,7 +361,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
      changing, or the editor existing. The page opens another file and jumps in
      the same breath, and this component is then MOUNTING when the jump
      arrives — an effect alone would find no view and drop it. */
-  const jumped = useRef(0)
+  const ownJumped = useRef(0)
+  const jumped = landed ?? ownJumped
   const going = useRef(jump)
   going.current = jump
   const land = (view: EditorView | undefined) => {
@@ -367,7 +379,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
           ? EditorView.scrollIntoView(from, { y: 'center' })
           : /* The row that STARTS at the offset (`assoc` 1): at a soft wrap the same offset is also the end of
                the row above. A negative margin is that many pixels of the row above the top. */
-            EditorView.scrollIntoView(EditorSelection.cursor(Math.min(to.top, length), 1), { y: 'start', yMargin: -Math.max(0, to.past ?? 0) }),
+            EditorView.scrollIntoView(EditorSelection.cursor(Math.min(to.top, length), 1), { y: 'start', yMargin: (embedded ? EMBED_TOP : 0) - Math.max(0, to.past ?? 0) }),
     })
     if (to.focus) view.focus()
   }
@@ -405,8 +417,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
   return (
     <CodeMirror
       ref={ref}
-      className="source-editor h-full min-h-0"
-      height="100%"
+      className={embedded ? 'source-editor source-editor-embedded' : 'source-editor h-full min-h-0'}
+      {...(embedded ? {} : { height: '100%' })}
       value={value}
       theme={theme}
       extensions={extensions}
@@ -417,17 +429,22 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
            place in the text, which means the same at another width. Behind the
            other tab it has no height and is "at the top" — which is not where
            anybody put it, and is not said. */
-        view.scrollDOM.addEventListener(
-          'scroll',
-          () => {
-            const box = view.scrollDOM.getBoundingClientRect()
-            if (box.height === 0) return
-            const top = view.posAtCoords({ x: view.contentDOM.getBoundingClientRect().left + 1, y: box.top + 1 }, false)
-            const row = view.coordsAtPos(top, 1)
-            scrolled.current?.(top, row ? Math.max(0, Math.round(box.top - row.top)) : 0)
-          },
-          { passive: true },
-        )
+        const report = () => {
+          const box = scroller.getBoundingClientRect()
+          if (box.height === 0) return
+          if (embedded) {
+            /* The column scrolls, not this editor: only the editor the column's
+               top is inside says where, as the offset at that top. */
+            const own = view.dom.getBoundingClientRect()
+            if (own.top > box.top + 1 || own.bottom <= box.top) return
+          }
+          const lid = embedded ? EMBED_TOP : 0
+          const top = view.posAtCoords({ x: view.contentDOM.getBoundingClientRect().left + 1, y: box.top + lid + 1 }, false)
+          const row = view.coordsAtPos(top, 1)
+          scrolled.current?.(top, row ? Math.max(0, Math.round(box.top + lid - row.top)) : 0)
+        }
+        const scroller: HTMLElement = (embedded ? view.dom.closest<HTMLElement>('[data-source-column]') : null) ?? view.scrollDOM
+        scroller.addEventListener('scroll', report, { passive: true })
         land(view)
       }}
       basicSetup={{

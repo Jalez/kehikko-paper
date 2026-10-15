@@ -1,4 +1,4 @@
-import { LIMITS, type Passage as WirePassage } from 'kehikot-module-protocol'
+import { LIMITS, partsOfFile, type Passage as WirePassage } from 'kehikot-module-protocol'
 import { useFocus } from 'kehikot-module-protocol/client/react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
@@ -14,8 +14,9 @@ import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
+import { SourceColumn, type ColumnRegion } from './editor/source-column.tsx'
 import type { Editor } from './editor/source-editor.tsx'
-import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, heldBy, narrowed, noPage, pageOfSheet, pagesDrawn, pagesOfSheets, partOf, tabsOf, ticksOf } from './focus.ts'
+import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, heldBy, inProject, narrowed, noPage, pageOfSheet, pagesDrawn, pagesOfSheets, partOf, tabsOf, ticksOf } from './focus.ts'
 import { HeaderFallback } from './header-fallback.tsx'
 import { headerOf } from './header.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
@@ -272,7 +273,7 @@ export function Workspace({
     const was = placeWas(standingIn(), paper.epic, wire.kept.current)
     if (was) setTab(was.tab)
     const next = fileOnOpening(focusRef.current, paper.files, was?.file ?? null)
-    if (next !== null) source.open(next)
+    if (next !== null) openAt(next)
     const spot = was && was.file === (next ?? MAIN_FILE) ? spotWas(standingIn(), paper.epic, was.file) : null
     if (!was || !spot || spot.hash !== paper.hashes[was.file]) return
     putBack.current = { file: was.file, from: spot.from, to: spot.to }
@@ -323,7 +324,7 @@ export function Workspace({
     if (next === null) return
     setOnPassage(false)
     notice(null)
-    source.open(next)
+    openAt(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paper.epic, ticks])
 
@@ -358,7 +359,21 @@ export function Workspace({
   tabRef.current = tab
   const unseen = useRef(false)
   const [selection, setSelection] = useState({ from: 0, to: 0 })
-  const [jump, setJump] = useState<{ from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean } | null>(null)
+  const [jump, setJump] = useState<{ file: string; from: number; to: number; nonce: number; select?: boolean; focus?: boolean; keep?: boolean } | null>(null)
+  /** Which file was OPENED (not scrolled to), once per nonce: the column brings its region to the top. */
+  const [located, setLocated] = useState<{ file: string; nonce: number } | null>(null)
+  const openAt = useCallback(
+    (name: string) => {
+      source.open(name)
+      setLocated((was) => ({ file: name, nonce: (was?.nonce ?? 0) + 1 }))
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [source.open],
+  )
+  /** What each region's editor has landed, which outlives the editor being unmounted and mounted again. */
+  const landedJumps = useRef(new Map<string, { current: number }>())
+  /** A selection placed in a region that was not the active one, which the change of file must not reset. */
+  const selectedIn = useRef<string | null>(null)
   const [going, setGoing] = useState<Going | null>(null)
   /** The byte at the top of the editor, as the editor last said it, the file it is a byte of, and how far past the top its row is. */
   const scrolled = useRef<{ file: string; top: number; past: number } | null>(null)
@@ -436,16 +451,19 @@ export function Workspace({
   }, [notice])
 
   useLayoutEffect(() => {
+    if (selectedIn.current === file) {
+      selectedIn.current = null
+      return
+    }
     setSelection({ from: 0, to: 0 })
   }, [file, paper.epic])
 
   const go = useCallback(
     (target: Going) => {
-      source.open(target.file)
+      openAt(target.file)
       setGoing(target)
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [source.open],
+    [openAt],
   )
 
   /* Resolve a pending `go` once the file it names is the one open and its text
@@ -472,7 +490,7 @@ export function Workspace({
       }
     }
     const top = typeof going.top === 'number' ? { top: indexAt(doc.text, going.top, doc.eol), past: going.past ?? 0 } : {}
-    setJump((was) => ({ from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign, ...top }))
+    setJump((was) => ({ file: going.file, from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign, ...top }))
     if (tabRef.current !== 'source') unseen.current = true
     setGoing(null)
   }, [going, file, doc])
@@ -560,11 +578,14 @@ export function Workspace({
   }, [paper.epic])
   useEffect(rememberHere, [rememberHere, file, fromByte, toByte, spot.current.hash])
   const onEditorScrolled = useCallback(
-    (top: number, past = 0) => {
+    (top: number, past = 0, name?: string) => {
       const now = spot.current
-      scrolled.current = { file: now.file, top: byteAt(now.text, top, now.eol), past }
+      const held = name !== undefined && name !== now.file ? source.docs.get(name) : undefined
+      if (name !== undefined && name !== now.file && !held) return
+      scrolled.current = { file: name ?? now.file, top: byteAt(held ? held.text : now.text, top, held ? held.eol : now.eol), past }
       rememberHere()
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [rememberHere],
   )
 
@@ -579,6 +600,31 @@ export function Workspace({
       setSelection(next)
     },
     [wandered],
+  )
+
+  /* A region of the column says where ITS caret is. The active one is the
+     page's selection as it always was. Another one that has the focus is the
+     person going there: the file follows. One that does not is the editor
+     reporting a selection because its text was replaced, which is nobody
+     navigating, and is not heard. */
+  const editorBox = useRef<HTMLDivElement>(null)
+  const fileNow = useRef(file)
+  fileNow.current = file
+  const selectIn = useCallback(
+    (name: string, next: { from: number; to: number }) => {
+      if (name === fileNow.current) {
+        onSelect(next)
+        return
+      }
+      const own = editorBox.current?.querySelector(`[data-region="${CSS.escape(name)}"]`)
+      if (!own || !own.contains(document.activeElement)) return
+      wandered()
+      selectedIn.current = name
+      source.open(name)
+      setSelection(next)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [onSelect, wandered],
   )
 
   const selecting = to > from
@@ -1084,17 +1130,20 @@ export function Workspace({
   /* The run whose words are on screen: the part's own while parts are compiled alone, the whole paper's otherwise. */
   const ran = (pickedKey !== null ? own?.last : null) ?? build?.last ?? null
   const problems = ran?.problems ?? NONE
-  const inThisFile = useMemo(
-    () =>
-      problems
-        /* Only a complaint that NAMES this file. One with a line and no file —
-           a classic `l.12`, a warning out of the log — is listed with its line
-           and not drawn here, since which file's line 12 is exactly what it
-           did not say. */
-        .filter((one): one is Problem & { line: number } => one.line !== null && one.file === file)
-        .map((one) => ({ line: one.line, severity: one.severity, message: one.message })),
-    [problems, file],
-  )
+  const problemsByFile = useMemo(() => {
+    const out = new Map<string, { line: number; severity: 'error' | 'warning'; message: string }[]>()
+    /* Only a complaint that NAMES a file. One with a line and no file — a
+       classic `l.12`, a warning out of the log — is listed with its line and
+       not drawn in a file, since which file's line 12 is exactly what it did
+       not say. */
+    for (const one of problems) {
+      if (one.line === null || !one.file) continue
+      const list = out.get(one.file) ?? []
+      list.push({ line: one.line, severity: one.severity, message: one.message })
+      out.set(one.file, list)
+    }
+    return out
+  }, [problems])
   const failed = ran ? !ran.ok : false
   const errors = problems.filter((one) => one.severity === 'error')
   const warnings = problems.filter((one) => one.severity === 'warning')
@@ -1186,7 +1235,6 @@ export function Workspace({
    * The PDF is not scrolled at all, unless `at.reveal` — see `noted`. Pressing
    * a suggestion's file name is how its place on the page is asked for.
    */
-  const editorBox = useRef<HTMLDivElement>(null)
   const attend = useCallback(
     (at: { file: string; from: number; to: number; proposal?: string; reveal?: boolean }, words: string) => {
       setNoted(at)
@@ -1266,6 +1314,41 @@ export function Workspace({
      a press on the PDF or a section has taken the editor into another file. */
   const awayFromMain = focus === null && file !== MAIN_FILE && paper.files.includes(MAIN_FILE)
 
+  /* ---- The column: every file shown, one after another ------------------- */
+
+  /* What is laid end to end: the files shown, in the paper's own order — the
+     one the Go menu and the suggestion walk use — less those a chapter pulls
+     in with `\input`, which stay inside that chapter's text. A file somebody
+     is IN, or has unsaved words in, is never left out: it is a region of its
+     own, in its place, for as long as that is so. */
+  const dirtyFiles: string[] = []
+  for (const [name, held] of source.docs) if (held.text !== held.saved || source.conflict?.file === name) dirtyFiles.push(name)
+  const columnFiles = (() => {
+    const pulls = paper.pulls ?? {}
+    const base = new Set(listed)
+    const wanted = paper.files.filter((one) => base.has(one) || dirtyFiles.includes(one))
+    const inList = new Set(wanted)
+    return wanted.filter((one) => {
+      const by = pulls[one]?.by
+      return by === undefined || by === MAIN_FILE || !inList.has(by) || one === file || dirtyFiles.includes(one)
+    })
+  })()
+  const columnKey = columnFiles.join('\n')
+  const regions: ColumnRegion[] = columnFiles.map((name) => ({
+    file: name,
+    text: source.docs.get(name)?.text ?? null,
+    heading: partsOfFile(parts, inProject(paper.epic, name), paper.epic, wire.projectPath)[0]?.heading || null,
+  }))
+  /* The others are read once the file in hand has arrived, so the first paint
+     is the one it was; each is a buffer like any other from then on. */
+  const { load } = source
+  useEffect(() => {
+    if (!doc) return
+    for (const name of columnKey.split('\n')) if (name) load(name)
+  }, [doc === null, columnKey, load])
+  const [mountedCount, setMountedCount] = useState(0)
+  const columned = regions.length > 1
+
   /* ---- Suggestions: drawn in the source, answered from the header -------- */
 
   /* What is walked is what is shown (the narrowing rule): a part pick leaves
@@ -1275,11 +1358,20 @@ export function Workspace({
   const [proposedKeys, setProposedKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [editing, setEditing] = useState<string | null>(null)
   const drafts = useRef(new Map<string, string>())
-  const placed = useMemo(
-    () => (doc ? proposals.filter((p) => p.file === file).map((p) => ({ p, at: placement(p, doc.text, doc.eol) })) : []),
+  /* Where each suggestion sits in the text of ITS file, for every file in the column. */
+  const placedBy = useMemo(() => {
+    const out = new Map<string, { p: Proposal; at: ReturnType<typeof placement> }[]>()
+    for (const p of proposals) {
+      const held = source.docs.get(p.file)
+      if (!held) continue
+      const list = out.get(p.file) ?? []
+      list.push({ p, at: placement(p, held.text, held.eol) })
+      out.set(p.file, list)
+    }
+    return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proposals, doc?.text, doc?.eol, file],
-  )
+  }, [proposals, source.rev])
+  const placed = placedBy.get(file) ?? NO_PLACED
   /* The one the caret is in, else the one last walked to. Compared by id, so a
      keystroke inside a passage changes nothing declared to the host. */
   const caretId = useMemo(() => {
@@ -1291,9 +1383,24 @@ export function Workspace({
   const currentStop = stops.find((one) => one.key === currentKey) ?? null
   const currentId = currentStop ? (caretId && currentStop.ids.includes(caretId) ? caretId : currentStop.lead.id) : null
 
-  const inline = useMemo<InlineSuggestion[]>(() => {
-    const out: InlineSuggestion[] = []
-    for (const { p, at } of placed) {
+  const inlineCache = useRef(new Map<string, { key: string; list: InlineSuggestion[] }>())
+  const inlineBy = useMemo(() => {
+    const result = new Map<string, InlineSuggestion[]>()
+    for (const [name, here] of placedBy) {
+      const list = inlineOf(here)
+      /* The same list as it was while nothing in it changed, so an editor that is not being typed in is not redrawn. */
+      const text = JSON.stringify(list)
+      const had = inlineCache.current.get(name)
+      if (had && had.key === text) result.set(name, had.list)
+      else {
+        inlineCache.current.set(name, { key: text, list })
+        result.set(name, list)
+      }
+    }
+    return result
+    function inlineOf(items: { p: Proposal; at: ReturnType<typeof placement> }[]): InlineSuggestion[] {
+      const out: InlineSuggestion[] = []
+      for (const { p, at } of items) {
       if (!at) continue
       const key = stopKeyOf(p)
       const stop = stops.find((one) => one.key === key)
@@ -1313,9 +1420,10 @@ export function Workspace({
         editing: editing === p.id,
         proposed: p.asked?.replace ?? p.text,
       })
+      }
+      return out
     }
-    return out
-  }, [placed, stops, proposedKeys, editing, currentKey])
+  }, [placedBy, stops, proposedKeys, editing, currentKey])
 
   const visit = useCallback(
     (stop: { key: string; file: string; lead: Proposal }) => {
@@ -1484,10 +1592,8 @@ export function Workspace({
     } else if (item === 'file') {
       const to = tabs[nth('t')]
       if (!to) return 'That file is no longer one of the picked parts’.'
-      if (to.file !== file) {
-        wandered()
-        source.open(to.file)
-      }
+      wandered()
+      openAt(to.file)
     } else if (item === 'chapter') {
       const part = value === 'none' ? null : parts[nth('p')]
       if (part === undefined) return 'That part is no longer one of this epic’s.'
@@ -1538,6 +1644,44 @@ export function Workspace({
   /* Whether the page draws its own way to the items: nobody frames it, or the host does not draw them (told by its greeting; from an older host, until a press has arrived). */
   const fallback = wire.where !== 'hosted' || !wire.hostDraws
 
+  /** One file's editor: the whole of what the page asks of an editor, for that file. */
+  const renderRegion = (name: string, embedded: boolean) => {
+    const held = source.docs.get(name)
+    if (!held) return null
+    let landed = landedJumps.current.get(name)
+    if (!landed) {
+      landed = { current: 0 }
+      landedJumps.current.set(name, landed)
+    }
+    return (
+      <EditorPane
+        key={`${paper.epic}\0${name}`}
+        embedded={embedded}
+        landed={landed}
+        value={held.text}
+        onChange={(text) => source.edit(text, name)}
+        onSelect={(next) => selectIn(name, next)}
+        onScrolled={(top, past) => onEditorScrolled(top, past, name)}
+        onSave={() => void source.flush()}
+        jump={jump && jump.file === name ? jump : null}
+        mark={
+          foreign && foreign.file === name
+            ? { from: indexAt(held.text, foreign.from, held.eol), to: indexAt(held.text, foreign.to, held.eol) }
+            : null
+        }
+        problems={problemsByFile.get(name) ?? NO_LINES}
+        theme={theme}
+        suggestions={inlineBy.get(name) ?? NO_SUGGESTIONS}
+        drafts={drafts.current}
+        onToggleSuggestion={toggleProposed}
+        onPickSuggestion={(id) => {
+          const one = proposals.find((p) => p.id === id)
+          if (one) setNavigated(stopKeyOf(one))
+        }}
+      />
+    )
+  }
+
   return (
     <div className="workspace relative flex min-h-0 flex-1 flex-col" data-pane={tab}>
       {/* No toolbar: the panes, the files, the sections, Compile, Commit, the
@@ -1586,7 +1730,7 @@ export function Workspace({
                 title={`Back to ${MAIN_FILE}, the file the whole paper starts from`}
                 onClick={() => {
                   wandered()
-                  source.open(MAIN_FILE)
+                  openAt(MAIN_FILE)
                 }}
               >
                 ← {MAIN_FILE}
@@ -1620,33 +1764,24 @@ export function Workspace({
             </span>
             {fallback && <HeaderFallback items={items} onPress={press} className="relative shrink-0" />}
           </div>
-          <div ref={editorBox} className="min-h-0 flex-1">
-            {doc ? (
-              <EditorPane
-                key={`${paper.epic}\0${file}`}
-                value={doc.text}
-                onChange={source.edit}
-                onSelect={onSelect}
-                onScrolled={onEditorScrolled}
-                onSave={() => void source.flush()}
-                jump={jump}
-                mark={
-                  foreign && foreign.file === file
-                    ? { from: indexAt(doc.text, foreign.from, doc.eol), to: indexAt(doc.text, foreign.to, doc.eol) }
-                    : null
-                }
-                problems={inThisFile}
-                theme={theme}
-                suggestions={inline}
-                drafts={drafts.current}
-                onToggleSuggestion={toggleProposed}
-                onPickSuggestion={(id) => {
-                  const one = proposals.find((p) => p.id === id)
-                  if (one) setNavigated(stopKeyOf(one))
+          <div ref={editorBox} className="min-h-0 flex-1" data-regions={columned ? regions.length : undefined} data-mounted={columned ? mountedCount : undefined}>
+            {!doc ? (
+              <p className="text-muted-foreground p-3 text-xs">Opening {file}…</p>
+            ) : columned ? (
+              <SourceColumn
+                regions={regions}
+                active={file}
+                locate={located}
+                render={(name) => renderRegion(name, true)}
+                onLabel={(name) => {
+                  wandered()
+                  go({ file: name, bytes: { from: 0, to: 0 }, top: 0, past: 0, focus: true })
                 }}
+                onLook={(name) => source.open(name)}
+                onCount={setMountedCount}
               />
             ) : (
-              <p className="text-muted-foreground p-3 text-xs">Opening {file}…</p>
+              renderRegion(file, false)
             )}
           </div>
         </div>
@@ -1763,6 +1898,9 @@ export function Workspace({
 }
 
 const NONE: readonly Problem[] = []
+const NO_PLACED: { p: Proposal; at: ReturnType<typeof placement> }[] = []
+const NO_LINES: { line: number; severity: 'error' | 'warning'; message: string }[] = []
+const NO_SUGGESTIONS: InlineSuggestion[] = []
 const NO_FILES: string[] = []
 const NO_MARKS: readonly PdfMark[] = []
 
