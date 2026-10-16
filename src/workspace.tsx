@@ -283,8 +283,15 @@ export function Workspace({
        very text they were counted in, and held there while the layout settles.
        For a file that is still the one it was — a place is not guessed at. */
     const anchor = anchorWas(standingIn(), paper.epic)
-    const own = anchor && anchor.file === (next ?? MAIN_FILE) ? spotWas(standingIn(), paper.epic, anchor.file) : null
+    /* The file at the top of the column need not be the one being edited: in
+       the continuous column the person scrolls from the chapter they were in
+       up into the one before it, and that is where they were. Any file that
+       could be opened under the same pick is put back there. */
+    const opening = next ?? MAIN_FILE
+    const shown = anchor !== null && (anchor.file === opening || fileOnOpening(focusRef.current, paper.files, anchor.file) === anchor.file)
+    const own = anchor && shown ? spotWas(standingIn(), paper.epic, anchor.file) : null
     if (anchor && own && own.hash === paper.hashes[anchor.file]) {
+      if (anchor.file !== opening) openAt(anchor.file)
       restoring.current = true
       if (anchor.file === was?.file) putBack.current = { file: anchor.file, from: own.from, to: own.to }
       setGoing({
