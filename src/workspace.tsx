@@ -1712,7 +1712,13 @@ export function Workspace({
       if (!remain.length) {
         setNavigated(null)
         setArmed(null)
-        if (jumpNow.current) setNoMore(true)
+        if (jumpNow.current) {
+          setNoMore(true)
+          /* The header's result slot is shown on a pinned item only while it is
+             hovered, and Enter was pressed in the editor: the line at the foot
+             of the container is where it is read. */
+          setSaid('No more changes.')
+        }
         return
       }
       /* Jump to next change is the person's setting (default on). Off: stay
@@ -1736,7 +1742,7 @@ export function Workspace({
          pointer started: it stays armed if it was, or if the press was on a tag. */
       visit(next, { smooth: true, arm: wasArmed || onKey !== undefined })
     },
-    [currentStop, currentId, answerOne, listed, visit, paper.epic, placedBy, source, wire],
+    [currentStop, currentId, answerOne, listed, visit, paper.epic, placedBy, source, wire, setSaid],
   )
   const walk = useCallback(
     (by: 1 | -1) => {

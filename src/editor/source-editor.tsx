@@ -557,10 +557,13 @@ const marksField = StateField.define<DecorationSet>({
  */
 let releaseHold: (() => void) | null = null
 
-function holdPlace(view: EditorView, offset: number, margin: number, column: boolean): void {
+function holdPlace(view: EditorView, offset: number, margin: number | 'center', column: boolean, until = 12_000): void {
   /* One place is held at a time: going anywhere else (another jump lands) lets go of this one. */
   releaseHold?.()
   const scroller: HTMLElement = (column ? view.dom.closest<HTMLElement>('[data-source-column]') : null) ?? view.scrollDOM
+  /* A jump that scrolls smoothly is let finish its glide before it is held:
+     correcting it on every frame of the glide would make it a lurch. */
+  const glide = typeof getComputedStyle === 'function' && getComputedStyle(scroller).scrollBehavior === 'smooth' ? 950 : 0
   let stopped = false
   const stop = () => {
     if (releaseHold === stop) releaseHold = null
@@ -572,16 +575,20 @@ function holdPlace(view: EditorView, offset: number, margin: number, column: boo
   const started = performance.now()
   const step = () => {
     if (stopped || !view.dom.isConnected) return stop()
-    const row = view.coordsAtPos(offset, 1)
-    const box = scroller.getBoundingClientRect()
-    if (row && box.height > 0) {
-      const delta = row.top - (box.top + margin)
-      if (Math.abs(delta) > 1) {
-        scroller.scrollTop += delta
+    if (performance.now() - started >= glide) {
+      const row = view.coordsAtPos(offset, 1)
+      const box = scroller.getBoundingClientRect()
+      if (row && box.height > 0) {
+        const want = margin === 'center' ? box.height / 2 - (row.bottom - row.top) / 2 : margin
+        const delta = row.top - (box.top + want)
+        if (Math.abs(delta) > 1) scroller.scrollBy({ top: delta, behavior: 'instant' })
+      } else if (!row) {
+        /* Not drawn — the layout moved it out of what the editor renders: asked for again. */
+        view.dispatch({ effects: EditorView.scrollIntoView(offset, { y: 'center' }) })
       }
     }
     /* Held for as long as the layout may still be moving — a long chapter measures itself as it is looked at — and let go the moment the person does anything. */
-    if (performance.now() - started > 12_000) return stop()
+    if (performance.now() - started > until) return stop()
     requestAnimationFrame(step)
   }
   requestAnimationFrame(step)
@@ -713,6 +720,11 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     })
     if (to.focus) view.focus()
     if (to.top !== undefined) holdPlace(view, Math.min(to.top, length), (embedded ? EMBED_TOP : 0) - Math.max(0, to.past ?? 0), embedded === true)
+    /* A place gone to — a change, a section, a passage — is held in the middle
+       while the column round it is still being measured: in the continuous
+       column the regions above are estimates, and one scroll landed a change
+       in chapter 3 a chapter further down once they had been measured. */
+    else if (embedded) holdPlace(view, from, 'center', true, 3000)
   }
   useEffect(() => {
     land(ref.current?.view)
