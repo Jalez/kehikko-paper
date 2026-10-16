@@ -140,7 +140,7 @@ export function pendingFor(project: string, epic: string): Proposal[] {
   /* The token's hash is stripped HERE, so that nothing which reads the list —
      the page's poll, `list_proposals`, a response body — can carry it. It is
      the one proof a filer has, and it is never shown. */
-  return heldFor(project, epic).map(({ tokenHash: _kept, ...rest }) => rest)
+  return heldFor(project, epic).map(({ tokenHash: _kept, tokenHashes: _more, ...rest }) => rest)
 }
 
 /** The raw records, token hash included. Server-side checks only; never put the result in a response. */
@@ -250,10 +250,13 @@ function hashToken(token: string): string {
 }
 
 function tokenMatches(proposal: Proposal, token: string): boolean {
-  if (!proposal.tokenHash || !token) return false
-  const a = Buffer.from(proposal.tokenHash, 'hex')
+  if (!token) return false
   const b = Buffer.from(hashToken(token), 'hex')
-  return a.length === b.length && timingSafeEqual(a, b)
+  return [proposal.tokenHash, ...(proposal.tokenHashes ?? [])].some((one) => {
+    if (!one) return false
+    const a = Buffer.from(one, 'hex')
+    return a.length === b.length && timingSafeEqual(a, b)
+  })
 }
 
 /** The suggestion with this id anywhere in one project, with the epic it is on. */
@@ -321,13 +324,45 @@ export function reviseOne(
     at: proposal.at,
     group: proposal.group,
     tokenHash: proposal.tokenHash,
+    ...(proposal.tokenHashes ? { tokenHashes: proposal.tokenHashes } : {}),
     revisedAt: Date.now(),
     revisions: (proposal.revisions ?? 0) + 1,
   }
   const at = key(project, epic)
   pending.set(at, (pending.get(at) ?? []).map((p) => (p.id === id ? kept : p)))
-  const { tokenHash: _hidden, ...shown } = kept
+  const { tokenHash: _hidden, tokenHashes: _others, ...shown } = kept
   return { ok: true, proposal: shown }
+}
+
+/**
+ * The same filer says it again about words it already has a pending suggestion
+ * on: that suggestion is revised in place rather than a second one filed. Keeps
+ * the id, the place in the order, the group and every token it was handed out
+ * under, and adds the new call's; answers the revised suggestion, or null when
+ * `id` is not pending.
+ */
+export function reviseByFiler(
+  project: string,
+  epic: string,
+  id: string,
+  fields: Pick<Proposal, 'from' | 'to' | 'text' | 'was_text' | 'was' | 'why' | 'asked'>,
+  newTokenHash: string,
+): Proposal | null {
+  const at = key(project, epic)
+  const held = pending.get(at) ?? []
+  const current = held.find((p) => p.id === id)
+  if (!current) return null
+  const { held: _out, ...rest } = current
+  const kept: Proposal = {
+    ...rest,
+    ...fields,
+    tokenHashes: [...(current.tokenHashes ?? []), newTokenHash],
+    revisedAt: Date.now(),
+    revisions: (current.revisions ?? 0) + 1,
+  }
+  pending.set(at, held.map((p) => (p.id === id ? kept : p)))
+  const { tokenHash: _a, tokenHashes: _b, ...shown } = kept
+  return shown
 }
 
 /**

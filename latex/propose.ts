@@ -87,6 +87,19 @@ export interface Proposal {
    * cannot be revised by an agent (the author can still answer it).
    */
   tokenHash?: string
+  /**
+   * Hashes of the tokens of later calls that revised this one on their own
+   * (`propose_edit` again from the same filer): every token this suggestion
+   * has been handed out under still proves its filer, and none is ever kept.
+   */
+  tokenHashes?: string[]
+  /**
+   * Shared by the reviewable changes that are about the same words — two
+   * filers' suggestions, a suggestion and a change already in the file — so
+   * the page draws ONE item with every version in it, and answering it
+   * answers all of them. Set when read (`doors.ts`), never stored.
+   */
+  alt?: string
   /** When the filer last revised it, and how many times. Absent = never. */
   revisedAt?: number
   revisions?: number
@@ -214,14 +227,21 @@ export function relocate(proposal: Proposal, source: string, hash: string): Prop
   const tail = longest((n) => find.slice(find.length - n))
   const useHead = head >= floor && head >= tail
   const useTail = !useHead && tail >= floor
+  /* What matched pins down where the quote began (or ended); the passage is
+     drawn as long as the quote was, so what was rewritten inside it is inside
+     the mark — and meets whatever somebody changed there. */
   if (useHead) {
     const at = near(find.slice(0, head))
-    if (at !== -1) return placed(at, head, 'changed')
+    if (at !== -1) return placed(at, Math.min(find.length, source.length - at), 'changed')
   }
   if (useTail) {
     const piece = find.slice(find.length - tail)
     const at = near(piece)
-    if (at !== -1) return placed(at, tail, 'changed')
+    if (at !== -1) {
+      const end = at + tail
+      const start = Math.max(0, end - find.length)
+      return placed(start, end - start, 'changed')
+    }
   }
   return keep({ held: 'gone', from: 0, to: 0, was_text: '' })
 }

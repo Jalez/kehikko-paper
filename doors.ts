@@ -39,6 +39,7 @@ import {
   proposalById,
   rebaseAll,
   remeasure,
+  reviseByFiler,
   reviseOne,
   setWhy,
   settle,
@@ -722,6 +723,14 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         find: { type: 'string', description: 'The exact text to replace. Must appear exactly once in that file.' },
         replace: { type: 'string', description: 'What goes there. Empty deletes it.' },
         why: { type: 'string', description: 'One sentence the reader sees beside the change, saying why.' },
+        agent: {
+          type: 'string',
+          description:
+            'Optional. A name for you, the same on every call (an agent name, a session id). A new suggestion over '
+            + 'words you already have a pending suggestion on REVISES that one rather than filing a second; with no '
+            + 'name, every caller without one is taken to be the same filer. A different name is a different filer: '
+            + 'the person then sees both versions as one item and picks.',
+        },
         group: {
           type: 'string',
           description:
@@ -799,6 +808,39 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         }
       }
       const issued = mintToken()
+      const filer = str(args.agent, 60) || 'an agent'
+
+      /* One passage, one review item. The same filer saying it again about
+         words it already has pending is revising that suggestion, whether or
+         not it has the tool for it: an agent whose tool list was fixed before
+         revise_edit existed only has this one. "Same filer" is the name given
+         in `agent`, and with none the anonymous family — this door sees no
+         session, so that is the finest identity it has. A suggestion in a
+         group is not folded into. */
+      const own = touching.flatMap((t) => {
+        const p = proposalById(named.project, epic, t.id)
+        return p && p.by === filer && !p.group && !group && (t.conflict || p.asked?.find === find) ? [p] : []
+      })
+      if (own.length) {
+        const [lead, ...extra] = own
+        const revised = reviseByFiler(
+          named.project,
+          epic,
+          lead!.id,
+          { from: worked.from, to: worked.to, text: worked.text, was_text: worked.was_text, was, why, asked: { find, replace } },
+          issued.hash,
+        )
+        if (revised) {
+          /* Others of its own over the same words are what this one supersedes. */
+          for (const one of extra) settle(named.project, epic, one.id, 'withdrawn')
+          return [
+            `Revised ${revised.id} (was pending): your new suggestion touched words your earlier one already covered, so it replaced that one `
+              + `instead of standing beside it (revision ${revised.revisions}). Same filer: ${filer === 'an agent' ? 'no agent name given, so every caller without one counts as one filer' : `agent "${filer}"`}.`,
+            `Revision token: ${issued.token}`,
+            'Keep that token. The earlier one still works as well. Nothing is written until the person accepts it.',
+          ].join('\n')
+        }
+      }
 
       const filed = keep(named.project, epic, {
         file,
@@ -808,7 +850,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         was_text: worked.was_text,
         was,
         why,
-        by: 'an agent',
+        by: filer,
         /* Kept so the suggestion can be measured again if the file changes
            under it before anybody answers — see `refile`. */
         asked: { find, replace },
@@ -1112,7 +1154,53 @@ function everything(project: string, epic: string): { proposals: Proposal[]; ctx
   const staged = pendingFor(project, epic)
   const ctx = ctxOf(project, epic)
   const review = ctx ? reviewOf(ctx) : null
-  return { proposals: [...staged, ...(review?.changes ?? [])], ctx, review, said }
+  return { proposals: versionsOf([...staged, ...(review?.changes ?? [])]), ctx, review, said }
+}
+
+/**
+ * Mark the changes that are about the same words, so the page draws ONE item.
+ *
+ * Two filers' suggestions over the same words, and a suggestion beside a change
+ * somebody already made in the file there, are versions of one passage. They
+ * share an `alt`; the person sees one tag with both versions in it, picks one
+ * (the others go with it) or cancels them all. Overlap is of the ranges drawn
+ * (the words each is about), touching or sharing a byte, or of one quoted text.
+ */
+function versionsOf(all: Proposal[]): Proposal[] {
+  const live = all.filter((p) => (p.kind === undefined || p.kind === 'staged' || p.kind === 'disk') && p.held !== 'gone')
+  const parent = new Map<string, string>()
+  const find = (id: string): string => {
+    let at = id
+    while ((parent.get(at) ?? at) !== at) at = parent.get(at)!
+    return at
+  }
+  const touches = (a: Proposal, b: Proposal): boolean => {
+    if (a.file !== b.file) return false
+    const az = a.from === a.to
+    const bz = b.from === b.to
+    if (az && bz) return a.from === b.from
+    if (az) return b.from < a.from && a.from < b.to
+    if (bz) return a.from < b.from && b.from < a.to
+    return a.from < b.to && b.from < a.to
+  }
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      const a = live[i]!
+      const b = live[j]!
+      if (a.group && a.group === b.group) continue
+      const same = a.asked && b.asked && a.asked.find === b.asked.find && a.file === b.file
+      if (touches(a, b) || same) parent.set(find(b.id), find(a.id))
+    }
+  }
+  const members = new Map<string, Proposal[]>()
+  for (const p of live) members.set(find(p.id), [...(members.get(find(p.id)) ?? []), p])
+  const alt = new Map<string, string>()
+  for (const group of members.values()) {
+    if (group.length < 2) continue
+    const lead = [...group].sort((x, y) => x.from - y.from || x.at - y.at)[0]!
+    for (const p of group) alt.set(p.id, `alt-${lead.id}`)
+  }
+  return all.map((p) => (alt.has(p.id) ? { ...p, alt: alt.get(p.id)! } : p))
 }
 
 /** What goes beside the list in every answer: the setting, the baseline in words, what was accepted lately. */
@@ -1547,6 +1635,32 @@ function answerOf(
     const decision = str(body?.decision, 20)
     const id = str(body?.id, 80)
 
+    /* The other versions of this passage, if it has any: answering one answers
+       the item. Read before anything changes the files. */
+    const mates = (() => {
+      /* Not `everything`: that measures the suggestions against the disk, and an
+         answer is measured against the page's hash, not smoothed over first. */
+      const ctxNow = ctxOf(project, epic)
+      const all = versionsOf([...pendingFor(project, epic), ...(ctxNow ? reviewOf(ctxNow).changes : [])])
+      const me = all.find((p) => p.id === id)
+      return me?.alt ? all.filter((p) => p.alt === me.alt && p.id !== id) : []
+    })()
+    const answerMates = (how: 'accept' | 'reject') => {
+      for (const mate of mates) {
+        if (mate.kind === 'disk') {
+          /* A version already in the file is cancelled only when the whole item is. */
+          if (how === 'reject') {
+            const ctx = ctxOf(project, epic)
+            if (ctx) cancelChange(ctx, mate.id)
+          }
+        } else {
+          /* A suggestion goes with the whole group it is in. */
+          const one = proposalById(project, epic, mate.id)
+          if (one) for (const member of groupOf(project, epic, one)) settle(project, epic, member.id, 'rejected')
+        }
+      }
+    }
+
     /* A change found in the files themselves, not a staged suggestion: accepting
        it moves the baseline (in git, stages it) and cancelling puts the
        baseline's text back. See `review.ts`. */
@@ -1556,6 +1670,7 @@ function answerOf(
       if (ctx && found) {
         if (decision !== 'accept' && decision !== 'reject') return bad('A change is accepted or cancelled, and this said neither.')
         const done = decision === 'accept' ? acceptChange(ctx, id) : cancelChange(ctx, id, body?.confirm === true)
+        if (done.ok) answerMates(decision === 'accept' ? 'accept' : 'reject')
         const all = everything(project, epic)
         if (!done.ok) {
           return {
@@ -1590,6 +1705,7 @@ function answerOf(
       if (!one) return bad('There is no suggestion by that name waiting here.', 404)
       /* A group is answered as one: half a move is not a change anybody asked for. */
       for (const member of groupOf(project, epic, one)) settle(project, epic, member.id, 'rejected')
+      answerMates('reject')
       const after = everything(project, epic)
       return ok({ ok: true, proposals: after.proposals, ...reviewFacts(after.review) })
     }
@@ -1720,6 +1836,7 @@ function answerOf(
     for (const m of members) {
       settle(project, epic, m.id, 'accepted', edited(m) ? { editedByAuthor: true, final: given[m.id] } : {})
     }
+    answerMates('accept')
     /*
      * Accepting a suggestion applies it and moves the baseline by it (in git:
      * stages it). It does NOT commit.

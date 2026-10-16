@@ -529,7 +529,7 @@ export function Workspace({
       if (restoringTimer.current) clearTimeout(restoringTimer.current)
       restoringTimer.current = setTimeout(() => {
         restoring.current = false
-      }, 7500)
+      }, 13_000)
     }
     setJump((was) => ({ file: going.file, from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign, ...top }))
     if (tabRef.current !== 'source') unseen.current = true
@@ -1446,7 +1446,16 @@ export function Workspace({
   const walkable = useMemo(() => proposals.filter((p) => p.held !== 'gone' && p.kind !== 'deleted'), [proposals])
   const outOfDate = useMemo(() => proposals.filter((p) => p.held === 'gone'), [proposals])
   const deletedFiles = useMemo(() => proposals.filter((p) => p.kind === 'deleted'), [proposals])
-  const stops = useMemo(() => stopsOf(walkable, listed), [walkable, listed])
+  const rawStops = useMemo(() => stopsOf(walkable, listed), [walkable, listed])
+  /* Which version of a passage is the one shown, for stops that are versions of one passage: the others are not drawn, and answering is of the one shown. */
+  const [shownVersion, setShownVersion] = useState<ReadonlyMap<string, number>>(() => new Map())
+  const stops = useMemo(
+    () => rawStops.map((s) => (s.versions ? { ...s, lead: s.members[(shownVersion.get(s.key) ?? 0) % s.members.length]! } : s)),
+    [rawStops, shownVersion],
+  )
+  const nextVersion = useCallback((key: string) => {
+    setShownVersion((was) => new Map(was).set(key, (was.get(key) ?? 0) + 1))
+  }, [])
   const [navigated, setNavigated] = useState<string | null>(null)
   const [proposedKeys, setProposedKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [editing, setEditing] = useState<string | null>(null)
@@ -1512,6 +1521,8 @@ export function Workspace({
       const key = stopKeyOf(p)
       const stop = stops.find((one) => one.key === key)
       if (!stop) continue
+      /* Of several versions of one passage only the one shown is drawn. */
+      if (stop.versions && stop.lead.id !== p.id) continue
       out.push({
         id: p.id,
         key,
@@ -1523,8 +1534,9 @@ export function Workspace({
         armed: key === armedKey,
         why: p.why,
         revisions: p.revisions ?? 0,
-        count: stop.members.length,
+        count: stop.versions ? 1 : stop.members.length,
         tag: stop.lead.id === p.id,
+        ...(stop.versions ? { versions: stop.members.length, version: stop.members.indexOf(stop.lead) + 1 } : {}),
         editing: editing === p.id,
         proposed: p.asked?.replace ?? p.text,
         kind: p.kind === 'disk' || p.kind === 'new' ? p.kind : 'staged',
@@ -2012,6 +2024,7 @@ export function Workspace({
         onToggleSuggestion={toggleProposed}
         onAnswerSuggestion={(key, decision, confirm) => void answerCurrent(decision, key, confirm)}
         onWhy={(id, why) => void wire.review({ action: 'why', id, why })}
+        onVersion={nextVersion}
         onPickSuggestion={armOn}
         onArmedKey={onArmedKey}
         onDisarm={disarm}

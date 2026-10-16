@@ -80,6 +80,8 @@ export interface EditorProps {
   onToggleSuggestion?(key: string): void
   /** Accept change / Cancel change on a tag: answers THAT suggestion (its group, by stop key), not the current one. `confirm` is said by the second press that deletes a new file. */
   onAnswerSuggestion?(key: string, decision: 'accept' | 'reject', confirm?: boolean): void
+  /** Show the next version of a passage that has several (two filers, or a suggestion and a change in the file). */
+  onVersion?(key: string): void
   /** The author wrote (or changed) the reason on a tag: saved beside the change, by its id. */
   onWhy?(id: string, why: string): void
   /** The author pressed on a marked passage: it becomes the one answered. */
@@ -163,6 +165,9 @@ export interface InlineSuggestion {
   held?: 'changed' | 'ambiguous'
   /** When a change on disk was found (ms), for the tag. */
   found: number
+  /** Versions of one passage: how many, and which this is. Answering the item answers them all; Accept takes the one shown. */
+  versions?: number
+  version?: number
   /** The author changed the reason or the new text. */
   adjusted: boolean
 }
@@ -174,6 +179,7 @@ type Suggesting = {
   answer(key: string, decision: 'accept' | 'reject', confirm?: boolean): void
   draft(id: string, text: string): void
   why(id: string, text: string): void
+  version(key: string): void
   stopEditing(): void
   /** A press on the proposed text shown in place: the caret goes into the passage, and it is armed. */
   pick(id: string, withCaret: boolean): void
@@ -274,7 +280,7 @@ export class TagWidget extends WidgetType {
     return (
       a.id === b.id && a.after === b.after && a.current === b.current && a.armed === b.armed && a.why === b.why &&
       a.revisions === b.revisions && a.count === b.count && a.editing === b.editing && a.held === b.held &&
-      a.adjusted === b.adjusted && a.kind === b.kind && a.found === b.found
+      a.adjusted === b.adjusted && a.kind === b.kind && a.found === b.found && a.versions === b.versions && a.version === b.version
     )
   }
   /* A tag whose reason changed is patched, not rebuilt: a field the person is
@@ -312,6 +318,17 @@ export class TagWidget extends WidgetType {
       toggle.addEventListener('mousedown', (event) => event.preventDefault())
       toggle.addEventListener('click', () => on.toggle(one.key))
       controls.append(toggle)
+    }
+    if ((one.versions ?? 0) > 1) {
+      const other = document.createElement('button')
+      other.type = 'button'
+      other.className = 'cm-sugg-toggle cm-sugg-version'
+      other.setAttribute('data-sugg-version', '')
+      other.textContent = `Other version \u00b7 ${one.version ?? 1} of ${one.versions}`
+      other.title = 'Several versions are about these words: Accept takes the one shown and the others go with it; Cancel cancels them all'
+      other.addEventListener('mousedown', (event) => event.preventDefault())
+      other.addEventListener('click', () => on.version(one.key))
+      controls.append(other)
     }
     tag.append(controls)
     /* Answering THIS change (its group as one): the same function the
@@ -391,6 +408,7 @@ export class TagWidget extends WidgetType {
       note('cm-sugg-held', one.held === 'ambiguous' ? 'the text now appears more than once' : 'the text changed since this was suggested')
     }
     if (one.count > 1) note('cm-sugg-group', `${one.count} changes`)
+    if ((one.versions ?? 0) > 1) note('cm-sugg-group', `${one.versions} versions of these words`)
     if (one.revisions) note('cm-sugg-revised', one.revisions > 1 ? `revised ${one.revisions}\u00d7` : 'revised')
     const drafted = on.drafts.get(one.id)
     note('cm-sugg-adj', 'adjusted', !(one.adjusted || (drafted !== undefined && drafted !== one.proposed)))
@@ -539,8 +557,6 @@ const marksField = StateField.define<DecorationSet>({
  */
 function holdPlace(view: EditorView, offset: number, margin: number, column: boolean): void {
   const scroller: HTMLElement = (column ? view.dom.closest<HTMLElement>('[data-source-column]') : null) ?? view.scrollDOM
-  let frames = 0
-  let steady = 0
   let stopped = false
   const stop = () => {
     stopped = true
@@ -550,24 +566,22 @@ function holdPlace(view: EditorView, offset: number, margin: number, column: boo
   const started = performance.now()
   const step = () => {
     if (stopped || !view.dom.isConnected) return stop()
-    frames += 1
     const row = view.coordsAtPos(offset, 1)
     const box = scroller.getBoundingClientRect()
     if (row && box.height > 0) {
       const delta = row.top - (box.top + margin)
       if (Math.abs(delta) > 1) {
         scroller.scrollTop += delta
-        steady = 0
-      } else steady += 1
+      }
     }
-    /* Quiet for a third of a second, or six seconds: whichever comes first. */
-    if (steady >= 20 || performance.now() - started > 6000) return stop()
+    /* Held for as long as the layout may still be moving — a long chapter measures itself as it is looked at — and let go the moment the person does anything. */
+    if (performance.now() - started > 12_000) return stop()
     requestAnimationFrame(step)
   }
   requestAnimationFrame(step)
 }
 
-export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onWhy, onPickSuggestion, onArmedKey, onDisarm, onStopEditing, embedded, landed, memory }: EditorProps) {
+export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onWhy, onVersion, onPickSuggestion, onArmedKey, onDisarm, onStopEditing, embedded, landed, memory }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
   const scrolled = useRef(onScrolled)
   scrolled.current = onScrolled
@@ -583,6 +597,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
   answered.current = onAnswerSuggestion
   const whyNow = useRef(onWhy)
   whyNow.current = onWhy
+  const versionNow = useRef(onVersion)
+  versionNow.current = onVersion
   const armedKey = useRef(onArmedKey)
   armedKey.current = onArmedKey
   const disarmed = useRef(onDisarm)
@@ -756,6 +772,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     answer: (key, decision, confirm) => answered.current?.(key, decision, confirm),
     draft: () => {},
     why: (id, text) => whyNow.current?.(id, text),
+    version: (key) => versionNow.current?.(key),
     stopEditing: () => stopped.current?.(),
     pick: (id, withCaret) => {
       if (withCaret) {

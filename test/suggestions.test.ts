@@ -116,20 +116,28 @@ describe('revise and withdraw', () => {
     expect(tool('list_proposals', { project, epic: 'a-paper' })).toContain('state: accepted')
   })
 
-  test('a second suggestion on the same words says which one it overlaps, and supersedes nothing', () => {
-    const a = file('tpyo', 'typo')
-    const b = file('tpyo in it', 'typo in it')
+  test('a second suggestion on the same words from ANOTHER filer says which one it overlaps; both are one item', () => {
+    const a = file('tpyo', 'typo', { agent: 'one' })
+    const b = file('tpyo in it', 'typo in it', { agent: 'two' })
     expect(b.said).toContain(`Overlaps ${a.id}`)
     expect(b.said).toContain('only one of the two can apply')
     expect(list()).toHaveLength(2)
-    const c = file('seond', 'second')
+    expect(new Set(list().map((p) => p.alt)).size).toBe(1)
+    const c = file('seond', 'second', { agent: 'two' })
     expect(c.said).not.toContain('Overlaps')
     expect(c.said).not.toContain('Shares a passage')
   })
 
+  test('the SAME filer saying it again about the same words revises its suggestion instead', () => {
+    const a = file('tpyo', 'typo')
+    const again = tool('propose_edit', { project, epic: 'a-paper', file: 'main.tex', find: 'tpyo in it', replace: 'typo in it', why: 'Again.' })
+    expect(again).toContain(`Revised ${a.id} (was pending)`)
+    expect(list()).toHaveLength(1)
+  })
+
   test('quoting the same sentence but changing other words is named too, as able to both apply', () => {
-    const a = file('The claim has a tpyo in it and it runs on', 'The claim has a typo in it and it runs on')
-    const b = file('runs on for long enough', 'runs on for long enough, really')
+    const a = file('The claim has a tpyo in it and it runs on', 'The claim has a typo in it and it runs on', { agent: 'one' })
+    const b = file('runs on for long enough', 'runs on for long enough, really', { agent: 'two' })
     expect(b.said).toContain(`Shares a passage with ${a.id}`)
     expect(b.said).not.toContain('only one of the two can apply')
   })
@@ -218,21 +226,15 @@ describe('groups', () => {
   })
 
   test('a plain accept that rewrites a member’s words leaves the group out of date, and it can still be cancelled whole', () => {
-    const plain = file('tpyo in it', 'typo in it')
-    const m1 = file('tpyo', 'typo', { group: 'g' })
+    const plain = file('tpyo in it', 'typo in it', { agent: 'one' })
+    const m1 = file('tpyo', 'typo', { group: 'g', agent: 'two' })
     // Overlaps `plain`; m2 is elsewhere.
-    file('seond', 'second', { group: 'g' })
+    file('seond', 'second', { group: 'g', agent: 'two' })
     expect(m1.said).toContain('Overlaps')
-    decide(plain.id, 'accept')
-    /* Both members stay, the rewritten one held back; the group cannot be accepted but can be cancelled. */
-    expect(list()).toHaveLength(2)
-    const held = list().find((p) => p.id === m1.id) as { held?: string }
-    expect(held.held).toBe('gone')
-    const before = disk()
-    expect(decide(m1.id, 'accept')?.status).toBe(409)
-    expect(disk()).toBe(before)
-    expect(decide(m1.id, 'reject')?.status).toBe(200)
+    /* Picking `plain` answers the item it shares with m1, and a group goes whole. */
+    expect(decide(plain.id, 'accept')?.status).toBe(200)
     expect(list()).toHaveLength(0)
+    expect(disk()).toContain('typo in it')
   })
 
   test('a group lives in one file', () => {

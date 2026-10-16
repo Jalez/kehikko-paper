@@ -6,7 +6,7 @@ const one = (over: Partial<InlineSuggestion> = {}): InlineSuggestion => ({
   why: 'Because.', revisions: 0, count: 1, tag: true, editing: false, proposed: 'x', kind: 'staged', found: 0, adjusted: false, ...over,
 })
 const draw = (s: InlineSuggestion) => {
-  const on = { list: [s], drafts: new Map<string, string>(), toggle() {}, answer() {}, draft() {}, why() {}, stopEditing() {}, pick() {} }
+  const on = { list: [s], drafts: new Map<string, string>(), toggle() {}, answer() {}, draft() {}, why() {}, version() {}, stopEditing() {}, pick() {} }
   return new TagWidget(s, on).toDOM()
 }
 const caps = (el: HTMLElement) => [...el.querySelectorAll('button[data-sugg-answer]')].map((b) => b.querySelector('kbd')?.textContent ?? null)

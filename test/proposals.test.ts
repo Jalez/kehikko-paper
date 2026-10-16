@@ -253,16 +253,14 @@ describe('two pending in one file', () => {
     expect(after.to - before.to).toBe('typographical'.length - 'tpyo'.length)
   })
 
-  test('one that overlaps what was applied is held back as out of date, and said out loud', () => {
+  test('another filer’s version of the same words goes with the item that was answered', () => {
     const first = idOf(suggest('tpyo', 'typo'))
-    idOf(suggest('a tpyo in', 'a typo in'))
+    idOf(tool('propose_edit', { project, epic: 'a-paper', file: 'main.tex', find: 'a tpyo in', replace: 'a typo in', why: 'Another filer.', agent: 'someone else' }))
     expect(pending()).toHaveLength(2)
     const reply = decide(first, 'accept')
     expect(reply?.status).toBe(200)
-    /* Not dropped: kept, held back, and said. */
-    expect(pending()).toHaveLength(1)
-    expect((pending()[0] as { held?: string }).held).toBeDefined()
-    expect((reply?.body as { said: string }).said).toContain('out of date')
+    /* The other version of the same words goes with the item that was answered. */
+    expect(pending()).toHaveLength(0)
     /* Refused for the overlapping one, and applied exactly once for the other. */
     expect(onDisk()).toBe(SOURCE.replace('tpyo', 'typo'))
   })
