@@ -57,6 +57,8 @@ interface Call {
 let disk: Record<string, string>
 let calls: Call[]
 let built: string | null
+let waiting: Record<string, unknown>[] = []
+let autoOnHere = false
 let lastPreview: PreviewProps | null
 /** Everything the page posted to its host, in order. */
 interface Asked {
@@ -97,7 +99,7 @@ function serve(path: string, query: URLSearchParams, body: Record<string, unknow
     built = `build-${calls.filter((one) => one.path === '/api/compile').length}`
     return [200, { ok: true, build: buildNow() }]
   }
-  if (path === '/api/proposals') return [200, { ok: true, proposals: [], said: '' }]
+  if (path === '/api/proposals') return [200, { ok: true, proposals: waiting, auto: autoOnHere, jump: true, accepted: [], baseline: { mode: 'snapshot', says: 'compared with what you last accepted in Paper' }, untracked: [], said: '' }]
   if (path === '/api/review') return [200, { ok: true, proposals: [], auto: body?.action === 'auto' ? body.on === true : false, jump: true, accepted: [], baseline: null, untracked: [] }]
   if (path === '/api/uncommitted') return [200, { ok: true, standing: { at: 'nogit' }, hashes: hashes() }]
   if (path === '/api/file') {
@@ -215,6 +217,8 @@ beforeEach(() => {
   disk = { ...TEXT }
   calls = []
   asks = []
+  waiting = []
+  autoOnHere = false
   built = null
   lastPreview = null
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -814,6 +818,7 @@ describe('the header the host draws', () => {
       'run sg-accept',
       'run sg-reject',
       'run sg-edit',
+      'run sg-baseline',
     ])
     expect(declared('pane')!.value).toBe('source')
     /* Compile is the one an agent may press; nothing else says so, and a confirmed run could not. */
@@ -893,5 +898,38 @@ describe('the header the host draws', () => {
     send(canvas, 'file', 't1')
     await waitFor(() => expect(openFile()).toBe('chapters/method.tex'))
     await waitFor(() => expect(declared('file')!.value).toBe('t1'))
+  })
+})
+
+describe('the host’s Inbox: what is waiting for the person', () => {
+  const change = (id: string, file: string) => ({ id, file, from: 1, to: 3, text: 'old', was_text: 'new', was: 'h', why: '', by: 'changed on disk', at: 1, kind: 'disk' })
+  const activity = () => {
+    const sent = (asks as { method?: string; params?: { items?: { id: string; state: string; label: string; place?: { epic?: string; parts?: string[] } }[] } }[]).filter((one) => one.method === 'activity.set')
+    return sent.at(-1)?.params?.items ?? null
+  }
+
+  test('one item per paper and file for the changes to review, never one per change', async () => {
+    waiting = [change('d-1', 'main.tex'), change('d-2', 'main.tex'), change('d-3', 'chapters/design.tex')]
+    await framed(PARTS())
+    await waitFor(() => expect(activity()?.length).toBe(2))
+    const items = activity()!
+    expect(items.map((i) => i.label).sort()).toEqual(['1 change to review in chapters/design.tex', '2 changes to review in main.tex'])
+    expect(items.every((i) => i.state === 'attention')).toBe(true)
+    expect(new Set(items.map((i) => i.id)).size).toBe(2)
+    expect(items.every((i) => i.place?.epic === EPIC)).toBe(true)
+  })
+
+  test('nothing is reported when none is waiting', async () => {
+    await framed(PARTS())
+    await new Promise((done) => setTimeout(done, 80))
+    expect(activity() ?? []).toEqual([])
+  })
+
+  test('nothing is reported under Auto accept: nothing waits', async () => {
+    autoOnHere = true
+    waiting = [change('d-1', 'main.tex')]
+    await framed(PARTS())
+    await new Promise((done) => setTimeout(done, 80))
+    expect(activity() ?? []).toEqual([])
   })
 })

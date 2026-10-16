@@ -1844,8 +1844,20 @@ export function Workspace({
      item that is no longer true is simply absent. Nothing is reported while
      Auto accept takes the changes in. The client drops a list identical to the
      last and sends nothing to a host that does not answer the method. */
+  /* When each thing entered the state it is in: the host decides what has been seen from it. */
+  const since = useRef(new Map<string, number>())
+  const failedBefore = useRef(false)
   const inboxKey = useMemo(() => {
     const items: ActivityItem[] = []
+    const at = (id: string, state: string) => {
+      const key = `${id}\0${state}`
+      let when = since.current.get(key)
+      if (when === undefined) {
+        when = Date.now()
+        since.current.set(key, when)
+      }
+      return when
+    }
     const place = (name: string) => {
       const part = partsOfFile(parts, inProject(paper.epic, name), paper.epic, wire.projectPath)[0]
       return { epic: paper.epic, ...(part ? { parts: [part.id] } : {}) }
@@ -1857,6 +1869,7 @@ export function Workspace({
         items.push({
           id: `review:${paper.epic}:${name}`.slice(0, 128),
           state: 'attention',
+          since: at(`review:${paper.epic}:${name}`.slice(0, 128), 'attention'),
           label: `${n} change${n === 1 ? '' : 's'} to review in ${name}`.slice(0, 120),
           place: place(name),
           ...(wire.facts.baseline ? { detail: wire.facts.baseline.says.slice(0, 200) } : {}),
@@ -1868,13 +1881,19 @@ export function Workspace({
       items.push({
         id: `compile:${paper.epic}`.slice(0, 128),
         state: 'attention',
+        since: at(`compile:${paper.epic}`, 'attention'),
         label: `Compile failed${first.file ? ` in ${first.file}${first.line ? `:${first.line}` : ''}` : ''}: ${first.message}`.slice(0, 120),
         place: place(first.file ?? MAIN_FILE),
         detail: first.message.slice(0, 200),
       })
     }
+    if (failed && errors[0]) failedBefore.current = true
+    else if (failedBefore.current && ran?.ok) {
+      /* It compiles again: the host keeps that marked until it has been seen. */
+      items.push({ id: `compile:${paper.epic}`.slice(0, 128), state: 'done', since: at(`compile:${paper.epic}`, 'done'), label: 'Compiles again', place: { epic: paper.epic } })
+    }
     return JSON.stringify(items)
-  }, [walkable, auto, failed, errors[0]?.message, errors[0]?.file, errors[0]?.line, parts, paper.epic, wire.projectPath, wire.facts.baseline])
+  }, [walkable, auto, failed, ran?.ok, errors[0]?.message, errors[0]?.file, errors[0]?.line, parts, paper.epic, wire.projectPath, wire.facts.baseline])
   useEffect(() => {
     if (wire.answers && !wire.answers.includes('activity.set')) return
     wire.activity(JSON.parse(inboxKey) as ActivityItem[])
