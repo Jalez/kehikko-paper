@@ -39,14 +39,46 @@ export interface ColumnRegion {
 
 export const LABEL_PX = EMBED_TOP
 
-/** How a stretch of text is estimated to wrap, in rows, at `cols` columns. Remembered per text. */
+/**
+ * How many rows a text takes at `cols` columns of a monospaced font, wrapped
+ * the way an editor wraps: greedily, at spaces, and a word longer than a row is
+ * broken. Close to exact where a proportion of the length is not, which is what
+ * keeps a region's estimated height near its measured one — and so a column
+ * that does not move under somebody as the regions come to be measured.
+ */
 function rowsOf(text: string, cols: number): number {
   let rows = 0
   let at = 0
   for (;;) {
     const next = text.indexOf('\n', at)
-    const length = (next === -1 ? text.length : next) - at
-    rows += Math.max(1, Math.ceil(length / cols))
+    const end = next === -1 ? text.length : next
+    const length = end - at
+    if (length <= cols) rows += 1
+    else {
+      let used = 0
+      let row = 1
+      for (let i = at; i < end; ) {
+        const space = text.indexOf(' ', i)
+        const stop = space === -1 || space >= end ? end : space
+        /* A word with the space after it, as the wrap sees it. */
+        let word = stop - i + (stop < end ? 1 : 0)
+        i = stop + (stop < end ? 1 : 0)
+        while (word > cols) {
+          if (used > 0) {
+            row += 1
+            used = 0
+          }
+          word -= cols
+          row += 1
+        }
+        if (used + word > cols && used > 0) {
+          row += 1
+          used = 0
+        }
+        used += word
+      }
+      rows += row
+    }
     if (next === -1) return rows
     at = next + 1
   }
@@ -60,6 +92,7 @@ export function SourceColumn({
   onLabel,
   onLook,
   onCount,
+  smooth = 0,
 }: {
   regions: readonly ColumnRegion[]
   /** The region the person is in: always mounted. */
@@ -73,13 +106,15 @@ export function SourceColumn({
   onLook(file: string): void
   /** How many editors are mounted now: said when it changes. */
   onCount?(mounted: number): void
+  /** Changes when the next scroll should be smooth (a jump to the next change); the column goes back to instant after it. */
+  smooth?: number
 }) {
   const box = useRef<HTMLDivElement>(null)
   /** What a region measured the last time it was mounted, in pixels, label included. */
   const measured = useRef(new Map<string, number>())
   const [mounted, setMounted] = useState<readonly string[]>([])
   const mountedRef = useRef<readonly string[]>([])
-  const metrics = useRef({ width: 0, rowPx: 18.7, charPx: 7.5, ratio: 1 })
+  const metrics = useRef({ width: 0, rowPx: 18.7, charPx: 7.5, ratio: 1, cols: 0 })
   const [, redraw] = useState(0)
   const activeRef = useRef(active)
   activeRef.current = active
@@ -95,7 +130,7 @@ export function SourceColumn({
   const rawOf = (text: string | null): number => {
     if (text === null) return 3
     const width = metrics.current.width || 480
-    return rowsOf(text, Math.max(24, Math.floor((width - 56) / metrics.current.charPx)))
+    return rowsOf(text, metrics.current.cols || Math.max(24, Math.floor((width - 56) / metrics.current.charPx)))
   }
   const heightOf = (region: ColumnRegion): number => {
     const known = measured.current.get(region.file)
@@ -133,6 +168,36 @@ export function SourceColumn({
     counted.current?.(next.length)
   }, [decide])
 
+  /* What an editor really is, measured off one that is drawn: how wide a letter
+     is, how tall a row, how many letters fit in a row. Everything the blanks
+     are sized from — so what is not drawn is not far from what it will be. */
+  const calibrate = useCallback(() => {
+    const el = box.current
+    const content = el?.querySelector<HTMLElement>('.cm-content')
+    const line = content?.querySelector<HTMLElement>('.cm-line')
+    if (!el || !content || !line || el.clientWidth === 0) return
+    const style = getComputedStyle(line)
+    const probe = document.createElement('span')
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;pointer-events:none'
+    probe.style.font = getComputedStyle(content).font
+    probe.textContent = 'x'.repeat(100)
+    el.appendChild(probe)
+    const charPx = probe.getBoundingClientRect().width / 100
+    el.removeChild(probe)
+    const room = line.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
+    const rowPx = parseFloat(style.lineHeight) || line.getBoundingClientRect().height
+    if (!(charPx > 0) || !(room > 0) || !(rowPx > 0)) return
+    const cols = Math.max(8, Math.floor(room / charPx))
+    const m = metrics.current
+    if (m.cols !== cols || Math.abs(m.rowPx - rowPx) > 0.05 || Math.abs(m.charPx - charPx) > 0.01) {
+      m.cols = cols
+      m.rowPx = rowPx
+      m.charPx = charPx
+      m.ratio = 1
+      redraw((n) => n + 1)
+    }
+  }, [])
+
   /* The set follows the regions, the active one and what is measured. */
   const key = regions.map((one) => one.file).join('\n')
   /* A text arriving changes what the blanks are sized to, and so what is near. */
@@ -152,6 +217,10 @@ export function SourceColumn({
     }
     settle()
   }, [settle, key, active, loadedKey])
+
+  useLayoutEffect(() => {
+    calibrate()
+  }, [mounted, loadedKey, calibrate])
 
   /* A file that has gone from the paper has no height to remember. */
   useEffect(() => {
@@ -226,6 +295,7 @@ export function SourceColumn({
         metrics.current.width = el.clientWidth
         measured.current.clear()
         redraw((n) => n + 1)
+        requestAnimationFrame(() => calibrate())
       }
       if (height === 0 && now > 0 && lastTop.current > 0) el.scrollTop = lastTop.current
       height = now
@@ -233,11 +303,12 @@ export function SourceColumn({
     })
     watch.observe(el)
     return () => watch.disconnect()
-  }, [settle])
+  }, [settle, calibrate])
 
   /* What each mounted region measures. A region above the top that changes
      height — an estimate becoming real — moves the scroll by as much. */
   const sizes = useRef<ResizeObserver | null>(null)
+  const resettle = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return
     const found = new ResizeObserver((entries) => {
@@ -265,7 +336,15 @@ export function SourceColumn({
         const before = was ?? (known ? heightOf(known) : next)
         if (el && target.offsetTop + before <= el.scrollTop + 1 && el.clientHeight > 0) el.scrollTop += next - before
       }
-      if (changed) redraw((n) => n + 1)
+      if (changed) {
+        redraw((n) => n + 1)
+        /* What is under the top of the column may be other text now, with no scroll to say so: let the editors say where they are again once the layout has stopped moving. */
+        if (resettle.current) clearTimeout(resettle.current)
+        resettle.current = setTimeout(() => {
+          resettle.current = null
+          box.current?.dispatchEvent(new Event('scroll'))
+        }, 300)
+      }
     })
     sizes.current = found
     for (const child of Array.from(box.current?.children ?? [])) found.observe(child)
@@ -290,6 +369,18 @@ export function SourceColumn({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locate?.nonce])
+
+  /* Before the editor's own jump (a passive effect in a child) runs, so that
+     the scroll it makes is animated; instant again once it has settled. */
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!smooth || !el) return
+    el.style.scrollBehavior = 'smooth'
+    const timer = setTimeout(() => {
+      el.style.scrollBehavior = ''
+    }, 900)
+    return () => clearTimeout(timer)
+  }, [smooth])
 
   const open = new Set(mounted)
   return (

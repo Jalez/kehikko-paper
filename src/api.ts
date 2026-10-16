@@ -111,6 +111,7 @@ export async function post(
   path: string,
   params: Record<string, string> = {},
   sending: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  return replied(await ask<Record<string, unknown>>(path, { query: inProject(params), body: sending }))
+  return replied(await ask<Record<string, unknown>>(path, { query: inProject(params), body: sending, ...(signal ? { signal } : {}) }))
 }

@@ -302,7 +302,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
        `parts.set` and `content.changed` are for the chapters: a part to each
        chapter, on a press, and saying that what this module holds for the
        parts has changed. */
-    uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report'],
+    uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report'],
     storage: true,
     prompt: false,
   },

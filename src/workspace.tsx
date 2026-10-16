@@ -1,5 +1,6 @@
-import { LIMITS, partsOfFile, type Passage as WirePassage } from 'kehikot-module-protocol'
+import { LIMITS, partsOfFile, type ActivityItem, type Passage as WirePassage } from 'kehikot-module-protocol'
 import { useFocus } from 'kehikot-module-protocol/client/react'
+import type { EditorState } from '@codemirror/state'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button.tsx'
@@ -15,7 +16,7 @@ import type { Paper } from '../store.ts'
 import { apiUrl, json, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import { SourceColumn, type ColumnRegion } from './editor/source-column.tsx'
-import type { Editor } from './editor/source-editor.tsx'
+import type { Editor, EditorControl } from './editor/source-editor.tsx'
 import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, heldBy, inProject, narrowed, noPage, pageOfSheet, pagesDrawn, pagesOfSheets, partOf, tabsOf, ticksOf } from './focus.ts'
 import { HeaderFallback } from './header-fallback.tsx'
 import { headerOf } from './header.ts'
@@ -27,7 +28,7 @@ import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
 import { placement, position as positionOf, stopKeyOf, stopsOf, step as stepOf } from './suggestions.ts'
 import type { InlineSuggestion } from './editor/source-editor.tsx'
-import { autoApproveKey, autoApproveWas, keptPlace, pdfWas, placeWas, rememberAutoApprove, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
+import { anchorWas, forgetAnchor, keptPlace, pdfWas, placeWas, rememberAnchor, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
 import { useChapters } from './use-chapters.ts'
 import type { PressHandler, usePaper } from './use-paper.ts'
@@ -142,6 +143,9 @@ interface Going {
   foreign?: boolean
   /** A byte to put at the top of the editor, rather than the range in its middle: a place being put back. */
   top?: number | null
+  /** Or a one-based line to put at the top of the column: where it was scrolled to (`anchorWas`). */
+  topLine?: number
+  topCol?: number
   /** How many pixels of the row that byte is on were above the top of the editor. */
   past?: number
 }
@@ -274,6 +278,35 @@ export function Workspace({
     if (was) setTab(was.tab)
     const next = fileOnOpening(focusRef.current, paper.files, was?.file ?? null)
     if (next !== null) openAt(next)
+    /* The scroll is put back by the line and column that were at the top of the
+       column (`anchorWas`): not by bytes, which only mean something against the
+       very text they were counted in, and held there while the layout settles.
+       For a file that is still the one it was — a place is not guessed at. */
+    const anchor = anchorWas(standingIn(), paper.epic)
+    /* The file at the top of the column need not be the one being edited: in
+       the continuous column the person scrolls from the chapter they were in
+       up into the one before it, and that is where they were. Any file that
+       could be opened under the same pick is put back there. */
+    const opening = next ?? MAIN_FILE
+    const shown = anchor !== null && (anchor.file === opening || fileOnOpening(focusRef.current, paper.files, anchor.file) === anchor.file)
+    const own = anchor && shown ? spotWas(standingIn(), paper.epic, anchor.file) : null
+    if (anchor && own && own.hash === paper.hashes[anchor.file]) {
+      if (anchor.file !== opening) openAt(anchor.file)
+      restoring.current = true
+      if (anchor.file === was?.file) putBack.current = { file: anchor.file, from: own.from, to: own.to }
+      setGoing({
+        file: anchor.file,
+        bytes: { from: own.from, to: own.to },
+        topLine: anchor.line,
+        topCol: anchor.col,
+        past: anchor.past,
+        select: anchor.file === was?.file,
+        focus: false,
+        foreign: anchor.file !== was?.file,
+      })
+      return
+    }
+    if (anchor) forgetAnchor(standingIn(), paper.epic)
     const spot = was && was.file === (next ?? MAIN_FILE) ? spotWas(standingIn(), paper.epic, was.file) : null
     if (!was || !spot || spot.hash !== paper.hashes[was.file]) return
     putBack.current = { file: was.file, from: spot.from, to: spot.to }
@@ -347,12 +380,27 @@ export function Workspace({
        the whole paper when it has to (above). Lifting the pick comes through
        here, and the paper — stale by then, if anything was typed — is made. */
     if (!build || !build.engine || compiling || pickedKey !== null) return
-    const stamp = `${paper.epic}\0${Object.entries(paper.hashes).sort().join('|')}`
+    /* The files as they are NOW (the poll's), not as this page last read the
+       paper: a file somebody else wrote that this page holds no editor for —
+       one a chapter `\input`s — moves only those, and nothing else would
+       compile it. */
+    const now = wire.disk ?? paper.hashes
+    const stamp = `${paper.epic}\0${Object.entries(now).sort().join('|')}`
     if (tried.current === stamp) return
-    const fresh = build.pdf !== null && sameHashes(build.pdf.hashes, paper.hashes)
-    tried.current = stamp
-    if (!fresh) void compile()
-  }, [build, compiling, compile, paper.epic, paper.hashes, pickedKey])
+    const fresh = build.pdf !== null && sameHashes(build.pdf.hashes, now)
+    if (fresh) {
+      tried.current = stamp
+      return
+    }
+    /* A moment's grace: a save of this page's own, or text taken from the
+       disk, asks for its compile itself, and that one being under way is
+       seen here before this one is sent as well. */
+    const timer = setTimeout(() => {
+      tried.current = stamp
+      void compile()
+    }, tried.current === '' ? 0 : 400)
+    return () => clearTimeout(timer)
+  }, [build, compiling, compile, paper.epic, paper.hashes, wire.disk, pickedKey])
 
   const [tab, setTab] = useState<'source' | 'pdf'>('source')
   const tabRef = useRef(tab)
@@ -375,6 +423,9 @@ export function Workspace({
   /** A selection placed in a region that was not the active one, which the change of file must not reset. */
   const selectedIn = useRef<string | null>(null)
   const [going, setGoing] = useState<Going | null>(null)
+  /** While the column is being put back where it was: where it is meanwhile is not where the person left it. */
+  const restoring = useRef(false)
+  const restoringTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The byte at the top of the editor, as the editor last said it, the file it is a byte of, and how far past the top its row is. */
   const scrolled = useRef<{ file: string; top: number; past: number } | null>(null)
   /** The selection that was put back on opening: not the person selecting, so not a reason to turn the PDF to it. */
@@ -392,9 +443,16 @@ export function Workspace({
    *
    * Unlike a passage somebody pointed at, it does not turn the PDF to itself:
    * nobody here asked, and the person may be reading another page. `reveal`
-   * is the exception — a change that landed because they pressed Accept.
+   * is the exception — a change that landed because they pressed Accept, or
+   * one they walked or pressed to.
+   *
+   * `parts` are the pieces of the change itself, when it is more than one: a
+   * group of edits, the hunks one write made. Each is marked on the PDF where
+   * ITS words are printed, and nothing between them is — `from`/`to` is the
+   * first piece, which the editor is taken to. A piece that prints nothing (a
+   * comment, a blank line) is not marked at all rather than marked beside.
    */
-  const [noted, setNoted] = useState<{ file: string; from: number; to: number; proposal?: string; reveal?: boolean } | null>(null)
+  const [noted, setNoted] = useState<Noted | null>(null)
   const notedRef = useRef(noted)
   notedRef.current = noted
   const foreign = theirs ?? noted
@@ -460,6 +518,7 @@ export function Workspace({
 
   const go = useCallback(
     (target: Going) => {
+      userAt.current = Date.now()
       openAt(target.file)
       setGoing(target)
     },
@@ -489,7 +548,19 @@ export function Workspace({
         from = to = start + (text.length - text.trimStart().length)
       }
     }
-    const top = typeof going.top === 'number' ? { top: indexAt(doc.text, going.top, doc.eol), past: going.past ?? 0 } : {}
+    const top =
+      typeof going.topLine === 'number'
+        ? { top: Math.min(doc.text.length, startOfLine(doc.text, going.topLine) + (going.topCol ?? 0)), past: going.past ?? 0 }
+        : typeof going.top === 'number'
+          ? { top: indexAt(doc.text, going.top, doc.eol), past: going.past ?? 0 }
+          : {}
+    if (typeof going.topLine === 'number') {
+      /* Held while the place settles: scrolling by itself in that time is not the person moving. */
+      if (restoringTimer.current) clearTimeout(restoringTimer.current)
+      restoringTimer.current = setTimeout(() => {
+        restoring.current = false
+      }, 13_000)
+    }
     setJump((was) => ({ file: going.file, from, to, nonce: (was?.nonce ?? 0) + 1, select: going.select && to > from, focus: going.focus, keep: going.foreign, ...top }))
     if (tabRef.current !== 'source') unseen.current = true
     setGoing(null)
@@ -583,6 +654,7 @@ export function Workspace({
       const held = name !== undefined && name !== now.file ? source.docs.get(name) : undefined
       if (name !== undefined && name !== now.file && !held) return
       scrolled.current = { file: name ?? now.file, top: byteAt(held ? held.text : now.text, top, held ? held.eol : now.eol), past }
+      if (!restoring.current && Date.now() - userAt.current < 8000) rememberAnchor(standingIn(), paper.epic, { file: name ?? now.file, line: lineAt(held ? held.text : now.text, top), col: top - startOfLine(held ? held.text : now.text, lineAt(held ? held.text : now.text, top)), past })
       rememberHere()
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -594,9 +666,11 @@ export function Workspace({
      replaces its own, and that is nobody navigating. */
   const held = useRef(selection)
   held.current = selection
+  /* Until when the caret landing on a change this page walked to is not the person wandering off it. */
+  const walkedUntil = useRef(0)
   const onSelect = useCallback(
     (next: { from: number; to: number }) => {
-      if (held.current.from !== next.from || held.current.to !== next.to) wandered()
+      if ((held.current.from !== next.from || held.current.to !== next.to) && Date.now() > walkedUntil.current) wandered()
       setSelection(next)
     },
     [wandered],
@@ -608,6 +682,37 @@ export function Workspace({
      reporting a selection because its text was replaced, which is nobody
      navigating, and is not heard. */
   const editorBox = useRef<HTMLDivElement>(null)
+  /* When the person last scrolled, or went somewhere, by hand. A column that
+     scrolls by itself — a region measured and the ones above it moved, a place
+     being put back — is not the person leaving it somewhere, and what is
+     remembered as "where I was" is only ever what they did. */
+  const userAt = useRef(0)
+  useEffect(() => {
+    const el = editorBox.current
+    if (!el) return
+    const mark = () => {
+      userAt.current = Date.now()
+    }
+    const names = ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'] as const
+    for (const name of names) el.addEventListener(name, mark, { capture: true, passive: true })
+    return () => {
+      for (const name of names) el.removeEventListener(name, mark, { capture: true })
+    }
+  }, [tab])
+  /* The page is going (a reload, a tab closed): once more, from what is on screen now, so that what is remembered is where it ended and not where it was a moment ago. */
+  useEffect(() => {
+    const leaving = () => {
+      if (Date.now() - userAt.current > 10 * 60_000) return
+      userAt.current = Date.now()
+      editorBox.current?.querySelector('[data-source-column]')?.dispatchEvent(new Event('scroll'))
+    }
+    window.addEventListener('pagehide', leaving)
+    window.addEventListener('beforeunload', leaving)
+    return () => {
+      window.removeEventListener('pagehide', leaving)
+      window.removeEventListener('beforeunload', leaving)
+    }
+  }, [])
   const fileNow = useRef(file)
   fileNow.current = file
   const selectIn = useCallback(
@@ -653,7 +758,12 @@ export function Workspace({
   const buildId = onPart ? partDrawn.pdf.id : (build?.pdf?.id ?? null)
   const screen = useRef<DrawnPart | null>(null)
   screen.current = onPart ? partDrawn : null
-  const wholeStale = build?.pdf ? !sameHashes(build.pdf.hashes, paper.hashes) : false
+  /* What the files hash to now. `paper.hashes` is what they were when this
+     page last read the paper or saved: a file somebody else wrote since — an
+     agent, another editor — moves the poll's hashes and not those, and a PDF
+     compiled from the new text was said to be "of an earlier save" for good. */
+  const onDisk = wire.disk ?? paper.hashes
+  const wholeStale = build?.pdf ? !sameHashes(build.pdf.hashes, onDisk) : false
 
   recompile.current = () => {
     if (pickedKey === null) void compile()
@@ -675,8 +785,15 @@ export function Workspace({
      not a place in the other, and is not shown for the moment it takes to ask
      again. */
   const [hint, setHint] = useState<Hint>(NO_HINT)
-  const foreignKey = foreign ? `${foreign.file}\0${foreign.from}\0${foreign.to}` : ''
-  const foreignRects = hint.of === foreignKey && hint.build === buildId ? hint.rects : NO_HINT.rects
+  /* The pieces asked about and marked: those of a change (`noted.parts`), else the one passage. */
+  const pieces = useMemo(
+    () => (foreign ? ('parts' in foreign && foreign.parts?.length ? foreign.parts : [{ from: foreign.from, to: foreign.to }]) : NO_PIECES),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [foreign?.file, foreign?.from, foreign?.to, foreign && 'parts' in foreign ? JSON.stringify(foreign.parts ?? null) : ''],
+  )
+  const foreignKey = foreign ? `${foreign.file}\0${pieces.map((one) => `${one.from}-${one.to}`).join(',')}` : ''
+  const foreignEach = hint.of === foreignKey && hint.build === buildId ? hint.rects : NO_HINT.rects
+  const foreignRects = useMemo(() => foreignEach.flat(), [foreignEach])
   const foreignDoc = foreign ? source.docs.get(foreign.file) : undefined
   const foreignText = foreignDoc?.text
 
@@ -1014,18 +1131,26 @@ export function Workspace({
       return
     }
     let stopped = false
-    const first = lineAt(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol))
-    const last = lineAt(foreignText, Math.max(indexAt(foreignText, foreign.to, foreignDoc.eol) - 1, 0))
+    const lines = pieces.slice(0, MAX_PIECES).map((one) => {
+      const first = lineAt(foreignText, indexAt(foreignText, one.from, foreignDoc.eol))
+      const last = lineAt(foreignText, Math.max(indexAt(foreignText, one.to, foreignDoc.eol) - 1, 0))
+      return [first, Math.max(first, last)] as const
+    })
+    /* A passage somebody pointed at is shown near where SyncTeX has a record
+       when its own lines have none. A change is not: one that prints nothing
+       (a comment) is not on the page, and a box round the heading below it is
+       a confident highlight of text nobody touched. */
+    const nearest = theirs !== null
     /* The disk first (`fresh`): a byte range somebody else chose is of the
        file as it is NOW, and the poll may not have told this page yet that it
        moved. If it did, the text has just been taken, this effect runs again
        behind, and nothing was asked of a table that is not this text's. */
     void fresh(foreign.file)
-      .then((same) => (same && !stopped ? ask(foreign.file, first, Math.max(first, last), true) : null))
-      .then((rects) => {
-        if (stopped || !rects) return
-        setHint({ of: foreignKey, build: buildId, rects })
-        if (rects.length && turns) {
+      .then((same) => (same && !stopped ? Promise.all(lines.map(([first, last]) => ask(foreign.file, first, last, nearest))) : null))
+      .then((each) => {
+        if (stopped || !each) return
+        setHint({ of: foreignKey, build: buildId, rects: each })
+        if (each.some((rects) => rects.length) && turns) {
           turnedFor.current = foreignKey
           turnTo()
         }
@@ -1035,30 +1160,39 @@ export function Workspace({
       stopped = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, fresh, behind, turns, turnTo])
+  }, [buildId, foreign?.file, foreignKey, foreignText === undefined, ask, fresh, behind, turns, turnTo])
 
   const marks = useMemo<PdfMark[]>(() => {
     const out: PdfMark[] = []
     /* The foreign mark first: `reveal` scrolls to the first mark, and what
        somebody pointed at outranks where the caret happens to be. */
     if (foreign && (foreignRects.length || (behind && theirs !== null))) {
-      const whole = foreignText !== undefined && foreignDoc
-        ? wholeWords(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol), indexAt(foreignText, foreign.to, foreignDoc.eol))
-        : null
-      const source = whole && foreignText !== undefined ? { text: foreignText, ...whole } : null
-      /* With no rectangles — the PDF is not of this text, so its table was
-         not asked — a mark is its words alone: `find.ts` draws them where
-         they are printed once, and draws nothing otherwise. Without words to
-         look for there is then no mark to make. */
-      if (foreignRects.length || source) out.push({ rects: foreignRects, source, foreign: true })
+      /* One mark per piece, each looked for where SyncTeX put ITS lines. */
+      pieces.slice(0, MAX_PIECES).forEach((one, i) => {
+        const rects = foreignEach[i] ?? NO_RECTS.rects
+        /* A piece of a change the table has nothing for prints nothing: no mark. */
+        if (!rects.length && !(behind && theirs !== null)) return
+        const whole = foreignText !== undefined && foreignDoc
+          ? wholeWords(foreignText, indexAt(foreignText, one.from, foreignDoc.eol), indexAt(foreignText, one.to, foreignDoc.eol))
+          : null
+        const source = whole && foreignText !== undefined ? { text: foreignText, ...whole } : null
+        /* With no rectangles — the PDF is not of this text, so its table was
+           not asked — a mark is its words alone: `find.ts` draws them where
+           they are printed once, and draws nothing otherwise. Without words to
+           look for there is then no mark to make. */
+        if (rects.length || source) out.push({ rects, source, foreign: true })
+      })
     }
-    /* With only a caret, the passage is the line it is on: what that line prints is what is marked. */
-    if (ownRects.length) {
+    /* With only a caret, the passage is the line it is on: what that line prints is what is marked.
+       Not while a change is shown: the caret was put there by going to it,
+       and the whole line round the changed words is a second, wider mark of
+       the same place. */
+    if (ownRects.length && !(noted && !theirs && !selecting)) {
       const start = startOfLine(text, fromLine)
       out.push({ rects: ownRects, source: selecting ? { text, from, to } : { text, from: start, to: start + textOfLine(text, fromLine).length } })
     }
     return out
-  }, [foreign, foreignRects, foreignText, foreignDoc, behind, theirs, ownRects, selecting, text, from, to, fromLine])
+  }, [foreign, pieces, foreignEach, foreignRects, foreignText, foreignDoc, behind, theirs, noted, ownRects, selecting, text, from, to, fromLine])
 
   /* The pages drawn under a focus: the rule again, over the sheets of the PDF
      on screen — each about the files that printed on it — keeping any a mark
@@ -1150,7 +1284,7 @@ export function Workspace({
   const [showLog, setShowLog] = useState(false)
 
   /* Of the PDF on screen. A part's own is of its own files and `main.tex`: another chapter edited since is not in it to be behind. */
-  const stale = onPart ? [MAIN_FILE, ...partDrawn.covered].some((one) => partDrawn.pdf.hashes[one] !== paper.hashes[one]) : wholeStale
+  const stale = onPart ? [MAIN_FILE, ...partDrawn.covered].some((one) => partDrawn.pdf.hashes[one] !== onDisk[one]) : wholeStale
   const pdfUrl = build?.pdf ? apiUrl('/api/pdf', { epic: paper.epic, build: build.pdf.id }) : null
   const partUrl = partDrawn ? apiUrl('/api/pdf', { epic: paper.epic, part: partDrawn.key, build: partDrawn.pdf.id }) : null
   /* A pick that cannot be compiled on its own draws no page — `cannot` is said instead — until a mark calls the whole paper. */
@@ -1182,15 +1316,16 @@ export function Workspace({
   /* ---- Suggestions, and the Auto tick ----------------------------------- */
 
   const { proposals, answerOne, acceptAll, busy } = wire
-  const settingKey = autoApproveKey(standingIn(), paper.epic)
-  const [auto, setAuto] = useState(false)
-  useLayoutEffect(() => setAuto(autoApproveWas(settingKey)), [settingKey])
+  /* Auto accept is remembered on the machine, per project and epic (the server
+     holds it; see `review.ts`). A change found in the files is taken in there;
+     an agent's staged suggestion is accepted below, by this page, as a finger
+     would. The checkbox is the person's: no tool reaches it. */
+  const auto = wire.facts.auto
   const changeAuto = useCallback(
     (on: boolean) => {
-      setAuto(on)
-      rememberAutoApprove(settingKey, on)
+      void wire.review({ action: 'auto', on })
     },
-    [settingKey],
+    [wire.review],
   )
   /* Auto accepts what ARRIVES while it is on. What was already waiting when it
      was ticked is left for a person: ticking a box is not reading a diff. */
@@ -1208,7 +1343,7 @@ export function Workspace({
       return
     }
     if (applying.current) return
-    const fresh = proposals.filter((p) => !seen.current.has(p.id))
+    const fresh = proposals.filter((p) => (p.kind ?? 'staged') === 'staged' && !p.held && !seen.current.has(p.id))
     if (!fresh.length) return
     applying.current = true
     void (async () => {
@@ -1236,7 +1371,7 @@ export function Workspace({
    * a suggestion's file name is how its place on the page is asked for.
    */
   const attend = useCallback(
-    (at: { file: string; from: number; to: number; proposal?: string; reveal?: boolean }, words: string) => {
+    (at: Noted, words: string) => {
       setNoted(at)
       const typing = editorBox.current !== null && editorBox.current.contains(document.activeElement)
       if (typing) {
@@ -1263,7 +1398,9 @@ export function Workspace({
     const waiting = notedRef.current?.proposal
     if (waiting && !known.current.has(waiting)) setNoted((now) => (now?.proposal === waiting ? null : now))
     if (was === null || auto) return
-    const fresh = proposals.filter((one) => !was.has(one.id))
+    /* A change found in the files is shown by the page taking the new text
+       (`landedChange` below); only an agent's suggestion arrives here. */
+    const fresh = proposals.filter((one) => (one.kind ?? 'staged') === 'staged' && !one.held && !was.has(one.id))
     const first = fresh[0]
     if (!first) return
     attend(
@@ -1292,7 +1429,13 @@ export function Workspace({
     const reveal = accepted.current
     accepted.current = false
     attend(
-      { file: landedChange.file, from: byteAt(held.text, landedChange.from, held.eol), to: byteAt(held.text, landedChange.to, held.eol), reveal },
+      {
+        file: landedChange.file,
+        from: byteAt(held.text, landedChange.from, held.eol),
+        to: byteAt(held.text, landedChange.to, held.eol),
+        parts: landedChange.parts?.map((one) => ({ from: byteAt(held.text, one.from, held.eol), to: byteAt(held.text, one.to, held.eol) })),
+        reveal,
+      },
       `${landedChange.file} changed on disk. What changed is marked.`,
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1365,7 +1508,19 @@ export function Workspace({
 
   /* What is walked is what is shown (the narrowing rule): a part pick leaves
      the suggestions about the files it shows. A group is one stop. */
-  const stops = useMemo(() => stopsOf(proposals, listed), [proposals, listed])
+  const walkable = useMemo(() => proposals.filter((p) => p.held !== 'gone' && p.kind !== 'deleted'), [proposals])
+  const outOfDate = useMemo(() => proposals.filter((p) => p.held === 'gone'), [proposals])
+  const deletedFiles = useMemo(() => proposals.filter((p) => p.kind === 'deleted'), [proposals])
+  const rawStops = useMemo(() => stopsOf(walkable, listed), [walkable, listed])
+  /* Which version of a passage is the one shown, for stops that are versions of one passage: the others are not drawn, and answering is of the one shown. */
+  const [shownVersion, setShownVersion] = useState<ReadonlyMap<string, number>>(() => new Map())
+  const stops = useMemo(
+    () => rawStops.map((s) => (s.versions ? { ...s, lead: s.members[(shownVersion.get(s.key) ?? 0) % s.members.length]! } : s)),
+    [rawStops, shownVersion],
+  )
+  const nextVersion = useCallback((key: string) => {
+    setShownVersion((was) => new Map(was).set(key, (was.get(key) ?? 0) + 1))
+  }, [])
   const [navigated, setNavigated] = useState<string | null>(null)
   const [proposedKeys, setProposedKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [editing, setEditing] = useState<string | null>(null)
@@ -1431,6 +1586,8 @@ export function Workspace({
       const key = stopKeyOf(p)
       const stop = stops.find((one) => one.key === key)
       if (!stop) continue
+      /* Of several versions of one passage only the one shown is drawn. */
+      if (stop.versions && stop.lead.id !== p.id) continue
       out.push({
         id: p.id,
         key,
@@ -1442,27 +1599,66 @@ export function Workspace({
         armed: key === armedKey,
         why: p.why,
         revisions: p.revisions ?? 0,
-        count: stop.members.length,
+        count: stop.versions ? 1 : stop.members.length,
         tag: stop.lead.id === p.id,
+        ...(stop.versions ? { versions: stop.members.length, version: stop.members.indexOf(stop.lead) + 1 } : {}),
         editing: editing === p.id,
         proposed: p.asked?.replace ?? p.text,
+        kind: p.kind === 'disk' || p.kind === 'new' ? p.kind : 'staged',
+        ...(p.held && p.held !== 'gone' ? { held: p.held } : {}),
+        found: p.at,
+        adjusted: p.adjusted === true,
       })
       }
       return out
     }
   }, [placedBy, stops, proposedKeys, editing, currentKey, armedKey])
 
+  /* The tag the person is led to by "Jump to next change" is armed once the
+     editor has taken the focus: the editor being left blurs, and a blur ends
+     arming, so it is set after the jump has landed. */
+  const [smooth, setSmooth] = useState(0)
+  const armSoon = useRef<ReturnType<typeof setTimeout> | null>(null)
   const visit = useCallback(
-    (stop: { key: string; file: string; lead: Proposal }) => {
+    (stop: { key: string; file: string; lead: Proposal; members?: readonly Proposal[] }, options: { arm?: boolean; smooth?: boolean } = {}) => {
       setNavigated(stop.key)
       wandered()
+      if (options.smooth && !(typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)) setSmooth((n) => n + 1)
       /* The same path as Go to a section: the file is opened (what was typed in
          the one left is held, not lost), the place scrolled to and focused. */
       go({ file: stop.file, bytes: { from: stop.lead.from, to: stop.lead.to }, focus: true })
       setTab('source')
+      if (armSoon.current) clearTimeout(armSoon.current)
+      /* The PDF is marked at the change itself — each member's own words, and
+         not the text between them — and turned to it: the person asked to be
+         taken there. The caret landing on it is the page going there, which
+         would take that mark down: for a moment that is not the person
+         wandering off. */
+      walkedUntil.current = Date.now() + 5000
+      setNoted(notedOf(stop, true))
+      /* For a run begun with the pointer the tag is armed once the editor has taken the focus: the editor being left blurs, and a blur ends arming. */
+      if (options.arm) {
+        armSoon.current = setTimeout(() => {
+          armSoon.current = null
+          if (stopsNow.current.some((one) => one.key === stop.key)) setArmed(stop.key)
+        }, 160)
+      }
     },
     [go, wandered],
   )
+  useEffect(() => () => {
+    if (armSoon.current) clearTimeout(armSoon.current)
+  }, [])
+  /* "No more changes", said briefly in the header's result slot: no banner. */
+  const [noMore, setNoMore] = useState(false)
+  useEffect(() => {
+    if (!noMore) return
+    const timer = setTimeout(() => setNoMore(false), 3500)
+    return () => clearTimeout(timer)
+  }, [noMore])
+  const jumpOn = wire.facts.jump && !auto
+  const jumpNow = useRef(jumpOn)
+  jumpNow.current = jumpOn
   const toggleProposed = useCallback((key: string) => {
     setProposedKeys((now) => {
       const next = new Set(now)
@@ -1480,40 +1676,81 @@ export function Workspace({
   /* Answer a stop: the current one (header, keys) or the one whose tag was
      pressed. One path; `onKey` only says which stop it is. */
   const answerCurrent = useCallback(
-    async (decision: 'accept' | 'reject', onKey?: string) => {
+    async (decision: 'accept' | 'reject', onKey?: string, confirm?: boolean) => {
       const header = onKey === undefined
+      const wasArmed = armedNow.current !== null
       const stop = header ? currentStop : stopsNow.current.find((one) => one.key === onKey)
       if (!stop || (header && !currentId)) return
       const currentKey = stop.key
-      /* The edit box that is open answers with its text; from a tag, only when it is in that tag's stop. */
-      const mine = header ? editing : editing !== null && stop.ids.includes(editing) ? editing : null
-      const asked = mine ?? (header ? currentId! : stop.lead.id)
-      const typed = mine ? drafts.current.get(mine) : undefined
+      const asked = header ? currentId! : stop.lead.id
+      /* What the author typed into the proposed text of any member of this stop
+         is what Accept applies: only where it differs from what was proposed. */
+      const replaces: Record<string, string> = {}
+      for (const m of stop.members) {
+        const typed = drafts.current.get(m.id)
+        if (typed !== undefined && typed !== (m.asked?.replace ?? m.text)) replaces[m.id] = typed
+      }
       const order = stopsNow.current.map((one) => one.key)
       if (decision === 'accept') accepted.current = true
-      const left = await answerOne(asked, decision, decision === 'accept' ? typed : undefined)
-      if (!left) return
-      if (mine || header) {
-        setEditing(null)
-        drafts.current.clear()
+      /* Cancelling a change that is already in the file, in an editor that is
+         open: the old text goes back as ONE step of the person's own undo, and
+         the save that follows is theirs like any other. The baseline is not
+         touched, so the change is simply gone. */
+      let left: Proposal[] | null = null
+      if (decision === 'reject' && stop.members.every((m) => m.kind === 'disk')) {
+        const control = controls.current.get(`${paper.epic}\0${stop.file}`)
+        const spots = (placedBy.get(stop.file) ?? NO_PLACED).filter(({ p }) => stop.ids.includes(p.id))
+        if (control && spots.length === stop.members.length && spots.every(({ at }) => at !== null)) {
+          control.replace(spots.map(({ at }) => ({ from: at!.from, to: at!.to, insert: at!.replacement })))
+          if (await source.flush()) {
+            wire.askAgain()
+            /* The offsets of what is still waiting are of the text before this: ask again. */
+            left = (await wire.refreshProposals()) ?? proposalsNow.current.filter((p) => !stop.ids.includes(p.id))
+          }
+        }
       }
-      const remain = stopsOf(left, listed)
+      left ??= await answerOne(asked, decision, {
+        ...(decision === 'accept' && Object.keys(replaces).length ? { replaces } : {}),
+        ...(confirm ? { confirm } : {}),
+      })
+      if (!left) return
+      for (const m of stop.members) drafts.current.delete(m.id)
+      if (editingNow.current && stop.ids.includes(editingNow.current)) setEditing(null)
+      const remain = stopsOf(left.filter((p) => p.held !== 'gone' && p.kind !== 'deleted'), listed)
       if (!remain.length) {
         setNavigated(null)
+        setArmed(null)
+        if (jumpNow.current) {
+          setNoMore(true)
+          /* The header's result slot is shown on a pinned item only while it is
+             hovered, and Enter was pressed in the editor: the line at the foot
+             of the container is where it is read. */
+          setSaid('No more changes.')
+        }
+        return
+      }
+      /* Jump to next change is the person's setting (default on). Off: stay
+         where the decision was made. The next one is the next in reading order
+         after this one, in whatever file it is, wrapping to the first. */
+      if (!jumpNow.current) {
+        setArmed(null)
         return
       }
       const at = order.indexOf(currentKey)
+      let next = remain[0]!
       for (let n = 1; n <= order.length; n++) {
         const key = order[(at + n) % order.length]
-        const stop = remain.find((one) => one.key === key)
-        if (stop) {
-          visit(stop)
-          return
+        const found = remain.find((one) => one.key === key)
+        if (found) {
+          next = found
+          break
         }
       }
-      visit(remain[0]!)
+      /* Arming is pointer-only, and a jump continues the run the person's
+         pointer started: it stays armed if it was, or if the press was on a tag. */
+      visit(next, { smooth: true, arm: wasArmed || onKey !== undefined })
     },
-    [currentStop, currentId, editing, answerOne, listed, visit],
+    [currentStop, currentId, answerOne, listed, visit, paper.epic, placedBy, source, wire, setSaid],
   )
   const walk = useCallback(
     (by: 1 | -1) => {
@@ -1522,16 +1759,18 @@ export function Workspace({
     },
     [currentKey, visit],
   )
+  /* Header → Edit: the proposed text is always a live field once the new
+     reading is shown; this shows it and puts the caret in it. */
   const editCurrent = useCallback((): string | null => {
     if (editing) {
-      drafts.current.delete(editing)
       setEditing(null)
       return null
     }
     const one = proposals.find((p) => p.id === currentId)
-    if (!one) return 'Choose a suggestion first.'
+    if (!one) return 'Choose a change first.'
+    if ((one.kind ?? 'staged') !== 'staged') return 'That change is already in the file: edit the text where it stands.'
+    if (one.held) return 'That suggestion is out of date, so there is nothing to edit; cancel it.'
     if (!one.asked) return 'That suggestion carries no quoted text to edit; accept or reject it as it is.'
-    drafts.current.delete(one.id)
     setEditing(one.id)
     return null
   }, [editing, proposals, currentId])
@@ -1580,6 +1819,12 @@ export function Workspace({
     const key = stopKeyOf(one)
     setNavigated(key)
     setArmed(key)
+    /* The change the person pressed is the one the PDF shows, and is turned to. */
+    const stop = stopsNow.current.find((s) => s.key === key)
+    if (stop) {
+      walkedUntil.current = Date.now() + 1500
+      setNoted(notedOf(stop, true))
+    }
   }, [])
   const disarm = useCallback(() => setArmed(null), [])
   const stopEditing = useCallback(() => {
@@ -1612,8 +1857,21 @@ export function Workspace({
   const chapterOf = chapters.settable(file) ? chapters.partOf(file) : undefined
   const items = headerOf({
     tab,
-    proposals: proposals.length,
-    suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy },
+    proposals: walkable.length,
+    suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy, noMore },
+    jump: wire.facts.jump,
+    baseline: wire.facts.readOnly ?? wire.facts.baseline?.says ?? null,
+    stale: outOfDate.length,
+    deleted: deletedFiles.length,
+    recent: {
+      count: wire.facts.accepted.length,
+      auto: wire.facts.accepted.filter((a) => a.by === 'auto').length,
+      last: wire.facts.accepted[0]?.file ?? null,
+      options: wire.facts.accepted.slice(0, 12).map((a) => ({
+        n: a.n,
+        label: `${a.file.split('/').pop()} · ${(a.old || '∅').replace(/\s+/g, ' ').slice(0, 22)} → ${(a.new || '∅').replace(/\s+/g, ' ').slice(0, 22)}`,
+      })),
+    },
     tabs,
     file,
     listed,
@@ -1634,6 +1892,7 @@ export function Workspace({
       wire.saving.at === 'nogit'
         ? null
         : {
+            waiting: wire.facts.baseline?.mode === 'git' ? walkable.length + deletedFiles.length : 0,
             why: busy
               ? 'Something is being saved or decided just now.'
               : wire.saving.at === 'ready'
@@ -1654,6 +1913,80 @@ export function Workspace({
   }, [header, itemsKey])
   useEffect(() => () => header([]), [header])
 
+  /* ---- The host's Inbox: what is waiting for the person ----------------- */
+
+  /* One item per paper and file for changes to review, one per paper for a
+     failed compile; the whole list replaces the last (`activity.set`), so an
+     item that is no longer true is simply absent. Nothing is reported while
+     Auto accept takes the changes in. The client drops a list identical to the
+     last and sends nothing to a host that does not answer the method. */
+  /* When each thing entered the state it is in: the host decides what has been seen from it. */
+  const since = useRef(new Map<string, number>())
+  const failedBefore = useRef(false)
+  const inboxKey = useMemo(() => {
+    const items: ActivityItem[] = []
+    const at = (id: string, state: string) => {
+      const key = `${id}\0${state}`
+      let when = since.current.get(key)
+      if (when === undefined) {
+        when = Date.now()
+        since.current.set(key, when)
+      }
+      return when
+    }
+    const place = (name: string) => {
+      const part = partsOfFile(parts, inProject(paper.epic, name), paper.epic, wire.projectPath)[0]
+      return { epic: paper.epic, ...(part ? { parts: [part.id] } : {}) }
+    }
+    if (!auto) {
+      const per = new Map<string, number>()
+      for (const one of walkable) per.set(one.file, (per.get(one.file) ?? 0) + 1)
+      for (const [name, n] of per) {
+        items.push({
+          id: `review:${paper.epic}:${name}`.slice(0, 128),
+          state: 'attention',
+          since: at(`review:${paper.epic}:${name}`.slice(0, 128), 'attention'),
+          label: `${n} change${n === 1 ? '' : 's'} to review in ${name}`.slice(0, 120),
+          /* Waiting for an answer, and nothing is blocked by it: the protocol's ordinary pressing. */
+          priority: 'normal',
+          place: place(name),
+          ...(wire.facts.baseline ? { detail: wire.facts.baseline.says.slice(0, 200) } : {}),
+        })
+      }
+    }
+    if (failed && errors[0]) {
+      const first = errors[0]
+      items.push({
+        id: `compile:${paper.epic}`.slice(0, 128),
+        state: 'attention',
+        since: at(`compile:${paper.epic}`, 'attention'),
+        label: `Compile failed${first.file ? ` in ${first.file}${first.line ? `:${first.line}` : ''}` : ''}: ${first.message}`.slice(0, 120),
+        /* Broken: no PDF of this text until it is fixed. */
+        priority: 'urgent',
+        place: place(first.file ?? MAIN_FILE),
+        detail: first.message.slice(0, 200),
+      })
+    }
+    if (failed && errors[0]) failedBefore.current = true
+    else if (failedBefore.current && ran?.ok) {
+      /* It compiles again: the host keeps that marked until it has been seen. */
+      items.push({ id: `compile:${paper.epic}`.slice(0, 128), state: 'done', since: at(`compile:${paper.epic}`, 'done'), label: 'Compiles again', place: { epic: paper.epic } })
+    }
+    return JSON.stringify(items)
+  }, [walkable, auto, failed, ran?.ok, errors[0]?.message, errors[0]?.file, errors[0]?.line, parts, paper.epic, wire.projectPath, wire.facts.baseline])
+  useEffect(() => {
+    if (wire.answers && !wire.answers.includes('activity.set')) return
+    wire.activity(JSON.parse(inboxKey) as ActivityItem[])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inboxKey, wire.answers])
+  useEffect(
+    () => () => {
+      wire.activity([])
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [paper.epic],
+  )
+
   const press: PressHandler = ({ item, value }) => {
     const nth = (prefix: string) => (typeof value === 'string' && value.startsWith(prefix) ? Number(value.slice(prefix.length)) : -1)
     if (item === 'pane') {
@@ -1672,6 +2005,26 @@ export function Workspace({
       void chapters.set(part === null ? null : part.id, file)
     } else if (item === 'auto') {
       changeAuto(value === true)
+    } else if (item === 'jump') {
+      if (auto) return 'Auto accept is on, so changes are taken in as they arrive and there is no next one to jump to.'
+      void wire.review({ action: 'jump', on: value === true })
+    } else if (item === 'sg-stale') {
+      void (async () => {
+        for (const one of outOfDate) await answerOne(one.id, 'reject')
+      })()
+    } else if (item === 'sg-deleted-accept' || item === 'sg-deleted-restore') {
+      const decision = item === 'sg-deleted-accept' ? 'accept' : 'reject'
+      void (async () => {
+        for (const one of deletedFiles) await answerOne(one.id, decision)
+      })()
+    } else if (item === 'ac-undo') {
+      const last = wire.facts.accepted[0]
+      if (!last) return 'Nothing accepted lately can be cancelled.'
+      void wire.review({ action: 'uncommit', n: last.n })
+    } else if (item === 'accepted') {
+      const one = wire.facts.accepted.find((a) => a.n === nth('a'))
+      if (!one) return 'That change is no longer on the list.'
+      setSaid(`${one.file}: “${one.old || '(nothing)'}” → “${one.new || '(nothing)'}”${one.why ? ` — ${one.why}` : ''}${one.by === 'auto' ? ' (accepted automatically)' : ''}`)
     } else if (item === 'log') {
       setShowLog(value === true)
       if (value === true) setTab('pdf')
@@ -1717,6 +2070,14 @@ export function Workspace({
   const fallback = wire.where !== 'hosted' || !wire.hostDraws
 
   /** One file's editor: the whole of what the page asks of an editor, for that file. */
+  /* Each file's editor state, history included, kept for as long as this page
+     lives, so that scrolling a region out of the mounted set and back does
+     not lose its undo. A file the disk's text replaced starts afresh. */
+  const histories = useRef(new Map<string, EditorState>())
+  const controls = useRef(new Map<string, EditorControl>())
+  useEffect(() => {
+    if (source.changed) histories.current.delete(`${paper.epic}\0${source.changed.file}`)
+  }, [source.changed?.n])
   const renderRegion = (name: string, embedded: boolean) => {
     const held = source.docs.get(name)
     if (!held) return null
@@ -1730,6 +2091,7 @@ export function Workspace({
         key={`${paper.epic}\0${name}`}
         embedded={embedded}
         landed={landed}
+        memory={{ state: histories.current, key: `${paper.epic}\0${name}`, control: controls.current }}
         value={held.text}
         onChange={(text) => {
           /* Typing, Backspace, Delete: the keys are the person's again. */
@@ -1759,7 +2121,9 @@ export function Workspace({
         suggestions={inlineBy.get(name) ?? NO_SUGGESTIONS}
         drafts={drafts.current}
         onToggleSuggestion={toggleProposed}
-        onAnswerSuggestion={(key, decision) => void answerCurrent(decision, key)}
+        onAnswerSuggestion={(key, decision, confirm) => void answerCurrent(decision, key, confirm)}
+        onWhy={(id, why) => void wire.review({ action: 'why', id, why })}
+        onVersion={nextVersion}
         onPickSuggestion={armOn}
         onArmedKey={onArmedKey}
         onDisarm={disarm}
@@ -1864,6 +2228,7 @@ export function Workspace({
                   go({ file: name, bytes: { from: 0, to: 0 }, top: 0, past: 0, focus: true })
                 }}
                 onLook={(name) => source.open(name)}
+                smooth={smooth}
                 onCount={setMountedCount}
               />
             ) : (
@@ -2042,10 +2407,35 @@ export function placeShown(
 interface Hint {
   of: string
   build: string | null
-  rects: PageRect[]
+  /** Per piece of the passage (`pieces`), in order. */
+  rects: PageRect[][]
 }
 /** No rectangles, of no passage. One object, so a mark with none is the same mark again. */
 const NO_HINT: Hint = { of: '', build: null, rects: [] }
+/** A change this page draws attention to — see `noted`. Bytes of `file`. */
+interface Noted {
+  file: string
+  from: number
+  to: number
+  parts?: readonly { from: number; to: number }[]
+  proposal?: string
+  reveal?: boolean
+}
+const NO_PIECES: readonly { from: number; to: number }[] = []
+/**
+ * A stop of the walk as a change to mark: its members in its file, in order,
+ * each its own piece; the editor goes to the first. A member that only takes
+ * text out is still a place (`from === to`).
+ */
+function notedOf(stop: { file: string; lead: Proposal; members?: readonly Proposal[]; versions?: boolean }, reveal: boolean): Noted {
+  /* Of several versions of one passage, the one shown is the change. */
+  const members = (stop.versions || !stop.members ? [stop.lead] : stop.members).filter((m) => m.file === stop.file)
+  const parts = [...members].sort((a, b) => a.from - b.from).map((m) => ({ from: m.from, to: m.to }))
+  const lead = parts[0] ?? { from: stop.lead.from, to: stop.lead.to }
+  return { file: stop.file, from: lead.from, to: lead.to, ...(parts.length > 1 ? { parts } : {}), proposal: stop.lead.id, reveal }
+}
+/** How many pieces of one change are looked for on the PDF: a burst of a hundred edits is marked at its first few dozen. */
+const MAX_PIECES = 24
 
 function sameHashes(a: Record<string, string>, b: Record<string, string>): boolean {
   const keys = Object.keys(a)

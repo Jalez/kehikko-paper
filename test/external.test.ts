@@ -135,29 +135,32 @@ describe('/api/proposals is measured against the disk', () => {
     expect(readFileSync(main, 'utf8')).toContain('one an agent will propose')
   })
 
-  test('a suggestion whose quoted text is gone is dropped, and said', () => {
+  test('a suggestion whose quoted text is gone is kept, listed as out of date, and said', () => {
     expect(suggest('one an agent will suggest', 'one an agent will propose')).toContain('Filed as')
     writeFileSync(main, SOURCE.replace('the one an agent will suggest a change to', 'rewritten by the author'))
     const body = get('/api/proposals')
-    expect(body.proposals).toEqual([])
-    expect(String(body.said)).toContain('One suggestion was dropped')
+    expect((body.proposals as { held?: string }[]).map((p) => p.held)).toEqual(['gone'])
+    expect(String(body.said)).toContain('One suggestion is out of date')
     expect(String(body.said)).toContain('main.tex')
     /* Said once. The next read has nothing to drop and says nothing. */
     expect(get('/api/proposals').said).toBe('')
   })
 
-  test('a suggestion the author applied themselves is dropped too — there is nothing left to suggest', () => {
+  test('a suggestion the author applied themselves is kept out of date, to be cancelled — never silently dropped', () => {
     expect(suggest('a tpyo in it', 'a typo in it')).toContain('Filed as')
     writeFileSync(main, SOURCE.replace('tpyo', 'typo'))
     const body = get('/api/proposals')
-    expect(body.proposals).toEqual([])
-    expect(String(body.said)).toContain('dropped')
+    expect((body.proposals as { held?: string }[]).map((p) => p.held)).toEqual(['gone'])
+    expect(String(body.said)).toContain('out of date')
   })
 
-  test('a suggestion whose quoted text now appears twice is dropped rather than guessed at', () => {
+  test('a suggestion whose quoted text now appears twice is drawn at the nearest one and held back', () => {
     expect(suggest('a tpyo in it', 'a typo in it')).toContain('Filed as')
     writeFileSync(main, SOURCE.replace('\\end{document}', 'Again a tpyo in it.\n\n\\end{document}'))
-    expect(get('/api/proposals').proposals).toEqual([])
+    const [held] = get('/api/proposals').proposals as { held?: string; from: number; file: string }[]
+    expect(held!.held).toBe('ambiguous')
+    /* The occurrence nearest where it was, not the new one at the end. */
+    expect(held!.from).toBeLessThan(Buffer.byteLength(SOURCE) - 40)
   })
 
   test('an unchanged file costs nothing: the list comes back as it was', () => {
@@ -167,7 +170,7 @@ describe('/api/proposals is measured against the disk', () => {
     expect(same).toEqual(expect.objectContaining({ id: filed!.id, from: filed!.from, was: filed!.was }))
   })
 
-  test('a proposal kept without what was asked cannot be measured again, and is dropped', () => {
+  test('a proposal kept without what was asked cannot be measured again, and is listed as out of date', () => {
     /* The shape a test builds by hand: no `asked`. Before this feature such a
        proposal would have sat un-acceptable forever; now it goes, and says. */
     const hashes = get('/api/uncommitted').hashes as Record<string, string>
@@ -183,15 +186,17 @@ describe('/api/proposals is measured against the disk', () => {
     })
     writeFileSync(main, SOURCE.replace('tpyo', 'typo'))
     const body = get('/api/proposals')
-    expect(body.proposals).toEqual([])
-    expect(String(body.said)).toContain('dropped')
+    expect((body.proposals as { held?: string }[]).map((p) => p.held)).toEqual(['gone'])
+    expect(String(body.said)).toContain('out of date')
   })
 
   test('list_proposals on the MCP door sees the same measured list', () => {
     expect(suggest('one an agent will suggest', 'one an agent will propose')).toContain('Filed as')
     writeFileSync(main, SOURCE.replace('the one an agent will suggest a change to', 'rewritten by the author'))
     const said = tool('list_proposals', { project, epic })
-    expect(said).toContain('One suggestion was dropped')
-    expect(tool('list_proposals', { project, epic })).toStartWith('Nothing is waiting on that paper.')
+    expect(said).toContain('One suggestion is out of date')
+    expect(said).toContain('out of date (gone)')
+    /* Still listed on the next read: nothing was dropped. */
+    expect(tool('list_proposals', { project, epic })).toContain('out of date (gone)')
   })
 })

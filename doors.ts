@@ -1,7 +1,24 @@
 import { establishBuild, mintTicket, refuseTicket, type Reply as DoorReply } from 'kehikot-module-protocol/serve'
 import { join, relative } from 'node:path'
 
-import { acceptMessage, commitPaper, saveMessage, standing, type Committed, type Standing } from './git.ts'
+import { commitPaper, commitStaged, saveMessage, standing, standingStaged, type Committed, type Standing } from './git.ts'
+import {
+  acceptChange,
+  acceptedSinceCommit,
+  afterWrite,
+  cancelAccepted,
+  cancelChange,
+  ctxOf,
+  explain,
+  isGitBacked,
+  markCommitted,
+  reviewOf,
+  setAuto,
+  setJump,
+  setReason,
+  type Ctx,
+  type Review,
+} from './review.ts'
 import { readChapters, republish, setChapters } from './chapters.ts'
 import { buildStatus, compile, compilePart, partStatus, readPdf, syncForward, syncReverse } from './compile/build.ts'
 import { installer } from './compile/install.ts'
@@ -22,7 +39,9 @@ import {
   proposalById,
   rebaseAll,
   remeasure,
+  reviseByFiler,
   reviseOne,
+  setWhy,
   settle,
   withdraw,
   findInProject,
@@ -488,13 +507,13 @@ const PROJECT_ARG = {
  * the paper: nothing is deleted or overwritten, a second identical call files
  * a second suggestion, and nothing leaves this machine.
  */
-const WRITES = new Set(['propose_edit', 'revise_edit', 'withdraw_edit'])
+const WRITES = new Set(['propose_edit', 'revise_edit', 'withdraw_edit', 'explain_change'])
 /* Overwriting or removing the agent's OWN pending suggestion is destructive in
    the `toolEffect` sense: the earlier text is gone. Neither touches a paper. */
-const DESTRUCTIVE = new Set(['revise_edit', 'withdraw_edit'])
+const DESTRUCTIVE = new Set(['revise_edit', 'withdraw_edit', 'explain_change'])
 function annotationsOf(name: string): { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean } {
   const reads = !WRITES.has(name)
-  return { readOnlyHint: reads, destructiveHint: DESTRUCTIVE.has(name), idempotentHint: reads || name === 'withdraw_edit', openWorldHint: false }
+  return { readOnlyHint: reads, destructiveHint: DESTRUCTIVE.has(name), idempotentHint: reads || name === 'withdraw_edit' || name === 'explain_change', openWorldHint: false }
 }
 
 const TOOLS: Record<string, { description: string; schema: object; run: ToolCall }> = {
@@ -704,6 +723,14 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         find: { type: 'string', description: 'The exact text to replace. Must appear exactly once in that file.' },
         replace: { type: 'string', description: 'What goes there. Empty deletes it.' },
         why: { type: 'string', description: 'One sentence the reader sees beside the change, saying why.' },
+        agent: {
+          type: 'string',
+          description:
+            'Optional. A name for you, the same on every call (an agent name, a session id). A new suggestion over '
+            + 'words you already have a pending suggestion on REVISES that one rather than filing a second; with no '
+            + 'name, every caller without one is taken to be the same filer. A different name is a different filer: '
+            + 'the person then sees both versions as one item and picks.',
+        },
         group: {
           type: 'string',
           description:
@@ -737,8 +764,16 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
          which is most of them, because prose is words separated by spaces — has
          to name that space or it names something else. This is the one place in
          this file where the caller's whitespace is load-bearing. */
-      const find = typeof args.find === 'string' ? args.find.slice(0, MAX_TEXT) : ''
-      const replace = typeof args.replace === 'string' ? args.replace.slice(0, MAX_TEXT) : ''
+      const find = typeof args.find === 'string' ? args.find : ''
+      const replace = typeof args.replace === 'string' ? args.replace : ''
+      /* Said plainly rather than clipped: a clipped quote is a different quote. */
+      if (find.length > MAX_TEXT || replace.length > MAX_TEXT) {
+        return (
+          `That text is longer than ${MAX_TEXT.toLocaleString('en')} characters, which is as much as one suggestion carries. `
+          + 'Edit the .tex directly with your own file tools: Paper shows every changed passage to the author for '
+          + 'review, and explain_change attaches your reason to it.'
+        )
+      }
       const why = str(args.why, MAX_WHY)
       if (!why) return 'A suggestion has to say why, in a sentence. The reader sees it beside the change.'
 
@@ -773,6 +808,39 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         }
       }
       const issued = mintToken()
+      const filer = str(args.agent, 60) || 'an agent'
+
+      /* One passage, one review item. The same filer saying it again about
+         words it already has pending is revising that suggestion, whether or
+         not it has the tool for it: an agent whose tool list was fixed before
+         revise_edit existed only has this one. "Same filer" is the name given
+         in `agent`, and with none the anonymous family — this door sees no
+         session, so that is the finest identity it has. A suggestion in a
+         group is not folded into. */
+      const own = touching.flatMap((t) => {
+        const p = proposalById(named.project, epic, t.id)
+        return p && p.by === filer && !p.group && !group && (t.conflict || p.asked?.find === find) ? [p] : []
+      })
+      if (own.length) {
+        const [lead, ...extra] = own
+        const revised = reviseByFiler(
+          named.project,
+          epic,
+          lead!.id,
+          { from: worked.from, to: worked.to, text: worked.text, was_text: worked.was_text, was, why, asked: { find, replace } },
+          issued.hash,
+        )
+        if (revised) {
+          /* Others of its own over the same words are what this one supersedes. */
+          for (const one of extra) settle(named.project, epic, one.id, 'withdrawn')
+          return [
+            `Revised ${revised.id} (was pending): your new suggestion touched words your earlier one already covered, so it replaced that one `
+              + `instead of standing beside it (revision ${revised.revisions}). Same filer: ${filer === 'an agent' ? 'no agent name given, so every caller without one counts as one filer' : `agent "${filer}"`}.`,
+            `Revision token: ${issued.token}`,
+            'Keep that token. The earlier one still works as well. Nothing is written until the person accepts it.',
+          ].join('\n')
+        }
+      }
 
       const filed = keep(named.project, epic, {
         file,
@@ -782,7 +850,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         was_text: worked.was_text,
         was,
         why,
-        by: 'an agent',
+        by: filer,
         /* Kept so the suggestion can be measured again if the file changes
            under it before anybody answers — see `refile`. */
         asked: { find, replace },
@@ -853,7 +921,10 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const made = reviseOne(named.project, epic, id, token, (current) => {
         if (!hasReplace) return { ...current, why: why || current.why }
         if (!current.asked) return { refuse: 'This suggestion carries no quoted text, so its words cannot be revised. File a new one.' }
-        const replace = (args.replace as string).slice(0, MAX_TEXT)
+        const replace = args.replace as string
+        if (replace.length > MAX_TEXT) {
+          return { refuse: `That text is longer than ${MAX_TEXT.toLocaleString('en')} characters. Edit the .tex directly instead; Paper shows it for review.` }
+        }
         if (replace.includes('\0')) return { refuse: 'That text holds a NUL byte, which a .tex file does not.' }
         const source = readSource(epic, current.file, named.project)
         const was = hashesOf(epic, named.project)?.[current.file]
@@ -873,6 +944,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
           was,
           why: why || current.why,
           asked: { find: current.asked.find, replace },
+          held: undefined,
         }
       })
       if (!made.ok) return made.why
@@ -930,9 +1002,13 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
    */
   list_proposals: {
     description:
-      'The changes suggested for one paper that the reader has not answered yet. A suggestion that is not here '
-      + 'was either accepted, rejected, or dropped because another accepted change rewrote the same words. This '
-      + 'server holds them in memory only, so a restart forgets them all.',
+      'Every change on one paper that the person has not answered yet: suggestions filed with propose_edit '
+      + '(kind staged: the file is untouched until they accept) and changes found in the files themselves '
+      + '(kind disk: somebody edited the .tex directly; kind new or deleted for a whole file). Each line has the '
+      + 'id, the file, the change as old -> new, the reason, and kind, order and state in brackets; a state of '
+      + '"out of date" says the quoted text changed since it was suggested. A change that is not here was '
+      + 'accepted, rejected, withdrawn or taken in by Auto accept. Suggestions are kept on this machine and '
+      + 'survive a restart of this server.',
     schema: {
       type: 'object',
       properties: { project: PROJECT_ARG, epic: { type: 'string' } },
@@ -943,8 +1019,9 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       if (!isEpic(epic)) return 'that is not an epic name'
       const named = projectArg(args.project)
       if ('error' in named) return named.error
-      const gone = lostBecause(settled(named.project, epic))
-      const held = pendingFor(named.project, epic)
+      const all = everything(named.project, epic)
+      const gone = all.said
+      const held = all.proposals
       const recent = outcomesFor(named.project, epic).slice(0, 10).map((o) => {
         const how =
           o.state === 'accepted' && o.editedByAuthor
@@ -954,10 +1031,11 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
               : o.state
         return `${o.id}\t${o.file}\tstate: ${how}`
       })
-      if (!held.length) return [gone || 'Nothing is waiting on that paper.', ...recent].join('\n')
-      /* What was dropped is said first, because an agent reading the list to
-         learn "was mine accepted" has to be able to tell dropped from taken.
-         Never the token: `pendingFor` has already stripped it. */
+      const auto = (all.review?.accepted ?? [])
+        .filter((a) => a.by === 'auto')
+        .slice(0, 5)
+        .map((a) => `accepted-${a.n}\t${a.file}\tstate: accepted automatically`)
+      if (!held.length) return [gone || 'Nothing is waiting on that paper.', ...recent, ...auto].join('\n')
       /* The reading order a person walks them in: the paper's files as the
          paper names them, then position in the file; a group is one stop. */
       const files = readPaper(epic, named.project)?.files ?? []
@@ -970,14 +1048,61 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         orderOf.set(p.id, seen.get(stop)!)
       }
       const lines = held.map((p) => {
+        const kind = p.kind ?? 'staged'
+        const change = kind === 'disk' ? `${p.text} -> ${p.was_text}` : kind === 'staged' ? `${p.was_text} -> ${p.text}` : kind === 'new' ? '(new file)' : '(deleted file)'
+        const state = p.held ? `out of date (${p.held})` : 'pending'
         const extras = [
+          `kind: ${kind}`,
+          `state: ${state}`,
           `order: ${orderOf.get(p.id)} of ${seen.size}`,
           p.revisions ? `revised ${p.revisions}x` : '',
           p.group ? `group: ${p.group}` : '',
+          kind !== 'staged' && !p.why ? 'no reason yet: explain_change attaches one' : '',
         ].filter(Boolean)
-        return `${p.id}\t${p.file}\t${p.was_text} -> ${p.text}\t${p.why}\t(${extras.join(', ')})`
+        return `${p.id}\t${p.file}\t${change}\t${p.why}\t(${extras.join(', ')})`
       })
-      return [...(gone ? [gone] : []), ...lines, ...recent].join('\n')
+      return [...(gone ? [gone] : []), ...lines, ...recent, ...auto].join('\n')
+    },
+  },
+
+  /**
+   * Say why a change that is already in the file is there.
+   *
+   * An agent that edited the .tex directly has made a change nobody asked it
+   * to explain; Paper shows it for review all the same, and this is how its
+   * reason gets beside it. It touches a note in this module's own store and
+   * never the paper, accepts nothing and cannot turn Auto accept on.
+   */
+  explain_change: {
+    description:
+      'Attach or replace the reason of a change that is waiting for review in the files themselves (kind disk, '
+      + 'new or deleted in list_proposals) — for example one you made by editing the .tex directly. The person '
+      + 'sees it beside the change and may edit it. This writes a note, never the paper, and cannot accept, '
+      + 'cancel or change any setting.',
+    schema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_ARG,
+        epic: { type: 'string' },
+        id: { type: 'string', description: 'The id list_proposals shows for the change.' },
+        why: { type: 'string', description: 'One sentence saying why.' },
+      },
+      required: ['project', 'epic', 'id', 'why'],
+    },
+    run(args) {
+      const epic = str(args.epic, MAX_SLUG)
+      if (!isEpic(epic)) return 'that is not an epic name'
+      const named = projectArg(args.project)
+      if ('error' in named) return named.error
+      const id = str(args.id, 80)
+      const why = str(args.why, MAX_WHY)
+      if (!why) return 'Say why, in a sentence.'
+      const ctx = ctxOf(named.project, epic)
+      if (!ctx) return noPaper(epic, named.project)
+      if (!explain(ctx, id, why)) {
+        return 'There is no change waiting on that paper with that id. list_proposals shows what is there; a suggestion filed with propose_edit takes its reason from revise_edit.'
+      }
+      return `Recorded the reason of ${id}. The person sees it beside the change.`
     },
   },
 }
@@ -1012,6 +1137,103 @@ function settled(project: string, epic: string): { file: string; why: string }[]
   })
 }
 
+/**
+ * Everything reviewable on one paper, staged suggestions and changes found on
+ * disk together, and the facts the page draws beside them.
+ *
+ * Staged suggestions are measured against the disk first (`settled`), then the
+ * files are compared with their baseline (`reviewOf`). What the page gets is
+ * ONE list: the same tag, keys and walk serve both kinds.
+ */
+function listOf(project: string, epic: string): Proposal[] {
+  return everything(project, epic).proposals
+}
+
+function everything(project: string, epic: string): { proposals: Proposal[]; ctx: Ctx | null; review: Review | null; said: string } {
+  const said = lostBecause(settled(project, epic))
+  const staged = pendingFor(project, epic)
+  const ctx = ctxOf(project, epic)
+  const review = ctx ? reviewOf(ctx) : null
+  return { proposals: versionsOf([...staged, ...(review?.changes ?? [])]), ctx, review, said }
+}
+
+/**
+ * Mark the changes that are about the same words, so the page draws ONE item.
+ *
+ * Two filers' suggestions over the same words, and a suggestion beside a change
+ * somebody already made in the file there, are versions of one passage. They
+ * share an `alt`; the person sees one tag with both versions in it, picks one
+ * (the others go with it) or cancels them all. Overlap is of the ranges drawn
+ * (the words each is about), touching or sharing a byte, or of one quoted text.
+ */
+function versionsOf(all: Proposal[]): Proposal[] {
+  const live = all.filter((p) => (p.kind === undefined || p.kind === 'staged' || p.kind === 'disk') && p.held !== 'gone')
+  const parent = new Map<string, string>()
+  const find = (id: string): string => {
+    let at = id
+    while ((parent.get(at) ?? at) !== at) at = parent.get(at)!
+    return at
+  }
+  const touches = (a: Proposal, b: Proposal): boolean => {
+    if (a.file !== b.file) return false
+    const az = a.from === a.to
+    const bz = b.from === b.to
+    if (az && bz) return a.from === b.from
+    if (az) return b.from < a.from && a.from < b.to
+    if (bz) return a.from < b.from && b.from < a.to
+    return a.from < b.to && b.from < a.to
+  }
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      const a = live[i]!
+      const b = live[j]!
+      if (a.group && a.group === b.group) continue
+      const same = a.asked && b.asked && a.asked.find === b.asked.find && a.file === b.file
+      if (touches(a, b) || same) parent.set(find(b.id), find(a.id))
+    }
+  }
+  const members = new Map<string, Proposal[]>()
+  for (const p of live) members.set(find(p.id), [...(members.get(find(p.id)) ?? []), p])
+  const alt = new Map<string, string>()
+  for (const group of members.values()) {
+    if (group.length < 2) continue
+    const lead = [...group].sort((x, y) => x.from - y.from || x.at - y.at)[0]!
+    for (const p of group) alt.set(p.id, `alt-${lead.id}`)
+  }
+  return all.map((p) => (alt.has(p.id) ? { ...p, alt: alt.get(p.id)! } : p))
+}
+
+/** What goes beside the list in every answer: the setting, the baseline in words, what was accepted lately. */
+function reviewFacts(review: Review | null): Record<string, unknown> {
+  return {
+    auto: review?.auto ?? false,
+    jump: review?.jump ?? true,
+    readOnly: review?.readOnly ?? null,
+    baseline: review ? { mode: review.mode, says: review.baseline } : null,
+    accepted: (review?.accepted ?? []).map((a) => ({ n: a.n, file: a.file, old: a.old.slice(0, 200), new: a.new.slice(0, 200), why: a.why, at: a.at, by: a.by, kind: a.kind })),
+    untracked: review?.untracked ?? [],
+  }
+}
+
+/** The commit message for what the author accepted: reasons, and where they changed the words. */
+function acceptedBody(project: string, epic: string): string {
+  const list = acceptedSinceCommit(project, epic)
+  if (!list.length) return ''
+  const lines: string[] = []
+  let used = 0
+  for (const one of list) {
+    const reason = one.why ? one.why.replace(/\s+/g, ' ').slice(0, 200) : 'no reason given'
+    const line = `- ${one.file}: ${reason}${one.adjusted ? ' (adjusted by the author)' : ''}${one.by === 'auto' ? ' (accepted automatically)' : ''}${one.filer ? ` [proposed by ${one.filer.replace(/\s+/g, ' ').slice(0, 60)}]` : ''}`
+    used += line.length + 1
+    if (used > 1800) {
+      lines.push(`- … and ${list.length - lines.length} more`)
+      break
+    }
+    lines.push(line)
+  }
+  return `Accepted changes since the last commit:\n${lines.join('\n')}`
+}
+
 /** Rendered text of a run of segments, as one line — the same spelling the outline uses. */
 const text = plainText
 
@@ -1031,16 +1253,19 @@ function mcp(rpc: Rpc): Reply {
       serverInfo: { name: ID, version: VERSION },
       instructions:
         'The papers the epics in this workspace are aimed at: LaTeX on disk, edited as source beside its compiled ' +
-        'PDF. Four tools read, one lists what is waiting, one suggests and two revise or withdraw your own pending suggestion. There is deliberately no tool that ' +
-        'EDITS: propose_edit puts a change in front of the person working on the paper as a diff of the .tex, and ' +
-        'the file is untouched until they accept it — nothing on this door can accept it for them, and there is ' +
-        'no argument that skips them. Use it for a change somebody should see before it lands; it takes markup as ' +
-        'well as prose. For a new file or a restructuring, edit the .tex directly with the tools you already ' +
-        'have: a paper lives in a repository with a history. propose_edit returns a revision token: to change or ' +
-        'take back a suggestion while it is pending, call revise_edit or withdraw_edit with that token rather than ' +
-        'filing a replacement — they touch only your own pending suggestion and cannot accept it. A move is an ' +
-        'insertion and a deletion filed with the same group. It reads no tracker and holds no credential, so ' +
-        'nothing here can tell you whether the work a paper cites has landed.',
+        'PDF. Four tools read, one lists what is waiting, one suggests, two revise or withdraw your own pending ' +
+        'suggestion and one explains a change. Review is triggered by the state of the files: any change in a ' +
+        '.tex file, whoever made it, is shown to the person for acceptance. Prefer propose_edit when you can ' +
+        'explain the change — the file stays untouched until the author accepts, and it takes markup as well as ' +
+        'prose. If you edit the .tex directly, Paper shows every changed passage for review unless the author ' +
+        'turned on Auto accept; add a reason with explain_change. propose_edit returns a revision token: to ' +
+        'change or take back a suggestion while it is pending, call revise_edit or withdraw_edit with that token ' +
+        'rather than filing a replacement — they touch only your own pending suggestion and cannot accept it. ' +
+        'Suggestions survive a restart; one whose quoted text changed shows as out of date. A move is an ' +
+        'insertion and a deletion filed with the same group. list_proposals lists everything waiting, staged or ' +
+        'on disk. No tool here accepts or cancels a change or toggles Auto accept: those are the person\'s. It ' +
+        'reads no tracker and holds no credential, so nothing here can tell you whether the work a paper cites ' +
+        'has landed.',
     })
   }
   /* A notification carries no id and is answered with nothing. */
@@ -1247,7 +1472,15 @@ export function answer(
     if (text === null) return bad('there is nothing to write there')
     const was = str(body?.was, 200)
 
+    const before = readSource(epic, file, project)
     const written = writeFile(epic, { file, text, was }, project)
+    if (written.ok && before !== null && text !== before) {
+      /* The author's own act: the baseline moves by the author's edit
+         operations only, so a change somebody else made in this file stays
+         waiting for review. See `afterWrite`. */
+      const ctx = ctxOf(project, epic)
+      if (ctx) afterWrite(ctx, file, before, text)
+    }
     if (!written.ok) {
       return {
         status: written.stale ? 409 : 400,
@@ -1268,7 +1501,8 @@ export function answer(
        that changed anything, so it can tell the canvas. Nothing for an epic
        whose chapters this module does not keep. */
     const published = republish(project, epic)
-    return ok({ ok: true, hash: written.hash, paper: readPaper(epic, project), proposals: pendingFor(project, epic), said, published })
+    const after = everything(project, epic)
+    return ok({ ok: true, hash: written.hash, paper: readPaper(epic, project), proposals: after.proposals, ...reviewFacts(after.review), said, published })
   }
 
   /*
@@ -1319,12 +1553,13 @@ export function answer(
        nowhere to have filed anything, so the honest answer is that nothing is
        waiting. The page polls this, and a refusal every four seconds while
        nobody has a project open would be a container that looks broken. */
-    if (project === null) return ok({ ok: true, proposals: [] })
-    /* Measured against the disk first — see `settled` — and what that dropped
-       rides along as a sentence, because a suggestion vanishing from a page
-       while somebody was deciding about it reads as the page losing it. */
-    const said = lostBecause(settled(project, epic))
-    return ok({ ok: true, proposals: pendingFor(project, epic), said })
+    if (project === null) return ok({ ok: true, proposals: [], auto: false, jump: true, baseline: null, accepted: [], untracked: [] })
+    /* Measured against the disk first — see `settled` — and what that holds
+       back rides along as a sentence, because a suggestion going out of date
+       while somebody was deciding about it reads as the page losing it. Then
+       the files are compared with their baseline: see `review.ts`. */
+    const all = everything(project, epic)
+    return ok({ ok: true, proposals: all.proposals, ...reviewFacts(all.review), said: all.said })
   }
 
   /*
@@ -1350,21 +1585,17 @@ export function answer(
    * following the door it was given cannot change a paper behind the back of
    * the person reading it.
    *
-   * ## Auto-approve is not a setting here, and that is deliberate
+   * ## Auto accept is the person's, and it is held where a person set it
    *
-   * A reader may tick "apply straight away" beside the Edit checkbox. That tick
-   * lives in the page, and when it is on the page answers a new suggestion by
-   * calling THIS door immediately — with the ticket, exactly as it would if a
-   * finger had pressed Accept. There is no server-side flag for it and no
-   * argument on this door meaning "the reader said yes in advance".
-   *
-   * The reason is that a setting the server held would be a setting the server
-   * could be talked into. Anything that can post here could post the flag, and
-   * a caller that can post the flag has approved its own change on the reader's
-   * behalf. Kept in the page, the only thing that can auto-approve is the page
-   * a person is looking at, and the strongest statement available about
-   * approval stays true: nothing is written that the ticket-holder did not ask
-   * for.
+   * "Auto accept changes" (View menu) is remembered per project and epic on this
+   * machine, and it is changed by `POST /api/review`, which demands the same
+   * ticket as every write here. No MCP tool reaches it: a setting an agent could
+   * flip would be an agent approving its own change. What it does is deliberately
+   * small. A change found in the files is taken in by moving the baseline
+   * forward (in git, staging it); nothing is written to the paper. An agent's
+   * staged suggestion is accepted by the PAGE, pressing Accept as a finger
+   * would, so the one path that writes the paper from a suggestion is still this
+   * door and still carries the ticket.
    *
    * ## Accepting is the ordinary write path, not a second one
    *
@@ -1385,6 +1616,68 @@ export function answer(
     const decision = str(body?.decision, 20)
     const id = str(body?.id, 80)
 
+    /* The other versions of this passage, if it has any: answering one answers
+       the item. Read before anything changes the files. */
+    const mates = (() => {
+      /* Not `everything`: that measures the suggestions against the disk, and an
+         answer is measured against the page's hash, not smoothed over first. */
+      const ctxNow = ctxOf(project, epic)
+      const all = versionsOf([...pendingFor(project, epic), ...(ctxNow ? reviewOf(ctxNow).changes : [])])
+      const me = all.find((p) => p.id === id)
+      return me?.alt ? all.filter((p) => p.alt === me.alt && p.id !== id) : []
+    })()
+    const answerMates = (how: 'accept' | 'reject') => {
+      for (const mate of mates) {
+        if (mate.kind === 'disk') {
+          /* A version already in the file is cancelled only when the whole item is. */
+          if (how === 'reject') {
+            const ctx = ctxOf(project, epic)
+            if (ctx) cancelChange(ctx, mate.id)
+          }
+        } else {
+          /* A suggestion goes with the whole group it is in. */
+          const one = proposalById(project, epic, mate.id)
+          if (one) for (const member of groupOf(project, epic, one)) settle(project, epic, member.id, 'rejected')
+        }
+      }
+    }
+
+    /* A change found in the files themselves, not a staged suggestion: accepting
+       it moves the baseline (in git, stages it) and cancelling puts the
+       baseline's text back. See `review.ts`. */
+    if (!proposalById(project, epic, id)) {
+      const ctx = ctxOf(project, epic)
+      const found = ctx ? reviewOf(ctx).changes.find((c) => c.id === id) : null
+      if (ctx && found) {
+        if (decision !== 'accept' && decision !== 'reject') return bad('A change is accepted or cancelled, and this said neither.')
+        const done = decision === 'accept' ? acceptChange(ctx, id) : cancelChange(ctx, id, body?.confirm === true)
+        if (done.ok) answerMates(decision === 'accept' ? 'accept' : 'reject')
+        const all = everything(project, epic)
+        if (!done.ok) {
+          return {
+            status: 409,
+            body: {
+              ok: false,
+              error: done.why,
+              ...('needsConfirm' in done && done.needsConfirm ? { needsConfirm: true } : {}),
+              paper: readPaper(epic, project),
+              proposals: all.proposals,
+              ...reviewFacts(all.review),
+            },
+          }
+        }
+        return ok({
+          ok: true,
+          paper: readPaper(epic, project),
+          proposals: all.proposals,
+          ...reviewFacts(all.review),
+          said: decision === 'accept'
+            ? `Accepted${done.count > 1 ? ` ${done.count} changes` : ''}${all.review?.mode === 'git' ? ' and staged in git' : ''}.`
+            : `Cancelled${done.count > 1 ? ` ${done.count} changes` : ''}: the earlier text is back.`,
+        })
+      }
+    }
+
     /* Rejecting writes nothing, and this is the line that says so: the file is
        never opened. A rejected suggestion leaves the paper byte-identical
        because there is no path from here to a filesystem call at all. */
@@ -1393,7 +1686,9 @@ export function answer(
       if (!one) return bad('There is no suggestion by that name waiting here.', 404)
       /* A group is answered as one: half a move is not a change anybody asked for. */
       for (const member of groupOf(project, epic, one)) settle(project, epic, member.id, 'rejected')
-      return ok({ ok: true, proposals: pendingFor(project, epic) })
+      answerMates('reject')
+      const after = everything(project, epic)
+      return ok({ ok: true, proposals: after.proposals, ...reviewFacts(after.review) })
     }
 
     if (decision !== 'accept') return bad('A suggestion is accepted or rejected, and this said neither.')
@@ -1418,6 +1713,19 @@ export function answer(
     const edited = (m: Proposal) => Object.hasOwn(given, m.id) && given[m.id] !== (m.asked?.replace ?? m.text)
 
     let members = groupOf(project, epic, proposal)
+    if (members.some((m) => m.held)) {
+      return {
+        status: 409,
+        body: {
+          ok: false,
+          error:
+            'The text this suggestion was about changed since it was suggested, so it is held back: applying it would be a guess. '
+            + 'Cancel it, or ask the agent to revise it.',
+          stale: true,
+          proposals: listOf(project, epic),
+        },
+      }
+    }
     const ranges = new Map<string, { from: number; to: number; text: string }>()
     const adjusted = members.some(edited)
     let was = proposal.was
@@ -1436,7 +1744,7 @@ export function answer(
               + ' Nothing was accepted.',
             stale: true,
             paper: readPaper(epic, project),
-            proposals: pendingFor(project, epic),
+            proposals: listOf(project, epic),
           },
         }
       }
@@ -1463,6 +1771,7 @@ export function answer(
     }
     const lead = members.find((m) => m.id === id) ?? members[0]!
 
+    const beforeText = readSource(epic, lead.file, project)
     const written =
       members.length === 1
         ? writeRange(epic, { file: lead.file, from: edits[0]!.from, to: edits[0]!.to, text: edits[0]!.text, was }, project)
@@ -1501,70 +1810,43 @@ export function answer(
           error: said || written.why,
           stale: written.stale,
           paper: readPaper(epic, project),
-          proposals: pendingFor(project, epic),
+          proposals: listOf(project, epic),
         },
       }
     }
     for (const m of members) {
       settle(project, epic, m.id, 'accepted', edited(m) ? { editedByAuthor: true, final: given[m.id] } : {})
     }
+    answerMates('accept')
     /*
-     * One accepted suggestion is one commit, and it is made HERE — after the
-     * bytes are on disk and before anything else.
+     * Accepting a suggestion applies it and moves the baseline by it (in git:
+     * stages it). It does NOT commit.
      *
-     * ## The order is the whole of the safety
-     *
-     * `writeRange` has already renamed the new file over the old one. Whatever
-     * git does next, the correction stands: there is no branch below this line
-     * that can un-write it, and a refusal is a sentence over a paper that is
-     * already right. That is the only ordering in which a program allowed to
-     * commit into somebody's repository is safe to write, and it is why the
-     * commit is not attempted first and the write made conditional on it.
-     *
-     * ## Why an accept commits and a typed correction does not
-     *
-     * They are different acts. Accepting is a discrete decision about somebody
-     * else's suggestion — there is a before and an after and a reason, which is
-     * exactly a commit — and the reader made it once, deliberately, with a
-     * button. Typing is continuous: a reader fixing four typos in a paragraph
-     * has made one change to their paper, not four, and a commit per blur would
-     * fill their history with a letter each. So typing accumulates and `Save`
-     * commits it, which is what a person means by saving a document.
-     *
-     * `Auto` does not change this. With the tick on the page presses Accept as
-     * a finger would, so a suggestion applied unasked is committed unasked —
-     * which is more of a reason to record it, not less: the commit is the only
-     * place that change is written down as having happened.
+     * It used to commit, one commit per accepted suggestion, by path — which
+     * was right while "what is saved" was the measure. The measure is now what
+     * has been ACCEPTED, and a commit by path takes the whole working file,
+     * with whatever else is waiting for review in it. Committing is the
+     * Commit item's, and it commits what was accepted, with the reasons.
      */
-    const message = acceptMessage(
-      lead.file,
-      members.length > 1 ? members.map((m) => m.why).join('; ') : proposal.why,
-      proposal.by,
-    )
-    if (adjusted) {
-      message.body += `\n\nAdjusted by the author before accepting. The agent proposed: ${members
-        .filter((m) => edited(m))
-        .map((m) => JSON.stringify(m.asked?.replace ?? m.text))
-        .join(', ')}`
+    const ctxNow = ctxOf(project, epic)
+    const afterText = readSource(epic, lead.file, project)
+    if (ctxNow && beforeText !== null && afterText !== null) {
+      afterWrite(
+        ctxNow,
+        lead.file,
+        beforeText,
+        afterText,
+        members.map((m) => ({
+          id: m.id,
+          why: m.why,
+          filer: m.by,
+          old: edited(m) ? (m.asked?.find ?? m.was_text) : m.was_text,
+          new: edited(m) ? given[m.id]! : m.text,
+          by: 'author' as const,
+          ...(edited(m) ? { adjusted: true } : {}),
+        })),
+      )
     }
-    /*
-     * ONE FILE, and not the whole paper.
-     *
-     * A pathspec-mode commit takes the working-tree state of the paths it
-     * names, so a commit scoped to the paper's directory would sweep in every
-     * other uncommitted change under it — a chapter the author had been editing
-     * beside this page — under a subject saying a suggestion was accepted. That
-     * is not somebody else's work, because it is still the paper; it is the
-     * wrong SENTENCE about it, and this history is the one somebody will read
-     * to find out when a change was made and why.
-     *
-     * So an accept commits the one file the suggestion changed, which is the
-     * file the message names. What cannot be separated out is another
-     * uncommitted change in THAT file — a per-path commit has no finer grain
-     * than a path — and Save, which is scoped to the whole paper, is where the
-     * rest belongs.
-     */
-    const made = commitPaper(paperRoot(epic, project), message.subject, message.body, [proposal.file])
     /* Latest range first, so the ranges still to be moved are above the one
        just applied and keep their coordinates. */
     let lost = 0
@@ -1573,12 +1855,58 @@ export function answer(
     return ok({
       ok: true,
       paper: readPaper(epic, project),
-      proposals: pendingFor(project, epic),
+      proposals: listOf(project, epic),
       /* Two sentences that can both be true — a suggestion was dropped by the
          rebase AND the commit was refused — and the reader needs both. Joined
          rather than one overwriting the other. */
-      said: [adjusted ? 'Accepted with your changes.' : '', droppedBecause(lost), aboutCommit(made)].filter((one) => one.length > 0).join(' '),
+      said: [adjusted ? 'Accepted with your changes.' : 'Accepted.', droppedBecause(lost)].filter((one) => one.length > 0).join(' '),
     })
+  }
+
+  /*
+   * The person's own settings and notes about the changes waiting for review.
+   *
+   * Ticketed, like every write, and NOT on the MCP door: no tool there reaches
+   * any of these. `auto` is the Auto accept checkbox, remembered per project
+   * and epic on this machine. `why` writes the reason beside a change (the
+   * author's own words, or an edit of the filer's). `uncommit` cancels one of
+   * the changes accepted lately, putting the old words back in the file and in
+   * the baseline.
+   */
+  if (path === '/api/review' && method === 'POST') {
+    const refused = unticketed(ticket)
+    if (refused) return refused
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
+    const ctx = ctxOf(project, epic)
+    if (!ctx) return bad('There is no paper for that epic in this project.', 404)
+    const action = str(body?.action, 20)
+    let said = ''
+    if (action === 'auto') {
+      setAuto(ctx, body?.on === true)
+      said = body?.on === true ? 'Changes are accepted as they arrive; what is waiting now is left for you.' : ''
+    } else if (action === 'jump') {
+      setJump(ctx, body?.on === true)
+    } else if (action === 'why') {
+      const id = str(body?.id, 80)
+      const why = typeof body?.why === 'string' ? body.why.replace(/\s+/g, ' ').trim().slice(0, MAX_WHY) : ''
+      const staged = proposalById(project, epic, id)
+      if (staged) {
+        const found = findInProject(project, id)
+        if (found) setWhy(project, found.epic, id, why)
+      } else if (!setReason(ctx, id, why)) {
+        return bad('There is no change by that name waiting here.', 404)
+      }
+    } else if (action === 'uncommit') {
+      const n = typeof body?.n === 'number' ? body.n : Number(body?.n)
+      const done = cancelAccepted(ctx, n)
+      if (!done.ok) return bad(done.why, 409)
+      said = 'That change is cancelled: the earlier words are back.'
+    } else return bad('That is not something this door does.')
+    const all = everything(project, epic)
+    return ok({ ok: true, paper: readPaper(epic, project), proposals: all.proposals, ...reviewFacts(all.review), said })
   }
 
   /*
@@ -1623,15 +1951,16 @@ export function answer(
     const dir = paperRoot(epic, project)
     if (!dir) return bad('There is no paper for that epic in this project.', 404)
 
-    /* Asked before it is done, because the message names the files and the
-       files are what `standing` reads. One extra `git status` on a press of a
-       button is not a cost worth an argument. */
-    const where = standing(dir)
+    /* Two baselines, two commits. Where the paper is tracked in git, what is
+       committed is what was ACCEPTED (staged): a change still waiting for
+       review is not in it. Without a tracked paper there is nothing staged to
+       speak of, and the commit is of the paper's files as they are, as it
+       always was. */
+    const ctx = ctxOf(project, epic)
+    const staged = ctx !== null && isGitBacked(ctx)
+    const waiting = ctx ? reviewOf(ctx).changes.length : 0
+    const where = staged ? standingStaged(dir) : standing(dir)
     if (where.at === 'nogit') {
-      /* The button that sends this is not drawn when there is no repository, so
-         getting here means something other than the page asked — and the honest
-         answer to "save this" from a folder with no history is that there is
-         nowhere to save it TO, not silence. */
       return ok({
         ok: true,
         committed: false,
@@ -1639,11 +1968,22 @@ export function answer(
       })
     }
     if (where.at !== 'ready') {
-      return ok({ ok: true, committed: false, said: aboutCommit(where) })
+      const none = staged && where.at === 'clean'
+        ? waiting
+          ? `Nothing has been accepted since the last commit: ${waiting} change${waiting === 1 ? ' is' : 's are'} still waiting for review.`
+          : 'Nothing has changed since the last commit.'
+        : aboutCommit(where)
+      return ok({ ok: true, committed: false, said: none })
     }
     const message = saveMessage(epic, where.files)
-    const made = commitPaper(dir, message.subject, message.body)
-    return ok({ ok: true, committed: made.at === 'committed', said: aboutCommit(made) })
+    const reasons = acceptedBody(project, epic)
+    const body = [message.body, reasons].filter(Boolean).join('\n\n')
+    const made = staged ? commitStaged(dir, message.subject, body) : commitPaper(dir, message.subject, body)
+    if (made.at === 'committed') markCommitted(project, epic)
+    const left = staged && waiting
+      ? ` ${waiting} change${waiting === 1 ? ' is' : 's are'} still waiting for review and stay${waiting === 1 ? 's' : ''} uncommitted.`
+      : ''
+    return ok({ ok: true, committed: made.at === 'committed', said: aboutCommit(made) + left })
   }
 
   /*
@@ -1696,7 +2036,16 @@ export function answer(
      * a `files: []` sitting beside `at: 'refused'` is an empty list that means
      * nothing pretending to be one that means "none".
      */
-    return ok({ ok: true, standing: standing(dir), hashes: hashesOf(epic, project) })
+    const ctx = ctxOf(project, epic)
+    const gitBacked = ctx !== null && isGitBacked(ctx)
+    return ok({
+      ok: true,
+      standing: gitBacked ? standingStaged(dir) : standing(dir),
+      /* What "changed since the last commit" is measured by: what was accepted
+         (staged) where the paper is tracked in git, the working files otherwise. */
+      measuredBy: gitBacked ? 'staged' : 'files',
+      hashes: hashesOf(epic, project),
+    })
   }
 
   if (path === '/api/figure' && method === 'GET') {

@@ -129,4 +129,11 @@ describe('a stretch of source carried out to whole words', () => {
     expect(said(at, at + 'formative evaluation'.length)).toBe('formative evaluation')
     expect(said(at - 1, at - 1)).toBe('')
   })
+  test('a stretch that ends or begins at a space does not take the word beside it', () => {
+    const at = line.indexOf('formative')
+    /* "formative " typed in before "evaluation": that, and not "evaluation". */
+    expect(said(at, at + 'formative '.length)).toBe('formative ')
+    /* " formative" — the space before is where it begins, and the word before is not taken. */
+    expect(said(at - 1, at + 'formative'.length)).toBe(' formative')
+  })
 })

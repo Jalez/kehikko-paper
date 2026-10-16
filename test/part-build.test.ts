@@ -210,6 +210,21 @@ describe('a part compiled on its own, by an engine that reads only its own folde
     expect(edited.build.pdf!.hashes['chapters/a.tex']).not.toBe(edited.part!.pdf!.hashes['chapters/a.tex'])
   })
 
+  test('a folder a failed run used is emptied before the next: nothing it half-wrote is read again', async () => {
+    writeFileSync(join(paper, 'chapters', 'a.tex'), 'BROKEN\n')
+    const bad = (await compilePart('a-thesis', project, ['chapters/a.tex']))!.part!
+    expect(bad.last?.ok).toBe(false)
+    const work = join(buildDir(paper), 'parts', bad.key, 'work')
+    /* What a run killed mid-write leaves: an outline cut off mid-line, which stops every run after it. */
+    writeFileSync(join(work, 'main.out'), '\\BOOKMARK [1][-]{section.1}{cut off')
+    writeFileSync(join(paper, 'chapters', 'a.tex'), 'chapter a\n')
+    const fixed = (await compilePart('a-thesis', project, ['chapters/a.tex']))!.part!
+    expect(fixed.last?.ok).toBe(true)
+    expect(existsSync(join(work, 'main.out'))).toBe(false)
+    /* Seeded afresh from the full build. */
+    expect(text(readPdf('a-thesis', project, fixed.key))).toContain('read chapters/b.aux: aux of b, from chapter b')
+  })
+
   test('the whole paper is compiled first when asked to be of this text — and only when it is not', async () => {
     const whole = join(buildDir(paper), 'work')
     await compilePart('a-thesis', project, ['chapters/a.tex'], { full: true })

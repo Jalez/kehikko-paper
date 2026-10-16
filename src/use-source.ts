@@ -4,6 +4,8 @@ import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { held } from 'kehikot-module-protocol/client'
 
+import { hunksOf } from '../latex/hunks.ts'
+import { mergeThree } from '../latex/merge.ts'
 import { json, post, standingIn } from './api.ts'
 import { eolOf, toDisk, toEditor, type Eol } from './lib/offsets.ts'
 
@@ -144,6 +146,7 @@ export function useSource({
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const loading = useRef<Set<string>>(new Set())
   const saveFn = useRef<(name: string) => Promise<boolean>>(async () => true)
+  const editRef = useRef<(text: string, name?: string) => void>(() => {})
   const conflictRef = useRef<Conflict | null>(null)
   conflictRef.current = conflict
 
@@ -259,6 +262,17 @@ export function useSource({
             return true
           }
           if (body.stale === true && typeof body.source === 'string' && typeof body.hash === 'string') {
+            const theirs = toEditor(body.source)
+            const merged = mergeThree(doc.saved, doc.text, theirs)
+            if (merged !== null) {
+              /* The disk moved between this editor's read and its save, in other lines than the ones typed: both kept. */
+              docs.current.set(name, { text: doc.text, saved: theirs, hash: body.hash, eol: eolOf(body.source) })
+              setChanged((was) => changedBy(name, doc.saved, theirs, was))
+              setTaken((n) => n + 1)
+              if (merged === doc.text) void saveFn.current(name)
+              else editRef.current(merged, name)
+              return false
+            }
             setConflict({ file: name, theirs: toEditor(body.source), hash: body.hash, eol: eolOf(body.source) })
             return false
           }
@@ -315,6 +329,8 @@ export function useSource({
     [file, redraw, saveDelay, saveNow, hold],
   )
 
+  editRef.current = edit
+
   /** Save everything typed, now. True when the disk holds what the editor does. */
   const flush = useCallback(async (): Promise<boolean> => {
     for (const one of timers.current.values()) clearTimeout(one)
@@ -337,6 +353,18 @@ export function useSource({
         setChanged((was) => changedBy(name, held.text, got.text, was))
         setTaken((n) => n + 1)
         redraw()
+        return
+      }
+      /* Both changed it. Where what each changed does not touch, both are kept:
+         what was typed stays, what the disk has is added, and the whole is
+         saved over the disk's version. Where it does, a person chooses. */
+      const merged = mergeThree(held.saved, held.text, got.text)
+      if (merged !== null) {
+        docs.current.set(name, { text: held.text, saved: got.text, hash: got.hash, eol: got.eol })
+        setChanged((was) => changedBy(name, held.saved, got.text, was))
+        setTaken((n) => n + 1)
+        if (merged === held.text) void saveFn.current(name)
+        else editRef.current(merged, name)
         return
       }
       setConflict({ file: name, theirs: got.text, hash: got.hash, eol: got.eol })
@@ -450,23 +478,32 @@ export interface Changed {
   file: string
   from: number
   to: number
+  /** Every stretch that changed, the first included, in order: each is marked where it is printed, and nothing between them. */
+  parts?: { from: number; to: number }[]
   n: number
 }
 
 /**
- * Where two texts differ, as a range of the NEW one.
+ * Where two texts first differ, as a range of the NEW one.
  *
- * What they share at the front and at the back is set aside and the rest is
- * the change: one edit comes back as itself, several as the stretch from the
- * first to the last. Empty when something was only taken out. That is enough
- * to take a person to it, which is all this is for.
+ * ONE change, the first, and not the stretch from the first to the last: an
+ * agent that edited a heading and a sentence three pages below it did not
+ * change everything between them, and a mark on the PDF drawn over all of it
+ * points at text nobody touched. The first change is where a person is taken;
+ * the rest are walked to one at a time. Words, not lines: a changed word in a
+ * long line is that word. Empty (`from === to`) when something was only taken
+ * out there.
  */
 export function changedBy(file: string, old: string, next: string, was: Changed | null): Changed | null {
   if (old === next) return was
-  const most = Math.min(old.length, next.length)
-  let front = 0
-  while (front < most && old.charCodeAt(front) === next.charCodeAt(front)) front += 1
-  let back = 0
-  while (back < most - front && old.charCodeAt(old.length - 1 - back) === next.charCodeAt(next.length - 1 - back)) back += 1
-  return { file, from: front, to: next.length - back, n: (was?.n ?? 0) + 1 }
+  const all = hunksOf(old, next)
+  const first = all[0]
+  if (!first) return was
+  return {
+    file,
+    from: first.newFrom,
+    to: first.newTo,
+    ...(all.length > 1 ? { parts: all.map((one) => ({ from: one.newFrom, to: one.newTo })) } : {}),
+    n: (was?.n ?? 0) + 1,
+  }
 }

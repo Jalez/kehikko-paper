@@ -464,6 +464,48 @@
   background: color-mix(in oklch, var(--gone) 20%, transparent);
   border-bottom-style: solid;
 }
+/* A change already in the file: what stands there now is the new text (green);
+   what the baseline had, when shown in its place, is the old (red). */
+.cm-sugg.cm-sugg-new {
+  background: color-mix(in oklch, var(--arrived) 12%, transparent);
+  border-bottom-color: var(--arrived);
+}
+.cm-sugg.cm-sugg-new.cm-sugg-current {
+  background: color-mix(in oklch, var(--arrived) 24%, transparent);
+}
+.cm-sugg.cm-sugg-stale {
+  background: color-mix(in oklch, var(--muted-foreground, gray) 14%, transparent);
+  border-bottom: 1px dotted var(--muted-foreground, gray);
+}
+.cm-sugg-after.cm-sugg-old {
+  background: color-mix(in oklch, var(--gone) 14%, transparent);
+  border-bottom-color: var(--gone);
+  text-decoration: line-through;
+}
+.cm-sugg-held {
+  color: var(--gone);
+}
+.cm-sugg-why-edit {
+  font: inherit;
+  color: inherit;
+  color-scheme: inherit;
+  min-width: 5ch;
+  max-width: 100%;
+  flex: 0 1 auto;
+  padding: 0 0.25rem;
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklch, currentColor 40%, transparent);
+  background: transparent;
+  user-select: text;
+}
+.cm-sugg-why-edit:focus {
+  outline: none;
+  border-bottom-color: currentColor;
+}
+.cm-sugg-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .cm-sugg-after {
   background: color-mix(in oklch, var(--arrived) 16%, transparent);
   border-bottom: 1px dashed var(--arrived);
@@ -487,8 +529,17 @@
   resize: vertical;
 }
 .cm-sugg-tag {
-  display: inline;
-  margin-left: 0.25rem;
+  /* In flow, with a box of its own that the line grows to hold: the buttons,
+     the notes and the reason wrap inside it, so nothing is ever drawn over
+     the next line of source. */
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.3rem;
+  row-gap: 0.15rem;
+  max-width: 100%;
+  vertical-align: top;
+  margin: 0.1rem 0 0.1rem 0.25rem;
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-size: 0.68rem;
   line-height: 1.3;
@@ -543,20 +594,22 @@
   border-radius: 3px;
   background: color-mix(in oklch, currentColor 8%, transparent);
 }
-/* Armed: Enter and Escape act on this one. A ring on the tag says so. */
+/* Armed: Enter and Escape act on this one. A tint and a bar at the start say
+   so; no outline, which on a wrapping tag is a box drawn across other text. */
 .cm-sugg-tag.cm-sugg-armed {
-  outline: 1.5px solid color-mix(in oklch, var(--muted-foreground, currentColor) 70%, transparent);
-  outline-offset: 2px;
-  border-radius: 4px;
+  background: color-mix(in oklch, var(--muted-foreground, currentColor) 14%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in oklch, var(--muted-foreground, currentColor) 80%, transparent);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
 }
 .cm-sugg-toggle:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 1px;
 }
 .cm-sugg-note {
-  margin-left: 0.3rem;
   font-style: italic;
 }
 .cm-sugg-why {
-  margin-left: 0.3rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

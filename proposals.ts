@@ -1,10 +1,24 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 
-import { MAX_PENDING, rebase, refile, type Proposal } from './latex/propose.ts'
+import { rebase, relocate, type Proposal } from './latex/propose.ts'
+import { epicsWithState, paperState, readJson, removeState, writeJson } from './machine.ts'
+import { join } from 'node:path'
 
 /**
  * The suggestions nobody has answered yet, and the argument for where they
  * live.
+ *
+ * ## Revised: kept on this machine, and still in memory while running
+ *
+ * The argument below was written when losing every pending suggestion on a
+ * restart looked cheap. It was not — a module that updates itself restarts, and
+ * an agent's work vanished under the person reading it — so what is held in
+ * memory is also written, atomically, to the machine's module-state folder
+ * (`machine.ts`) and read back on the first question about a paper. The reasons
+ * it is still not in the project (it would travel in git) stand; the one for
+ * memory-only (no durable record of a suggestion measured against a file nobody
+ * can identify) is answered by measuring it again against whatever the file is
+ * (`remeasure`). What follows is kept for the first two options it weighed.
  *
  * ## In this process's memory, and not on the disk
  *
@@ -53,9 +67,78 @@ import { MAX_PENDING, rebase, refile, type Proposal } from './latex/propose.ts'
  * paper. This is the same reasoning `api.ts` gives for keeping the project
  * beside every request.
  */
-const pending = new Map<string, Proposal[]>()
-
 const SEP = '\0'
+
+/**
+ * The same map, kept on the machine as well (see `machine.ts`).
+ *
+ * The argument above was written when a restart wiping every pending
+ * suggestion looked like a cheap price. It was not: a module that updates
+ * itself restarts, and an agent's work vanished under the person reading it.
+ * So what is held is also written, atomically, beside the other state this
+ * module keeps for a paper, and read back the first time a paper is asked
+ * about. Only the HASH of a revision token is ever written, so an agent keeps
+ * its token across a restart and the file proves nothing to a reader of it.
+ * What no longer matches the paper is not dropped on the way back: it is
+ * measured again like any other and shown as out of date (`remeasure`).
+ */
+const memory = new Map<string, Proposal[]>()
+const memoryOutcomes = new Map<string, Outcome[]>()
+const loaded = new Set<string>()
+const SEP_RE = /\0/
+
+function fileOf(at: string): string {
+  const [project, epic] = at.split(SEP_RE) as [string, string]
+  return join(paperState(project, epic), 'suggestions.json')
+}
+
+function load(at: string): void {
+  if (loaded.has(at)) return
+  loaded.add(at)
+  const kept = readJson<{ pending?: unknown; outcomes?: unknown }>(fileOf(at))
+  if (!kept) return
+  if (Array.isArray(kept.pending)) {
+    const list = (kept.pending as Proposal[])
+      .filter((p) => p && typeof p.id === 'string' && typeof p.file === 'string' && typeof p.text === 'string')
+    if (list.length) memory.set(at, list)
+  }
+  if (Array.isArray(kept.outcomes)) memoryOutcomes.set(at, (kept.outcomes as Outcome[]).slice(-MAX_OUTCOMES))
+}
+
+function save(at: string): void {
+  const pendingNow = memory.get(at) ?? []
+  const outcomesNow = memoryOutcomes.get(at) ?? []
+  const path = fileOf(at)
+  if (!pendingNow.length && !outcomesNow.length) {
+    removeState(path)
+    return
+  }
+  writeJson(path, { version: 1, pending: pendingNow, outcomes: outcomesNow })
+}
+
+const pending = {
+  get(at: string): Proposal[] | undefined {
+    load(at)
+    return memory.get(at)
+  },
+  set(at: string, list: Proposal[]): void {
+    load(at)
+    memory.set(at, list)
+    save(at)
+  },
+  delete(at: string): void {
+    load(at)
+    memory.delete(at)
+    save(at)
+  },
+  /** The keys of one project, in memory and on the machine. */
+  keysFor(project: string): string[] {
+    const found = new Set<string>()
+    for (const epic of epicsWithState(project)) found.add(`${project}${SEP}${epic}`)
+    for (const at of memory.keys()) if (at.startsWith(`${project}${SEP}`)) found.add(at)
+    return [...found]
+  },
+}
 
 function key(project: string, epic: string): string {
   /* A NUL between them, because it cannot occur in either half. A slash or a
@@ -69,7 +152,7 @@ export function pendingFor(project: string, epic: string): Proposal[] {
   /* The token's hash is stripped HERE, so that nothing which reads the list —
      the page's poll, `list_proposals`, a response body — can carry it. It is
      the one proof a filer has, and it is never shown. */
-  return heldFor(project, epic).map(({ tokenHash: _kept, ...rest }) => rest)
+  return heldFor(project, epic).map(({ tokenHash: _kept, tokenHashes: _more, ...rest }) => rest)
 }
 
 /** The raw records, token hash included. Server-side checks only; never put the result in a response. */
@@ -108,8 +191,18 @@ export interface Outcome {
 }
 
 /** Recent outcomes per paper, newest last, bounded: the agent's "what became of mine". */
-const outcomes = new Map<string, Outcome[]>()
 const MAX_OUTCOMES = 40
+const outcomes = {
+  get(at: string): Outcome[] | undefined {
+    load(at)
+    return memoryOutcomes.get(at)
+  },
+  set(at: string, list: Outcome[]): void {
+    load(at)
+    memoryOutcomes.set(at, list)
+    save(at)
+  },
+}
 
 function note(project: string, epic: string, one: Proposal, state: Settled, extra: Partial<Outcome> = {}): void {
   const at = key(project, epic)
@@ -135,9 +228,8 @@ export function outcomesFor(project: string, epic: string): Outcome[] {
 
 /** One outcome by id across a whole project (any epic), or null. */
 export function outcomeById(project: string, id: string): Outcome | null {
-  for (const [at, list] of outcomes) {
-    if (!at.startsWith(`${project}${SEP}`)) continue
-    const found = list.find((o) => o.id === id)
+  for (const at of pending.keysFor(project)) {
+    const found = (outcomes.get(at) ?? []).find((o) => o.id === id)
     if (found) return found
   }
   return null
@@ -170,16 +262,18 @@ function hashToken(token: string): string {
 }
 
 function tokenMatches(proposal: Proposal, token: string): boolean {
-  if (!proposal.tokenHash || !token) return false
-  const a = Buffer.from(proposal.tokenHash, 'hex')
+  if (!token) return false
   const b = Buffer.from(hashToken(token), 'hex')
-  return a.length === b.length && timingSafeEqual(a, b)
+  return [proposal.tokenHash, ...(proposal.tokenHashes ?? [])].some((one) => {
+    if (!one) return false
+    const a = Buffer.from(one, 'hex')
+    return a.length === b.length && timingSafeEqual(a, b)
+  })
 }
 
 /** The suggestion with this id anywhere in one project, with the epic it is on. */
 export function findInProject(project: string, id: string): { epic: string; proposal: Proposal } | null {
-  for (const at of pending.keys()) {
-    if (!at.startsWith(`${project}${SEP}`)) continue
+  for (const at of pending.keysFor(project)) {
     const epic = at.slice(project.length + SEP.length)
     const proposal = heldFor(project, epic).find((p) => p.id === id)
     if (proposal) return { epic, proposal }
@@ -242,13 +336,45 @@ export function reviseOne(
     at: proposal.at,
     group: proposal.group,
     tokenHash: proposal.tokenHash,
+    ...(proposal.tokenHashes ? { tokenHashes: proposal.tokenHashes } : {}),
     revisedAt: Date.now(),
     revisions: (proposal.revisions ?? 0) + 1,
   }
   const at = key(project, epic)
   pending.set(at, (pending.get(at) ?? []).map((p) => (p.id === id ? kept : p)))
-  const { tokenHash: _hidden, ...shown } = kept
+  const { tokenHash: _hidden, tokenHashes: _others, ...shown } = kept
   return { ok: true, proposal: shown }
+}
+
+/**
+ * The same filer says it again about words it already has a pending suggestion
+ * on: that suggestion is revised in place rather than a second one filed. Keeps
+ * the id, the place in the order, the group and every token it was handed out
+ * under, and adds the new call's; answers the revised suggestion, or null when
+ * `id` is not pending.
+ */
+export function reviseByFiler(
+  project: string,
+  epic: string,
+  id: string,
+  fields: Pick<Proposal, 'from' | 'to' | 'text' | 'was_text' | 'was' | 'why' | 'asked'>,
+  newTokenHash: string,
+): Proposal | null {
+  const at = key(project, epic)
+  const held = pending.get(at) ?? []
+  const current = held.find((p) => p.id === id)
+  if (!current) return null
+  const { held: _out, ...rest } = current
+  const kept: Proposal = {
+    ...rest,
+    ...fields,
+    tokenHashes: [...(current.tokenHashes ?? []), newTokenHash],
+    revisedAt: Date.now(),
+    revisions: (current.revisions ?? 0) + 1,
+  }
+  pending.set(at, held.map((p) => (p.id === id ? kept : p)))
+  const { tokenHash: _a, tokenHashes: _b, ...shown } = kept
+  return shown
 }
 
 /**
@@ -324,17 +450,17 @@ export function keep(
 ): { ok: true; proposal: Proposal } | { ok: false; why: string } {
   const at = key(project, epic)
   const held = pending.get(at) ?? []
-  if (held.length >= MAX_PENDING) {
-    return {
-      ok: false,
-      why:
-        `There are already ${held.length} suggestions waiting on this paper, which is as many as it holds. `
-        + 'Wait for the reader to answer some of them.',
-    }
-  }
   const filed: Proposal = { ...proposal, id: randomUUID(), at: Date.now() }
   pending.set(at, [...held, filed])
   return { ok: true, proposal: filed }
+}
+
+/** The author wrote (or changed) the reason beside a pending suggestion. */
+export function setWhy(project: string, epic: string, id: string, why: string): void {
+  const at = key(project, epic)
+  const held = pending.get(at)
+  if (!held) return
+  pending.set(at, held.map((p) => (p.id === id ? { ...p, why } : p)))
 }
 
 /** Forget one, whether it was accepted, rejected or refused. */
@@ -376,36 +502,18 @@ export function rebaseAll(
     const moved = rebase(proposal, applied, hash)
     if (moved) kept.push(moved)
     else {
+      /* Its bytes were rewritten, so there is no arithmetic that moves it. It
+         is NOT dropped: it keeps the hash it was measured at, which no longer
+         matches the file, and the next measurement (`remeasure`) looks for its
+         quoted words again — drawing it where they are, holding it back where
+         they changed, listing it as out of date where they are gone. */
       lost += 1
-      note(project, epic, proposal, 'dropped')
+      kept.push(proposal)
     }
   }
-  lost += breakGroups(project, epic, held, kept)
   if (kept.length) pending.set(at, kept)
   else pending.delete(at)
   return lost
-}
-
-/**
- * A group is all or nothing: when one of its members did not survive, the
- * others do not either, since half a move is a change nobody asked for.
- * Mutates `kept`; answers how many survivors it took out.
- */
-function breakGroups(project: string, epic: string, before: readonly Proposal[], kept: Proposal[]): number {
-  const had = new Map<string, number>()
-  for (const p of before) if (p.group) had.set(p.group, (had.get(p.group) ?? 0) + 1)
-  const have = new Map<string, number>()
-  for (const p of kept) if (p.group) have.set(p.group, (have.get(p.group) ?? 0) + 1)
-  let removed = 0
-  for (let i = kept.length - 1; i >= 0; i--) {
-    const p = kept[i]!
-    if (p.group && (have.get(p.group) ?? 0) < (had.get(p.group) ?? 0)) {
-      note(project, epic, p, 'dropped')
-      kept.splice(i, 1)
-      removed += 1
-    }
-  }
-  return removed
 }
 
 /**
@@ -452,34 +560,38 @@ export function remeasure(
   const read = new Map<string, { hash: string; source: string } | null>()
   const kept: Proposal[] = []
   const lost: { file: string; why: string }[] = []
+  let changed = false
   for (const proposal of held) {
     if (!read.has(proposal.file)) read.set(proposal.file, current(proposal.file))
     const file = read.get(proposal.file) ?? null
     if (file === null) {
-      lost.push({ file: proposal.file, why: `${proposal.file} is no longer a file this paper can read.` })
-      note(project, epic, proposal, 'dropped')
+      if (proposal.held !== 'gone') {
+        changed = true
+        lost.push({ file: proposal.file, why: `${proposal.file} is no longer a file this paper can read.` })
+        kept.push({ ...proposal, held: 'gone', from: 0, to: 0, was_text: '' })
+      } else kept.push(proposal)
       continue
     }
     if (file.hash === proposal.was) {
       kept.push(proposal)
       continue
     }
-    const again = refile(proposal, file.source, file.hash)
-    if (again) kept.push(again)
-    else {
-      note(project, epic, proposal, 'dropped')
+    const again = relocate(proposal, file.source, file.hash)
+    changed = true
+    if (again.held && again.held !== proposal.held) {
       lost.push({
         file: proposal.file,
-        why: `${proposal.file} changed on disk and the text it was about is no longer there, exactly once, to find.`,
+        why:
+          again.held === 'changed'
+            ? `${proposal.file} changed on disk and part of the text it was about was rewritten.`
+            : again.held === 'ambiguous'
+              ? `${proposal.file} changed on disk and the text it was about is now in the file more than once.`
+              : `${proposal.file} changed on disk and the text it was about is no longer there.`,
       })
     }
+    kept.push(again)
   }
-  const extra = breakGroups(project, epic, held, kept)
-  for (let n = 0; n < extra; n++) {
-    lost.push({ file: held[0]!.file, why: 'It belonged to a group, and another member of the group was dropped.' })
-  }
-  if (kept.length) pending.set(at, kept)
-  else pending.delete(at)
+  if (changed) pending.set(at, kept)
   return lost
 }
 
@@ -490,10 +602,10 @@ export function remeasure(
  */
 export function lostBecause(lost: readonly { file: string; why: string }[]): string {
   if (!lost.length) return ''
-  if (lost.length === 1) return `One suggestion was dropped: ${lost[0]!.why}`
+  if (lost.length === 1) return `One suggestion is out of date: ${lost[0]!.why}`
   const files = [...new Set(lost.map((one) => one.file))].join(', ')
-  return `${lost.length} suggestions were dropped, because ${files} changed on disk and the text they were about is `
-    + 'no longer there to find.'
+  return `${lost.length} suggestions are out of date, because ${files} changed on disk and the text they were about `
+    + 'was rewritten or is gone. They are listed, and can be cancelled.'
 }
 
 /**
@@ -504,6 +616,18 @@ export function lostBecause(lost: readonly { file: string; why: string }[]): str
  * after the state stops being a map.
  */
 export function forgetAllProposals(): void {
-  pending.clear()
-  outcomes.clear()
+  for (const at of new Set([...memory.keys(), ...memoryOutcomes.keys(), ...loaded])) removeState(fileOf(at))
+  memory.clear()
+  memoryOutcomes.clear()
+  loaded.clear()
+}
+
+/**
+ * Forget what this process holds in memory and nothing else: what a restart
+ * does. The next question about a paper reads what was kept on the machine.
+ */
+export function restartProposals(): void {
+  memory.clear()
+  memoryOutcomes.clear()
+  loaded.clear()
 }

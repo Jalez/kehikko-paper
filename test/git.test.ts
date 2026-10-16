@@ -145,6 +145,9 @@ describe('a commit can never carry somebody else’s work', () => {
 
     const id = suggest('tpyo', 'typo')
     expect(accept(id)?.status).toBe(200)
+    /* Accepting stages; it does not commit. */
+    expect(subjects()).toHaveLength(1)
+    expect(save()?.status).toBe(200)
 
     /* One file in the commit, and it is the paper's. */
     const inCommit = git('show', '--name-only', '--format=', 'HEAD').out.split('\n').filter((one) => one)
@@ -155,26 +158,24 @@ describe('a commit can never carry somebody else’s work', () => {
     expect(readFileSync(unrelated, 'utf8')).toBe('notes somebody had half-staged\n')
   })
 
-  test('accepting commits the one file it names, not the rest of the paper', () => {
-    /* A chapter the author was in the middle of, beside the file the suggestion
-       is about. Committing it under "Accept a suggested change in main.tex"
-       would be the wrong sentence about somebody's work — inside the paper, so
-       not somebody else's, but not what the message says either. Save is where
-       the rest belongs. */
-    const chapter = join(paperDir, 'chapter-two.tex')
-    writeFileSync(chapter, 'A chapter the author was in the middle of.\n')
-    git('add', '--', 'year-two/drafts/thesis/.kehikot/paper/a-paper/chapter-two.tex')
-    git('commit', '-q', '-m', 'a chapter')
-    writeFileSync(chapter, 'A chapter the author is STILL in the middle of.\n')
-
+  test('Save commits what was accepted, and not a change still waiting for review in the same file', () => {
+    /* An agent edited the file directly after the suggestion was accepted. The
+       commit is of the index: the accepted fix is in it and the direct edit is
+       not, and is still in the working file, waiting. */
     const id = suggest('tpyo', 'typo')
     expect(accept(id)?.status).toBe(200)
+    writeFileSync(main, `${onDisk()}% a line an agent added with its file tools\n`)
+
+    expect(save()?.status).toBe(200)
     const inCommit = git('show', '--name-only', '--format=', 'HEAD').out.split('\n').filter((one) => one)
     expect(inCommit).toEqual(['year-two/drafts/thesis/.kehikot/paper/a-paper/main.tex'])
-    /* And the chapter is still waiting, which is what Save is for. */
-    const where = uncommitted()
-    expect(where.at).toBe('ready')
-    expect(where.files).toEqual(['year-two/drafts/thesis/.kehikot/paper/a-paper/chapter-two.tex'])
+    const committed = git('show', 'HEAD:year-two/drafts/thesis/.kehikot/paper/a-paper/main.tex').out
+    expect(committed).toContain('typo')
+    expect(committed).not.toContain('an agent added')
+    expect(onDisk()).toContain('an agent added')
+    /* Nothing accepted is left to commit, and the reply says what is waiting. */
+    const again = save()
+    expect(said(again)).toContain('still waiting for review')
   })
 
   test('an unrelated UNSTAGED change is untouched too', () => {
@@ -210,13 +211,14 @@ describe('what the commits say', () => {
   test('an accepted suggestion is authored by the person and names the proposer', () => {
     const id = suggest('tpyo', 'typo', 'A misspelling in the first claim.')
     accept(id)
+    save()
     const message = git('log', '-1', '--format=%s%n%n%b').out
-    expect(message).toContain('Accept a suggested change in main.tex')
+    expect(message).toContain('Save main.tex')
     expect(message).toContain('A misspelling in the first claim.')
     /* What the proposal actually carries. `propose_edit` takes no argument for
        who is proposing, so this module does not know which agent on the canvas
        made the suggestion, and the trailer says exactly that much. */
-    expect(message).toContain('Proposed-by: an agent')
+    expect(message).toContain('proposed by an agent')
     /* The AUTHOR is the person, taken from the repository's own identity. An
        agent wrote the words and could not put them in the file; the thing that
        changed the repository was somebody pressing Accept. */
@@ -237,6 +239,7 @@ describe('what the commits say', () => {
        an agent talking about section numbering writes one. */
     const id = suggest('tpyo', 'typo', '#2 is misspelled.')
     accept(id)
+    save()
     expect(git('log', '-1', '--format=%b').out).toContain('#2 is misspelled.')
   })
 
@@ -254,12 +257,17 @@ describe('what the commits say', () => {
     expect(many.body).toContain('chapters/two.tex')
   })
 
-  test('each accepted suggestion is its own commit', () => {
-    const first = suggest('tpyo', 'typo')
-    const second = suggest('the way a real paper is written', 'as a real paper is written')
+  test('several accepted suggestions are one Save, and its message lists every reason', () => {
+    const first = suggest('tpyo', 'typo', 'Fix the spelling.')
+    const second = suggest('the way a real paper is written', 'as a real paper is written', 'Tighten the clause.')
     accept(first)
     accept(second)
-    expect(subjects().filter((one) => one.startsWith('Accept a suggested change'))).toHaveLength(2)
+    expect(subjects()).toHaveLength(1)
+    save()
+    expect(subjects()).toHaveLength(2)
+    const body = git('log', '-1', '--format=%b').out
+    expect(body).toContain('Fix the spelling.')
+    expect(body).toContain('Tighten the clause.')
   })
 })
 
@@ -274,17 +282,25 @@ describe('nothing to commit is not an error', () => {
     expect(git('rev-parse', 'HEAD').out).toBe(before)
   })
 
-  test('a paper with a change waiting says so, and names the files', () => {
+  test('a change made in a real editor waits for review; accepting it is what makes it committable', () => {
     writeFileSync(main, `${SOURCE}% a line somebody added in their editor\n`)
+    /* Not accepted, so not staged, so there is nothing to commit yet. */
+    expect(uncommitted().at).toBe('clean')
+    const listed = answer('GET', '/api/proposals', new URLSearchParams({ epic: 'a-paper', project }), null)
+    const changes = (listed?.body as { proposals: { id: string; kind?: string }[] }).proposals
+    expect(changes.map((one) => one.kind)).toEqual(['disk'])
+    expect(accept(changes[0]!.id)?.status).toBe(200)
     const where = uncommitted()
     expect(where.at).toBe('ready')
-    expect(where.files).toEqual(['year-two/drafts/thesis/.kehikot/paper/a-paper/main.tex'])
+    expect(where.files).toEqual(['main.tex'])
   })
 
   test('a paper that has never been committed is committed, untracked and all', () => {
     /* `git commit -- <path>` alone refuses an untracked path with "no changes
        added to commit", which is why `git add` runs first — by the same
        pathspec, so it can reach nothing outside the paper. */
+    git('rm', '-r', '-q', '--cached', 'year-two/drafts/thesis/.kehikot')
+    git('commit', '-q', '-m', 'and stop tracking the paper')
     const fresh = join(paperDir, 'chapter-one.tex')
     writeFileSync(fresh, 'A new chapter nobody has committed.\n')
     expect(uncommitted().at).toBe('ready')
@@ -310,7 +326,7 @@ describe('it refuses rather than guesses, and the edit is never lost', () => {
     const reply = accept(id)
     expect(reply?.status).toBe(200)
     expect(onDisk()).toContain('typo')
-    expect(said(reply)).toContain('not on a branch')
+    expect(said(save())).toContain('not on a branch')
   })
 
   test('a merge in progress refuses', () => {
@@ -395,6 +411,7 @@ describe('it does nothing to a repository but add to it', () => {
     const before = git('rev-parse', 'HEAD').out
     const id = suggest('tpyo', 'typo')
     accept(id)
+    save()
     expect(git('rev-parse', 'HEAD~1').out).toBe(before)
     expect(subjects()).toHaveLength(2)
   })
@@ -411,6 +428,7 @@ describe('it does nothing to a repository but add to it', () => {
     try {
       const id = suggest('tpyo', 'typo')
       accept(id)
+      save()
     } finally {
       if (was === undefined) delete process.env.GIT_DIR
       else process.env.GIT_DIR = was

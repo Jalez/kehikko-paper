@@ -51,7 +51,7 @@ export function bytesOf(text: string): number {
  * would accept it is a door that can be asked to rewrite a chapter through a
  * hole meant for a typo.
  */
-export const MAX_EDIT_BYTES = 20_000
+export const MAX_EDIT_BYTES = 200_000
 
 /**
  * The smallest edit that turns `before` into `after`.

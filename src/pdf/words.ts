@@ -140,7 +140,14 @@ function find(text: string, word: string, from: number): number {
  */
 export function wholeWords(text: string, from: number, to: number): { from: number; to: number } {
   const letter = /[\p{L}\p{N}]/u
-  while (from > 0 && letter.test(text[from - 1]!)) from -= 1
-  while (to < text.length && letter.test(text[to]!)) to += 1
+  /* Only an end INSIDE a word is carried out. A stretch that ends at a space
+     — "careful " put in before "measures" — is those words, and taking the
+     next one too marks a word nobody changed. A place with nothing in it
+     (something taken out) is the word it is in. */
+  const empty = from === to
+  const startsInWord = empty || letter.test(text[from] ?? '')
+  const endsInWord = empty || letter.test(text[to - 1] ?? '')
+  if (startsInWord) while (from > 0 && letter.test(text[from - 1]!)) from -= 1
+  if (endsInWord) while (to < text.length && letter.test(text[to]!)) to += 1
   return { from, to }
 }

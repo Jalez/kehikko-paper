@@ -94,3 +94,22 @@ describe('the suggestion items in the header', () => {
     expect(got.find((i) => i.id === 'sg-edit')!.label).toBe('Stop editing suggestion')
   })
 })
+
+import { stopsOf as stopsOfVersions } from '../src/suggestions.ts'
+
+describe('versions of one passage are one stop', () => {
+  const one = (id: string, over: Record<string, unknown> = {}) =>
+    ({ id, file: 'main.tex', from: 10, to: 14, text: 'x', was_text: 'y', was: 'h', why: '', by: 'an agent', at: 1, ...over }) as never
+
+  test('they share a stop, the one in the file first, the suggestions in the order they came', () => {
+    const stops = stopsOfVersions(
+      [one('a', { alt: 'alt-a', at: 3 }), one('b', { alt: 'alt-a', kind: 'disk', at: 9 }), one('c', { alt: 'alt-a', at: 2 }), one('d', { from: 90 })],
+      ['main.tex'],
+    )
+    expect(stops.map((s) => s.key)).toEqual(['a:alt-a', 'p:d'])
+    expect(stops[0]!.versions).toBe(true)
+    expect(stops[0]!.members.map((m) => m.id)).toEqual(['b', 'c', 'a'])
+    expect(stops[0]!.lead.id).toBe('b')
+    expect(stops[1]!.versions).toBeUndefined()
+  })
+})

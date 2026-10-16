@@ -16,8 +16,10 @@ import { indexAt, type Eol } from './lib/offsets.ts'
  */
 
 export interface Stop {
-  /** `p:<id>` for a lone suggestion, `g:<group>` for a group. */
+  /** `p:<id>` for a lone suggestion, `g:<group>` for a group, `a:<alt>` for versions of one passage. */
   key: string
+  /** Versions of one passage, of which ONE is answered (the others go with it), rather than parts of one change. */
+  versions?: boolean
   ids: string[]
   file: string
   /** The member that leads: the one earliest in the file. */
@@ -25,7 +27,7 @@ export interface Stop {
   members: Proposal[]
 }
 
-export const stopKeyOf = (p: Pick<Proposal, 'id' | 'group'>): string => (p.group ? `g:${p.group}` : `p:${p.id}`)
+export const stopKeyOf = (p: Pick<Proposal, 'id' | 'group' | 'alt'>): string => (p.alt ? `a:${p.alt}` : p.group ? `g:${p.group}` : `p:${p.id}`)
 
 /**
  * The stops in reading order: the files as the Go menu lists them (which is
@@ -42,8 +44,12 @@ export function stopsOf(proposals: readonly Proposal[], listed: readonly string[
   }
   const stops: Stop[] = []
   for (const [key, members] of by) {
-    const sorted = [...members].sort((a, b) => a.from - b.from)
-    stops.push({ key, ids: sorted.map((m) => m.id), file: sorted[0]!.file, lead: sorted[0]!, members: sorted })
+    const versions = key.startsWith('a:')
+    /* Versions: what is in the file now first, then the suggestions in the order they came. Parts of a change: in the file. */
+    const sorted = versions
+      ? [...members].sort((a, b) => Number(b.kind === 'disk') - Number(a.kind === 'disk') || a.at - b.at)
+      : [...members].sort((a, b) => a.from - b.from)
+    stops.push({ key, ...(versions ? { versions } : {}), ids: sorted.map((m) => m.id), file: sorted[0]!.file, lead: sorted[0]!, members: sorted })
   }
   return stops.sort(
     (a, b) => listed.indexOf(a.file) - listed.indexOf(b.file) || a.lead.from - b.lead.from || a.lead.at - b.lead.at,
@@ -81,7 +87,10 @@ export function placement(
   const nt = indexAt(text, p.to, eol)
   const flat = (s: string) => s.replace(/\r\n/g, '\n')
   if (text.slice(nf, nt) !== flat(p.was_text)) return null
-  if (p.asked) {
+  /* A suggestion whose quote changed is drawn where it was found, as a mark and
+     a tag only: nothing is offered to put in its place. */
+  if (p.held) return { from: nf, to: nt, replacement: '', quoted: false }
+  if (p.asked && (p.kind ?? 'staged') === 'staged') {
     const find = flat(p.asked.find)
     /* The quoted passage that CONTAINS the changed range; the nearest one, so a
        repeated sentence cannot be taken for another place. */

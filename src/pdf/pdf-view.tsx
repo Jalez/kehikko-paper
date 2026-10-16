@@ -552,6 +552,35 @@ export function PdfView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scale > 0])
 
+  /* Zoomed, or the pane made wider: the same place stays at the top. Without
+     this the scroll stayed where it was in PIXELS, and a mark the page had
+     been turned to was two dozen pages away after one press of the zoom. In
+     a plain stack the place is a page and a point down it; under a focus,
+     where labels sit between the sheets, the point down the whole column. */
+  const lastScale = useRef(0)
+  useLayoutEffect(() => {
+    const was = lastScale.current
+    lastScale.current = scale
+    const node = scroller.current
+    if (!node || was <= 0 || scale <= 0 || was === scale || moved.current) return
+    if (pages !== null) {
+      node.scrollTop = node.scrollTop * (scale / was)
+      return
+    }
+    let top = PAD
+    let next = PAD
+    for (let n = 1; n <= sizes.length; n += 1) {
+      const old = sizes[n - 1]!.h * was + GAP
+      if (node.scrollTop < top + old || n === sizes.length) {
+        node.scrollTop = next + Math.max(0, node.scrollTop - top) * (scale / was)
+        return
+      }
+      top += old
+      next += sizes[n - 1]!.h * scale + GAP
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale])
+
   /* A PDF of another kind was swapped in: put it where that one was left. */
   useLayoutEffect(() => {
     if (!moved.current || scale <= 0) return

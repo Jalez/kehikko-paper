@@ -38,6 +38,16 @@ export interface HeaderState {
   listed: readonly string[]
   jumps: readonly FileJumps[]
   auto: boolean
+  /** Go to the next change after answering one. */
+  jump?: boolean
+  /** What the changes are compared with, in words: shown as a status line in the Suggestions group. */
+  baseline?: string | null
+  /** Changes found in the files or suggested that are held back as out of date (cancel only). */
+  stale?: number
+  /** Whole files deleted since the baseline, waiting to be accepted or restored. */
+  deleted?: number
+  /** Changes accepted lately that can still be cancelled: how many came from Auto accept, the newest one's file. */
+  recent?: { count: number; auto: number; last: string | null; options: readonly { n: number; label: string }[] }
   /** The last run's log: whether there is one, whether it is open, and how many warnings it has. */
   log: { open: boolean; warnings: number } | null
   /** Which part the open file is the chapter of, when that can be set. */
@@ -53,13 +63,13 @@ export interface HeaderState {
   /** Whether there is a compiled PDF to show a line in. */
   pdf: boolean
   /** Null when the paper is in no repository; `why` is the sentence for why it cannot be committed just now, or null. */
-  commit: { why: string | null } | null
+  commit: { why: string | null; waiting?: number } | null
   /**
    * The suggestions as the person walks them. `stops` is how many there are to
    * walk (a group is one), `position` is "2 of 5" for the current one, null
    * when none is current; `editing` while the author's own text is being typed.
    */
-  suggest?: { stops: number; position: string | null; editing: boolean; busy: boolean }
+  suggest?: { stops: number; position: string | null; editing: boolean; busy: boolean; noMore?: boolean }
 }
 
 /** The heading the suggestion items stand under in the Run menu. */
@@ -184,7 +194,14 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
   }
 
   /* Person-only, like the tick it was: it says nothing about agents, so none can set it. */
-  items.push({ kind: 'toggle', id: 'auto', label: 'Accept suggestions as they arrive', checked: state.auto })
+  items.push({ kind: 'toggle', id: 'auto', label: 'Auto accept changes', checked: state.auto })
+  /* Nothing to do while changes are taken in as they arrive: said in the label, and a press is answered with the reason. */
+  items.push({
+    kind: 'toggle',
+    id: 'jump',
+    label: state.auto ? 'Jump to next change · idle, Auto accept is on' : 'Jump to next change',
+    checked: state.jump !== false,
+  })
   if (state.log) {
     const n = state.log.warnings
     items.push({ kind: 'toggle', id: 'log', label: n ? `Compile log · ${n} warning${n === 1 ? '' : 's'}` : 'Compile log', checked: state.log.open })
@@ -219,7 +236,8 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
     items.push({
       kind: 'run',
       id: 'commit',
-      label: 'Commit',
+      /* What the host asks before it commits says nothing of what is left out, so the label does. */
+      label: state.commit.waiting ? cut(`Commit · ${state.commit.waiting} still to review, not included`) : 'Commit',
       icon: 'git-commit-horizontal',
       confirm: true,
       disabled: state.commit.why === null ? null : cut(state.commit.why, LIMITS.REASON),
@@ -234,6 +252,7 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
         kind: 'run',
         id,
         label: cut(q.position ? `${label} · ${q.position}` : q.stops ? `${label} · ${q.stops} waiting` : label),
+        ...(id === 'sg-next' && q.noMore ? { result: 'No more changes' } : {}),
         icon,
         shortcut,
         group: SUGGESTIONS,
@@ -270,6 +289,68 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
         group: SUGGESTIONS,
         confirm: true,
         disabled: q.busy ? 'Another suggestion is being answered.' : null,
+      })
+    }
+  }
+  if (state.baseline) {
+    items.push({
+      kind: 'run',
+      id: 'sg-baseline',
+      label: cut(state.baseline.startsWith('compared') ? `Changes ${state.baseline}` : state.baseline),
+      group: SUGGESTIONS,
+      disabled: cut(state.baseline, LIMITS.REASON),
+    })
+  }
+  if (state.stale) {
+    items.push({
+      kind: 'run',
+      id: 'sg-stale',
+      label: cut(`${state.stale} out of date · cancel ${state.stale === 1 ? 'it' : 'them'}`),
+      group: SUGGESTIONS,
+      confirm: true,
+      disabled: state.suggest?.busy ? 'Another change is being answered.' : null,
+    })
+  }
+  if (state.deleted) {
+    items.push(
+      {
+        kind: 'run',
+        id: 'sg-deleted-accept',
+        label: cut(`Accept ${state.deleted} deleted file${state.deleted === 1 ? '' : 's'}`),
+        group: SUGGESTIONS,
+        confirm: true,
+        disabled: state.suggest?.busy ? 'Another change is being answered.' : null,
+      },
+      {
+        kind: 'run',
+        id: 'sg-deleted-restore',
+        label: cut(`Restore ${state.deleted} deleted file${state.deleted === 1 ? '' : 's'}`),
+        group: SUGGESTIONS,
+        confirm: true,
+        disabled: state.suggest?.busy ? 'Another change is being answered.' : null,
+      },
+    )
+  }
+  if (state.recent && state.recent.count) {
+    items.push({
+      kind: 'run',
+      id: 'ac-undo',
+      label: cut(
+        state.recent.auto
+          ? `${state.recent.auto} accepted automatically · cancel the last`
+          : `Cancel the last accepted change${state.recent.last ? ` · ${state.recent.last}` : ''}`,
+      ),
+      icon: 'undo',
+      group: SUGGESTIONS,
+      confirm: true,
+    })
+    if (state.recent.options.length && state.recent.options.length <= LIMITS.HEADER_OPTIONS) {
+      items.push({
+        kind: 'go',
+        id: 'accepted',
+        label: cut(`Accepted changes · ${state.recent.count}`),
+        group: SUGGESTIONS,
+        options: state.recent.options.map((one) => ({ id: `a${one.n}`, label: cut(one.label) })),
       })
     }
   }

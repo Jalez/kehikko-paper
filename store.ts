@@ -796,7 +796,7 @@ export interface Pull {
  * computed two ways is not a check — it is a check that passes until somebody
  * changes one of the two.
  */
-function hashOf(bytes: Uint8Array): string {
+export function hashOf(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
