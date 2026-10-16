@@ -478,6 +478,8 @@ export interface Changed {
   file: string
   from: number
   to: number
+  /** Every stretch that changed, the first included, in order: each is marked where it is printed, and nothing between them. */
+  parts?: { from: number; to: number }[]
   n: number
 }
 
@@ -494,7 +496,14 @@ export interface Changed {
  */
 export function changedBy(file: string, old: string, next: string, was: Changed | null): Changed | null {
   if (old === next) return was
-  const first = hunksOf(old, next)[0]
+  const all = hunksOf(old, next)
+  const first = all[0]
   if (!first) return was
-  return { file, from: first.newFrom, to: first.newTo, n: (was?.n ?? 0) + 1 }
+  return {
+    file,
+    from: first.newFrom,
+    to: first.newTo,
+    ...(all.length > 1 ? { parts: all.map((one) => ({ from: one.newFrom, to: one.newTo })) } : {}),
+    n: (was?.n ?? 0) + 1,
+  }
 }

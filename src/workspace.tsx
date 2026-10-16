@@ -372,12 +372,27 @@ export function Workspace({
        the whole paper when it has to (above). Lifting the pick comes through
        here, and the paper — stale by then, if anything was typed — is made. */
     if (!build || !build.engine || compiling || pickedKey !== null) return
-    const stamp = `${paper.epic}\0${Object.entries(paper.hashes).sort().join('|')}`
+    /* The files as they are NOW (the poll's), not as this page last read the
+       paper: a file somebody else wrote that this page holds no editor for —
+       one a chapter `\input`s — moves only those, and nothing else would
+       compile it. */
+    const now = wire.disk ?? paper.hashes
+    const stamp = `${paper.epic}\0${Object.entries(now).sort().join('|')}`
     if (tried.current === stamp) return
-    const fresh = build.pdf !== null && sameHashes(build.pdf.hashes, paper.hashes)
-    tried.current = stamp
-    if (!fresh) void compile()
-  }, [build, compiling, compile, paper.epic, paper.hashes, pickedKey])
+    const fresh = build.pdf !== null && sameHashes(build.pdf.hashes, now)
+    if (fresh) {
+      tried.current = stamp
+      return
+    }
+    /* A moment's grace: a save of this page's own, or text taken from the
+       disk, asks for its compile itself, and that one being under way is
+       seen here before this one is sent as well. */
+    const timer = setTimeout(() => {
+      tried.current = stamp
+      void compile()
+    }, tried.current === '' ? 0 : 400)
+    return () => clearTimeout(timer)
+  }, [build, compiling, compile, paper.epic, paper.hashes, wire.disk, pickedKey])
 
   const [tab, setTab] = useState<'source' | 'pdf'>('source')
   const tabRef = useRef(tab)
@@ -420,9 +435,16 @@ export function Workspace({
    *
    * Unlike a passage somebody pointed at, it does not turn the PDF to itself:
    * nobody here asked, and the person may be reading another page. `reveal`
-   * is the exception — a change that landed because they pressed Accept.
+   * is the exception — a change that landed because they pressed Accept, or
+   * one they walked or pressed to.
+   *
+   * `parts` are the pieces of the change itself, when it is more than one: a
+   * group of edits, the hunks one write made. Each is marked on the PDF where
+   * ITS words are printed, and nothing between them is — `from`/`to` is the
+   * first piece, which the editor is taken to. A piece that prints nothing (a
+   * comment, a blank line) is not marked at all rather than marked beside.
    */
-  const [noted, setNoted] = useState<{ file: string; from: number; to: number; proposal?: string; reveal?: boolean } | null>(null)
+  const [noted, setNoted] = useState<Noted | null>(null)
   const notedRef = useRef(noted)
   notedRef.current = noted
   const foreign = theirs ?? noted
@@ -728,7 +750,12 @@ export function Workspace({
   const buildId = onPart ? partDrawn.pdf.id : (build?.pdf?.id ?? null)
   const screen = useRef<DrawnPart | null>(null)
   screen.current = onPart ? partDrawn : null
-  const wholeStale = build?.pdf ? !sameHashes(build.pdf.hashes, paper.hashes) : false
+  /* What the files hash to now. `paper.hashes` is what they were when this
+     page last read the paper or saved: a file somebody else wrote since — an
+     agent, another editor — moves the poll's hashes and not those, and a PDF
+     compiled from the new text was said to be "of an earlier save" for good. */
+  const onDisk = wire.disk ?? paper.hashes
+  const wholeStale = build?.pdf ? !sameHashes(build.pdf.hashes, onDisk) : false
 
   recompile.current = () => {
     if (pickedKey === null) void compile()
@@ -750,8 +777,15 @@ export function Workspace({
      not a place in the other, and is not shown for the moment it takes to ask
      again. */
   const [hint, setHint] = useState<Hint>(NO_HINT)
-  const foreignKey = foreign ? `${foreign.file}\0${foreign.from}\0${foreign.to}` : ''
-  const foreignRects = hint.of === foreignKey && hint.build === buildId ? hint.rects : NO_HINT.rects
+  /* The pieces asked about and marked: those of a change (`noted.parts`), else the one passage. */
+  const pieces = useMemo(
+    () => (foreign ? ('parts' in foreign && foreign.parts?.length ? foreign.parts : [{ from: foreign.from, to: foreign.to }]) : NO_PIECES),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [foreign?.file, foreign?.from, foreign?.to, foreign && 'parts' in foreign ? JSON.stringify(foreign.parts ?? null) : ''],
+  )
+  const foreignKey = foreign ? `${foreign.file}\0${pieces.map((one) => `${one.from}-${one.to}`).join(',')}` : ''
+  const foreignEach = hint.of === foreignKey && hint.build === buildId ? hint.rects : NO_HINT.rects
+  const foreignRects = useMemo(() => foreignEach.flat(), [foreignEach])
   const foreignDoc = foreign ? source.docs.get(foreign.file) : undefined
   const foreignText = foreignDoc?.text
 
@@ -1089,18 +1123,26 @@ export function Workspace({
       return
     }
     let stopped = false
-    const first = lineAt(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol))
-    const last = lineAt(foreignText, Math.max(indexAt(foreignText, foreign.to, foreignDoc.eol) - 1, 0))
+    const lines = pieces.slice(0, MAX_PIECES).map((one) => {
+      const first = lineAt(foreignText, indexAt(foreignText, one.from, foreignDoc.eol))
+      const last = lineAt(foreignText, Math.max(indexAt(foreignText, one.to, foreignDoc.eol) - 1, 0))
+      return [first, Math.max(first, last)] as const
+    })
+    /* A passage somebody pointed at is shown near where SyncTeX has a record
+       when its own lines have none. A change is not: one that prints nothing
+       (a comment) is not on the page, and a box round the heading below it is
+       a confident highlight of text nobody touched. */
+    const nearest = theirs !== null
     /* The disk first (`fresh`): a byte range somebody else chose is of the
        file as it is NOW, and the poll may not have told this page yet that it
        moved. If it did, the text has just been taken, this effect runs again
        behind, and nothing was asked of a table that is not this text's. */
     void fresh(foreign.file)
-      .then((same) => (same && !stopped ? ask(foreign.file, first, Math.max(first, last), true) : null))
-      .then((rects) => {
-        if (stopped || !rects) return
-        setHint({ of: foreignKey, build: buildId, rects })
-        if (rects.length && turns) {
+      .then((same) => (same && !stopped ? Promise.all(lines.map(([first, last]) => ask(foreign.file, first, last, nearest))) : null))
+      .then((each) => {
+        if (stopped || !each) return
+        setHint({ of: foreignKey, build: buildId, rects: each })
+        if (each.some((rects) => rects.length) && turns) {
           turnedFor.current = foreignKey
           turnTo()
         }
@@ -1110,30 +1152,39 @@ export function Workspace({
       stopped = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildId, foreign?.file, foreign?.from, foreign?.to, foreignText === undefined, ask, fresh, behind, turns, turnTo])
+  }, [buildId, foreign?.file, foreignKey, foreignText === undefined, ask, fresh, behind, turns, turnTo])
 
   const marks = useMemo<PdfMark[]>(() => {
     const out: PdfMark[] = []
     /* The foreign mark first: `reveal` scrolls to the first mark, and what
        somebody pointed at outranks where the caret happens to be. */
     if (foreign && (foreignRects.length || (behind && theirs !== null))) {
-      const whole = foreignText !== undefined && foreignDoc
-        ? wholeWords(foreignText, indexAt(foreignText, foreign.from, foreignDoc.eol), indexAt(foreignText, foreign.to, foreignDoc.eol))
-        : null
-      const source = whole && foreignText !== undefined ? { text: foreignText, ...whole } : null
-      /* With no rectangles — the PDF is not of this text, so its table was
-         not asked — a mark is its words alone: `find.ts` draws them where
-         they are printed once, and draws nothing otherwise. Without words to
-         look for there is then no mark to make. */
-      if (foreignRects.length || source) out.push({ rects: foreignRects, source, foreign: true })
+      /* One mark per piece, each looked for where SyncTeX put ITS lines. */
+      pieces.slice(0, MAX_PIECES).forEach((one, i) => {
+        const rects = foreignEach[i] ?? NO_RECTS.rects
+        /* A piece of a change the table has nothing for prints nothing: no mark. */
+        if (!rects.length && !(behind && theirs !== null)) return
+        const whole = foreignText !== undefined && foreignDoc
+          ? wholeWords(foreignText, indexAt(foreignText, one.from, foreignDoc.eol), indexAt(foreignText, one.to, foreignDoc.eol))
+          : null
+        const source = whole && foreignText !== undefined ? { text: foreignText, ...whole } : null
+        /* With no rectangles — the PDF is not of this text, so its table was
+           not asked — a mark is its words alone: `find.ts` draws them where
+           they are printed once, and draws nothing otherwise. Without words to
+           look for there is then no mark to make. */
+        if (rects.length || source) out.push({ rects, source, foreign: true })
+      })
     }
-    /* With only a caret, the passage is the line it is on: what that line prints is what is marked. */
-    if (ownRects.length) {
+    /* With only a caret, the passage is the line it is on: what that line prints is what is marked.
+       Not while a change is shown: the caret was put there by going to it,
+       and the whole line round the changed words is a second, wider mark of
+       the same place. */
+    if (ownRects.length && !(noted && !theirs && !selecting)) {
       const start = startOfLine(text, fromLine)
       out.push({ rects: ownRects, source: selecting ? { text, from, to } : { text, from: start, to: start + textOfLine(text, fromLine).length } })
     }
     return out
-  }, [foreign, foreignRects, foreignText, foreignDoc, behind, theirs, ownRects, selecting, text, from, to, fromLine])
+  }, [foreign, pieces, foreignEach, foreignRects, foreignText, foreignDoc, behind, theirs, noted, ownRects, selecting, text, from, to, fromLine])
 
   /* The pages drawn under a focus: the rule again, over the sheets of the PDF
      on screen — each about the files that printed on it — keeping any a mark
@@ -1225,7 +1276,7 @@ export function Workspace({
   const [showLog, setShowLog] = useState(false)
 
   /* Of the PDF on screen. A part's own is of its own files and `main.tex`: another chapter edited since is not in it to be behind. */
-  const stale = onPart ? [MAIN_FILE, ...partDrawn.covered].some((one) => partDrawn.pdf.hashes[one] !== paper.hashes[one]) : wholeStale
+  const stale = onPart ? [MAIN_FILE, ...partDrawn.covered].some((one) => partDrawn.pdf.hashes[one] !== onDisk[one]) : wholeStale
   const pdfUrl = build?.pdf ? apiUrl('/api/pdf', { epic: paper.epic, build: build.pdf.id }) : null
   const partUrl = partDrawn ? apiUrl('/api/pdf', { epic: paper.epic, part: partDrawn.key, build: partDrawn.pdf.id }) : null
   /* A pick that cannot be compiled on its own draws no page — `cannot` is said instead — until a mark calls the whole paper. */
@@ -1312,7 +1363,7 @@ export function Workspace({
    * a suggestion's file name is how its place on the page is asked for.
    */
   const attend = useCallback(
-    (at: { file: string; from: number; to: number; proposal?: string; reveal?: boolean }, words: string) => {
+    (at: Noted, words: string) => {
       setNoted(at)
       const typing = editorBox.current !== null && editorBox.current.contains(document.activeElement)
       if (typing) {
@@ -1370,7 +1421,13 @@ export function Workspace({
     const reveal = accepted.current
     accepted.current = false
     attend(
-      { file: landedChange.file, from: byteAt(held.text, landedChange.from, held.eol), to: byteAt(held.text, landedChange.to, held.eol), reveal },
+      {
+        file: landedChange.file,
+        from: byteAt(held.text, landedChange.from, held.eol),
+        to: byteAt(held.text, landedChange.to, held.eol),
+        parts: landedChange.parts?.map((one) => ({ from: byteAt(held.text, one.from, held.eol), to: byteAt(held.text, one.to, held.eol) })),
+        reveal,
+      },
       `${landedChange.file} changed on disk. What changed is marked.`,
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1564,15 +1621,13 @@ export function Workspace({
       go({ file: stop.file, bytes: { from: stop.lead.from, to: stop.lead.to }, focus: true })
       setTab('source')
       if (armSoon.current) clearTimeout(armSoon.current)
-      /* The PDF is marked at the change itself, the first member's words to the
-         last member's — not at the caret's line. The caret landing on it is the
-         page going there, which would take that mark down: for a moment that
-         is not the person wandering off. */
-      const ends = (stop.members ?? [stop.lead]).filter((m) => m.file === stop.file)
-      if (ends.some((m) => m.to > m.from)) {
-        walkedUntil.current = Date.now() + 5000
-        setNoted({ file: stop.file, from: Math.min(...ends.map((m) => m.from)), to: Math.max(...ends.map((m) => m.to)), proposal: stop.lead.id })
-      }
+      /* The PDF is marked at the change itself — each member's own words, and
+         not the text between them — and turned to it: the person asked to be
+         taken there. The caret landing on it is the page going there, which
+         would take that mark down: for a moment that is not the person
+         wandering off. */
+      walkedUntil.current = Date.now() + 5000
+      setNoted(notedOf(stop, true))
       /* For a run begun with the pointer the tag is armed once the editor has taken the focus: the editor being left blurs, and a blur ends arming. */
       if (options.arm) {
         armSoon.current = setTimeout(() => {
@@ -1750,6 +1805,12 @@ export function Workspace({
     const key = stopKeyOf(one)
     setNavigated(key)
     setArmed(key)
+    /* The change the person pressed is the one the PDF shows, and is turned to. */
+    const stop = stopsNow.current.find((s) => s.key === key)
+    if (stop) {
+      walkedUntil.current = Date.now() + 1500
+      setNoted(notedOf(stop, true))
+    }
   }, [])
   const disarm = useCallback(() => setArmed(null), [])
   const stopEditing = useCallback(() => {
@@ -2328,10 +2389,35 @@ export function placeShown(
 interface Hint {
   of: string
   build: string | null
-  rects: PageRect[]
+  /** Per piece of the passage (`pieces`), in order. */
+  rects: PageRect[][]
 }
 /** No rectangles, of no passage. One object, so a mark with none is the same mark again. */
 const NO_HINT: Hint = { of: '', build: null, rects: [] }
+/** A change this page draws attention to — see `noted`. Bytes of `file`. */
+interface Noted {
+  file: string
+  from: number
+  to: number
+  parts?: readonly { from: number; to: number }[]
+  proposal?: string
+  reveal?: boolean
+}
+const NO_PIECES: readonly { from: number; to: number }[] = []
+/**
+ * A stop of the walk as a change to mark: its members in its file, in order,
+ * each its own piece; the editor goes to the first. A member that only takes
+ * text out is still a place (`from === to`).
+ */
+function notedOf(stop: { file: string; lead: Proposal; members?: readonly Proposal[]; versions?: boolean }, reveal: boolean): Noted {
+  /* Of several versions of one passage, the one shown is the change. */
+  const members = (stop.versions || !stop.members ? [stop.lead] : stop.members).filter((m) => m.file === stop.file)
+  const parts = [...members].sort((a, b) => a.from - b.from).map((m) => ({ from: m.from, to: m.to }))
+  const lead = parts[0] ?? { from: stop.lead.from, to: stop.lead.to }
+  return { file: stop.file, from: lead.from, to: lead.to, ...(parts.length > 1 ? { parts } : {}), proposal: stop.lead.id, reveal }
+}
+/** How many pieces of one change are looked for on the PDF: a burst of a hundred edits is marked at its first few dozen. */
+const MAX_PIECES = 24
 
 function sameHashes(a: Record<string, string>, b: Record<string, string>): boolean {
   const keys = Object.keys(a)
