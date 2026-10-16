@@ -1947,6 +1947,8 @@ export function Workspace({
           state: 'attention',
           since: at(`review:${paper.epic}:${name}`.slice(0, 128), 'attention'),
           label: `${n} change${n === 1 ? '' : 's'} to review in ${name}`.slice(0, 120),
+          /* Waiting for an answer, and nothing is blocked by it: the protocol's ordinary pressing. */
+          priority: 'normal',
           place: place(name),
           ...(wire.facts.baseline ? { detail: wire.facts.baseline.says.slice(0, 200) } : {}),
         })
@@ -1959,6 +1961,8 @@ export function Workspace({
         state: 'attention',
         since: at(`compile:${paper.epic}`, 'attention'),
         label: `Compile failed${first.file ? ` in ${first.file}${first.line ? `:${first.line}` : ''}` : ''}: ${first.message}`.slice(0, 120),
+        /* Broken: no PDF of this text until it is fixed. */
+        priority: 'urgent',
         place: place(first.file ?? MAIN_FILE),
         detail: first.message.slice(0, 200),
       })

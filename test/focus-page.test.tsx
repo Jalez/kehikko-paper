@@ -904,7 +904,7 @@ describe('the header the host draws', () => {
 describe('the host’s Inbox: what is waiting for the person', () => {
   const change = (id: string, file: string) => ({ id, file, from: 1, to: 3, text: 'old', was_text: 'new', was: 'h', why: '', by: 'changed on disk', at: 1, kind: 'disk' })
   const activity = () => {
-    const sent = (asks as { method?: string; params?: { items?: { id: string; state: string; label: string; place?: { epic?: string; parts?: string[] } }[] } }[]).filter((one) => one.method === 'activity.set')
+    const sent = (asks as { method?: string; params?: { items?: { id: string; state: string; label: string; priority?: string; place?: { epic?: string; parts?: string[] } }[] } }[]).filter((one) => one.method === 'activity.set')
     return sent.at(-1)?.params?.items ?? null
   }
 
@@ -915,6 +915,8 @@ describe('the host’s Inbox: what is waiting for the person', () => {
     const items = activity()!
     expect(items.map((i) => i.label).sort()).toEqual(['1 change to review in chapters/design.tex', '2 changes to review in main.tex'])
     expect(items.every((i) => i.state === 'attention')).toBe(true)
+    /* Waiting for an answer (protocol 1.7.0's ordinary priority); a failed compile is the urgent one. */
+    expect(items.every((i) => i.priority === 'normal')).toBe(true)
     expect(new Set(items.map((i) => i.id)).size).toBe(2)
     expect(items.every((i) => i.place?.epic === EPIC)).toBe(true)
   })
