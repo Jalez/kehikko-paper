@@ -1325,21 +1325,6 @@ export function answer(
   body: Record<string, unknown> | null,
   ticket: string | null = null,
 ): Reply | null {
-  if (!process.env.PAPER_TIMING) return answerOf(method, path, query, body, ticket)
-  const at = performance.now()
-  const reply = answerOf(method, path, query, body, ticket)
-  const took = performance.now() - at
-  if (took > 150) console.log(`SLOW ${method} ${path} ${Math.round(took)}ms`)
-  return reply
-}
-
-function answerOf(
-  method: string,
-  path: string,
-  query: URLSearchParams,
-  body: Record<string, unknown> | null,
-  ticket: string | null = null,
-): Reply | null {
   if (path === '/healthz') return ok({ ok: true, id: ID, version: VERSION })
 
   if (path === '/mcp') {
@@ -1600,21 +1585,17 @@ function answerOf(
    * following the door it was given cannot change a paper behind the back of
    * the person reading it.
    *
-   * ## Auto-approve is not a setting here, and that is deliberate
+   * ## Auto accept is the person's, and it is held where a person set it
    *
-   * A reader may tick "apply straight away" beside the Edit checkbox. That tick
-   * lives in the page, and when it is on the page answers a new suggestion by
-   * calling THIS door immediately — with the ticket, exactly as it would if a
-   * finger had pressed Accept. There is no server-side flag for it and no
-   * argument on this door meaning "the reader said yes in advance".
-   *
-   * The reason is that a setting the server held would be a setting the server
-   * could be talked into. Anything that can post here could post the flag, and
-   * a caller that can post the flag has approved its own change on the reader's
-   * behalf. Kept in the page, the only thing that can auto-approve is the page
-   * a person is looking at, and the strongest statement available about
-   * approval stays true: nothing is written that the ticket-holder did not ask
-   * for.
+   * "Auto accept changes" (View menu) is remembered per project and epic on this
+   * machine, and it is changed by `POST /api/review`, which demands the same
+   * ticket as every write here. No MCP tool reaches it: a setting an agent could
+   * flip would be an agent approving its own change. What it does is deliberately
+   * small. A change found in the files is taken in by moving the baseline
+   * forward (in git, staging it); nothing is written to the paper. An agent's
+   * staged suggestion is accepted by the PAGE, pressing Accept as a finger
+   * would, so the one path that writes the paper from a suggestion is still this
+   * door and still carries the ticket.
    *
    * ## Accepting is the ordinary write path, not a second one
    *

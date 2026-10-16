@@ -63,7 +63,7 @@ export interface HeaderState {
   /** Whether there is a compiled PDF to show a line in. */
   pdf: boolean
   /** Null when the paper is in no repository; `why` is the sentence for why it cannot be committed just now, or null. */
-  commit: { why: string | null } | null
+  commit: { why: string | null; waiting?: number } | null
   /**
    * The suggestions as the person walks them. `stops` is how many there are to
    * walk (a group is one), `position` is "2 of 5" for the current one, null
@@ -236,7 +236,8 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
     items.push({
       kind: 'run',
       id: 'commit',
-      label: 'Commit',
+      /* What the host asks before it commits says nothing of what is left out, so the label does. */
+      label: state.commit.waiting ? cut(`Commit · ${state.commit.waiting} still to review, not included`) : 'Commit',
       icon: 'git-commit-horizontal',
       confirm: true,
       disabled: state.commit.why === null ? null : cut(state.commit.why, LIMITS.REASON),

@@ -1817,6 +1817,7 @@ export function Workspace({
       wire.saving.at === 'nogit'
         ? null
         : {
+            waiting: wire.facts.baseline?.mode === 'git' ? walkable.length + deletedFiles.length : 0,
             why: busy
               ? 'Something is being saved or decided just now.'
               : wire.saving.at === 'ready'

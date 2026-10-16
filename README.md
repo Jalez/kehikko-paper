@@ -685,44 +685,177 @@ PASSAGE's page and section rather than the caret's. That, and the sentence
 saying something pointed here, last until the person goes somewhere of their
 own accord: places the caret, picks a file or a section, presses the PDF.
 
+## Changes waiting for review
+
+**Review is triggered by the state of the files**, not by a call. Whatever
+changes a `.tex` Paper shows — an agent's file tools, another editor,
+`git checkout`, a formatter — is a change to review, drawn in the source where
+it sits with the same tag a suggestion has. An agent's `propose_edit` is the
+explained route (the filer has to say why, and the file is untouched until the
+author accepts), not the only one.
+
+One computation (`review.ts`) from three inputs, for every file Paper shows:
+
+- the **baseline**: what the author last saw or accepted;
+- the **disk**: what the file holds now;
+- the **staged** suggestions: edits proposed and not applied (`proposals.ts`).
+
+A hunk where the disk differs from the baseline is a change, labelled
+*changed on disk* and the time. A staged suggestion is one too (its text is not
+in the file yet). Both render with the one tag: the marked passage, *Show new* /
+*Show old*, *Accept change* / *Cancel change*, armed Enter / Esc, Next / Previous
+across files, and the count.
+
+### What the baseline is
+
+- **In a git work tree where the paper is tracked** (`main.tex` is in the index
+  or in HEAD): the baseline of a file is its content in the git **index**, or
+  in **HEAD** when the index has none. *Accept change* stages it (a blob written
+  with `git hash-object -w`, pointed at with `git update-index --cacheinfo`, no
+  patch machinery); *Cancel change* writes the baseline's text back into the
+  file. A file unmodified against HEAD has no hunks. Untracked: one change,
+  *new file* (Accept is `git add` of that file; Cancel deletes it, only after a
+  second, explicit press). Tracked and now missing: one change, *deleted*
+  (Accept stages the deletion, Cancel restores it from the index). A branch
+  switch, `git checkout`, `stash` or pull just change HEAD, the index and the
+  working tree, and the view follows by recomputing. While git is in the middle
+  of a merge, rebase, cherry-pick, revert or bisect Paper stages and restores
+  nothing: changes are shown, answering them is refused with *Git is in the
+  middle of a merge — finish it to review here*, and a file with conflict
+  markers is left out of the comparison. It recovers when the operation ends.
+- **Everywhere else** (no repository, git missing, the paper untracked or its
+  folder ignored): a **snapshot kept on this machine**, never in the project —
+  the first time a file is seen its current text is its baseline, so nothing is
+  ever flagged wholesale. Accepting moves the snapshot forward.
+
+The status line in the Run menu says which is in use: *compared with what is
+staged or committed in git* or *compared with what you last accepted in Paper*.
+Line endings are compared as git would check them out (a CRLF working file is
+not flagged against an LF blob); `.gitattributes` filters are not applied.
+
+### The author's own typing is not a change to review
+
+A save from Paper's editor moves the baseline by the **author's edit
+operations only** (`ownSave` in `latex/hunks.ts`): the lines the author changed
+are carried into the baseline (in git: staged), and a change somebody else made
+in the same file is never staged or accepted by it. An author's edit that
+touches a foreign change leaves the baseline alone there, so the change stays
+reviewable (now including what was typed in it) and is marked *adjusted*. If two
+writers change one file from the same starting point, changes to different
+lines are both kept (`latex/merge.ts`: the typed text stays and the disk's text
+is added); changes that touch are a conflict a person chooses in, as before.
+
+### Hunks, groups, ids
+
+A hunk is a changed stretch tightened to the words that differ (a changed word
+in a thousand-character line is that word). Hunks in one paragraph, and hunks
+first seen within three seconds of one another (one agent edit is not forty
+tags), are one stop: accepted or cancelled together. A hunk's id is made from the
+**baseline** side (the file, the words before it, the words it replaced), so it
+is the same across re-reads and while the author edits its new text in place;
+that is what a reason is keyed by. There is no cap on the number of changes. A
+huge rewrite degrades to one whole block that still has Accept and Cancel.
+
+### Reasons, and editing in place
+
+Every change has a *why*: the agent's for a suggestion, empty for a change in
+the file. On the tag the author is on (current, armed, or showing the other
+reading) it is a growing single-line field, placeholder **Why?**, saved with the
+change in the machine store (keyed by the hunk's stable id; it survives reload
+and re-diff). A suggestion's proposed text is a live field in place once shown
+(*Show new*): typing changes what Accept applies (the tag says *adjusted*). The
+new text of a change in the file is simply the file's text: edit it where it
+stands; the baseline stays, so it remains a change until accepted. The header's
+*Edit* only puts the caret in the field. `explain_change` lets the agent that
+edited directly explain it afterwards.
+
+### Auto accept changes, and Jump to next change
+
+Two checkboxes in the **View** menu, both person-only and remembered per
+project and epic on this machine. **Auto accept changes** (default off): changes
+found in the files after it was turned on are taken in as they arrive (the
+baseline moves; nothing is written to the paper) and an agent's staged
+suggestions are accepted as they arrive; what was already waiting is left for a
+person. They stay listed (*N accepted automatically · cancel the last*, and an
+*Accepted changes* list in Run); the 40 most recent are kept on the machine
+(old text, new text, why, time) and the last can be cancelled, which restores the
+old words in the file and in the baseline. **Jump to next change** (default
+on): after the person accepts or cancels one (button, Enter / Esc, `⌥↵` /
+`⌥⇧↵`), go to the next unresolved one in reading order, across files, wrapping,
+scrolled in smoothly (instantly under reduced motion) and, if the run began with
+a pointer press, left armed so Enter / Esc go on through the list. With none
+left, *No more changes* is said briefly on the *Next* item. Under Auto accept it
+has nothing to do and its label says so. Cancelling a change that is in the file
+puts the old text back as one step of the editor's own undo.
+
+### Where it is kept
+
+All of this is on the machine, never in the project, under the Kehikot folder's
+`module-state/paper/<project hash>/<epic>/`: `suggestions.json` (pending
+suggestions and what became of them: quoted text, replacement, why, the **hash**
+of each revision token, group, revision count), `review.json` (Auto accept, Jump,
+reasons, the accepted records, first-seen times; bounded: 40 accepted, 400
+reasons, 600 first-seen), and `baseline/` (the snapshots, only without git;
+files of the paper that are gone are pruned). `PAPER_STATE_DIR` moves it. A
+suggestion survives a restart of the module; one whose quoted text no longer
+matches is **never dropped**: found again where it moved, or marked *out of date*
+(*the text changed since this was suggested*: drawn at the nearest match with
+Accept held back), or — when nothing of it is left — listed in the header (*N out
+of date · cancel them*). A file over 4 MB is not part of a paper and is not
+tracked; the comparison says so.
+
+### One passage, one review item
+
+`propose_edit` from the same filer over words it already has pending is a
+**revision** of that suggestion (same id and tag, *revised*; the reply says
+*Revised <id> (was pending)*), whether or not the agent has `revise_edit`: an
+agent whose tool list was fixed before that tool existed only has
+`propose_edit`. The door sees no session, so the filer is the optional `agent`
+name, and without one every caller counts as one filer (the reply says which).
+Each call's token still works. Suggestions from different filers, or a
+suggestion beside a change already in the file, over the same words are
+**versions of one item**: one tag (*N versions of these words*, *Other version*
+cycles), Accept takes the one shown and the others go with it, Cancel cancels
+them all. The door cannot push a tool-list change over its plain POST transport,
+so it does not claim `listChanged`; the descriptions say all of this instead.
+
+### The MCP door
+
+`list_papers`, `list_sections`, `read_paper`, `read_source`, `list_proposals`,
+`propose_edit`, `revise_edit`, `withdraw_edit` and `explain_change`, and **no
+tool that writes a `.tex`, accepts or cancels a change, or toggles Auto accept**.
+`list_proposals` lists everything waiting, staged and in the files:
+`id<TAB>file<TAB>old -> new<TAB>why<TAB>(kind: staged|disk|new|deleted, state:
+pending|out of date (changed|ambiguous|gone), order: n of m, revised, group,
+no reason yet…)`, then recent outcomes and what Auto accept took in.
+`explain_change { project, epic, id, why }` records the reason of a change in
+the files.
+
 ## A change an agent suggests
 
-The MCP door has `list_papers`, `list_sections`, `read_paper`, `read_source`,
-`list_proposals`, `propose_edit`, `revise_edit` and `withdraw_edit`, and **no
-tool that writes a `.tex`**. Nothing on it accepts a suggestion.
-
-`propose_edit { project, epic, file?, find, replace, why, group? }` names the
-text to replace and what replaces it. The suggestion is held in this server's
-memory and drawn **in the source, where it sits**: the quoted passage is
-marked, and a button on it switches that passage between the current text and
-the proposed text, shown in place (the document itself is not changed). The
-agent's reason is beside it. The result is text: `Filed as <id>.`, then
-`Revision token: <token>`, then one line per overlapping suggestion
-(`Overlaps <id>: ... only one of the two can apply`), and a line for the
-group.
+`propose_edit { project, epic, file?, find, replace, why, group?, agent? }` names
+the text to replace and what replaces it. The suggestion is kept on this
+machine (it survives a restart) and drawn **in the source, where it sits**: the
+quoted passage is marked, and a button on it switches that passage between the
+current text and the proposed text, shown in place (the document itself is not
+changed). The agent's reason is beside it. The result is text: `Filed as <id>.`
+(or `Revised <id> (was pending)`), then `Revision token: <token>`, then one line
+per overlapping suggestion, and a line for the group. A quote or replacement
+over 200,000 characters is refused in words that point at editing the file
+directly, which Paper then shows for review.
 
 - **Revise or withdraw.** The token is the proof that the same agent is
-  asking; the door has no other identity. `revise_edit { project, id, token,
-  replace?, why? }` changes the replacement and/or the reason of a still
-  pending suggestion, keeping its id (`find` is fixed; a different `find` is a
-  new suggestion). `withdraw_edit { project, id, token }` takes it back. Both
-  refuse in words unless the suggestion is pending and the token is its own
-  (not found, already accepted, already rejected, already withdrawn, not
-  yours). A revised suggestion is marked *revised* to the reader. Withdrawing
-  one of a group withdraws the group. Only the token's SHA-256 is kept, in
-  memory beside the suggestion; no read ever returns it. A suggestion with no
-  token cannot be revised by an agent; the author can still answer it.
-- **Overlap.** A new suggestion that covers words a pending one covers is
-  still filed, and the result names the other id and says only one can apply.
-  Nothing is silently superseded.
+  asking. `revise_edit { project, id, token, replace?, why? }` changes the
+  replacement and/or the reason of a still pending suggestion, keeping its id
+  (`find` is fixed; a different `find` is a new suggestion). `withdraw_edit
+  { project, id, token }` takes it back. Both refuse in words unless the
+  suggestion is pending and the token is its own. A revised suggestion is marked
+  *revised*. Withdrawing one of a group withdraws the group. Only the token's
+  SHA-256 is kept, on the machine beside the suggestion; no read ever returns it.
 - **Group.** Suggestions filed with the same `group` (a move is an insertion
   and a deletion) are one decision: one mark says *2 changes*, they are
   accepted or rejected together, and applied in one atomic write of one file —
   if any no longer applies none does. A group lives in one file.
-- **`list_proposals`** lists what is pending with `order: n of m` (the
-  reading order below), `revised`, `group`, and recent outcomes with
-  `state: accepted | rejected | withdrawn | dropped` (and *adjusted by the
-  author* when the author changed the text first).
 
 ### Answering one: on its tag, and from the header
 
@@ -776,12 +909,12 @@ applies to it.
 
 A suggestion is accepted by an HTTP POST carrying a ticket printed into this
 page and never emitted on the MCP door. Accepting saves what the editor holds
-first, then splices, then commits to the paper's own repository when it has
-one.
+first, then splices, and moves the baseline by it (in git: stages it). It does
+**not** commit: *Commit* does, and what it commits is what was accepted.
 
-*Accept suggestions as they arrive* (View) accepts suggestions that arrive
-while it is ticked. It is the person saying yes in advance, for this paper, in
-this browser; nothing an agent can call sets it.
+*Auto accept changes* (View) is the person saying yes in advance, for this paper
+on this machine; nothing an agent can call sets it (it is `POST /api/review`,
+ticketed). See above.
 
 ## The controls are the container's menus
 
@@ -839,10 +972,15 @@ converts a paper from one template to another: that is editing
 
 ## Commits
 
-A paper lives in somebody's repository. Accepting a suggestion commits that
-file, and *Commit* (shown when the paper has uncommitted changes) commits the
-paper's files — only the paper's, authored by the person, never amending and
-never pushing. `git.ts` says what it refuses and why.
+A paper lives in somebody's repository. *Commit* commits **what was accepted**:
+where the paper is tracked, the index's entries under the paper's folder, built
+in a scratch index so what is staged elsewhere in the repository is not in it
+and a change still waiting for review is not either (the item's label says how
+many are left out). Without a tracked paper it commits the paper's files as they
+are. The message lists the changes accepted since the last commit with their
+reasons (*adjusted by the author*, *accepted automatically*, who proposed them),
+bounded in length. Authored by the person, hooks run, never amending, never
+pushing. `git.ts` says what it refuses and why.
 
 ## Doors
 
@@ -857,10 +995,11 @@ never pushing. `git.ts` says what it refuses and why.
 | `GET /api/toolchain` | the compiler this module can fetch: pieces, sizes, hosts, folder, progress |
 | `POST /api/toolchain/install`, `/api/toolchain/cancel` | start fetching the missing pieces (answers at once); stop |
 | `GET /api/sync` | `file`+`line`[+`to`] → rectangles; `page`+`x`+`y` → file and line; `part=<key>` asks one selection's own PDF |
-| `GET /api/proposals`, `POST /api/proposal` | suggestions waiting; accept or reject one |
+| `GET /api/proposals`, `POST /api/proposal` | everything waiting for review (staged and in the files, with Auto accept, the baseline in words and what was accepted lately); accept or cancel one |
+| `POST /api/review` | the person's own settings and notes: Auto accept, Jump to next change, a reason, cancel a change accepted lately |
 | `GET /api/uncommitted`, `POST /api/save` | where the repository stands; commit |
 | `GET /api/templates` | the built-in starting points |
-| `POST /mcp` | the six tools |
+| `POST /mcp` | the nine tools |
 
 Every POST but `/mcp` demands the ticket printed into this process's page, in
 the `x-module-ticket` header. There is no CORS header and the manifest declares

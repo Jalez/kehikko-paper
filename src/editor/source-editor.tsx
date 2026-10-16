@@ -555,14 +555,20 @@ const marksField = StateField.define<DecorationSet>({
  * a moment. Anything the person does to the scroll (wheel, touch, a key, a
  * press) ends it at once: it is theirs again.
  */
+let releaseHold: (() => void) | null = null
+
 function holdPlace(view: EditorView, offset: number, margin: number, column: boolean): void {
+  /* One place is held at a time: going anywhere else (another jump lands) lets go of this one. */
+  releaseHold?.()
   const scroller: HTMLElement = (column ? view.dom.closest<HTMLElement>('[data-source-column]') : null) ?? view.scrollDOM
   let stopped = false
   const stop = () => {
+    if (releaseHold === stop) releaseHold = null
     stopped = true
     for (const name of ['wheel', 'touchstart', 'keydown', 'mousedown'] as const) scroller.removeEventListener(name, stop)
   }
   for (const name of ['wheel', 'touchstart', 'keydown', 'mousedown'] as const) scroller.addEventListener(name, stop, { passive: true })
+  releaseHold = stop
   const started = performance.now()
   const step = () => {
     if (stopped || !view.dom.isConnected) return stop()
@@ -691,6 +697,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     const to = going.current
     if (!to || !view || jumped.current === to.nonce) return
     jumped.current = to.nonce
+    /* Going somewhere lets go of any place being held. */
+    releaseHold?.()
     const length = view.state.doc.length
     const from = Math.min(to.from, length)
     const end = Math.min(Math.max(to.to, from), length)

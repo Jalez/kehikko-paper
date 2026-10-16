@@ -8,6 +8,18 @@ import { join } from 'node:path'
  * The suggestions nobody has answered yet, and the argument for where they
  * live.
  *
+ * ## Revised: kept on this machine, and still in memory while running
+ *
+ * The argument below was written when losing every pending suggestion on a
+ * restart looked cheap. It was not — a module that updates itself restarts, and
+ * an agent's work vanished under the person reading it — so what is held in
+ * memory is also written, atomically, to the machine's module-state folder
+ * (`machine.ts`) and read back on the first question about a paper. The reasons
+ * it is still not in the project (it would travel in git) stand; the one for
+ * memory-only (no durable record of a suggestion measured against a file nobody
+ * can identify) is answered by measuring it again against whatever the file is
+ * (`remeasure`). What follows is kept for the first two options it weighed.
+ *
  * ## In this process's memory, and not on the disk
  *
  * There were three places a pending proposal could live and the choice is not
@@ -448,7 +460,7 @@ export function setWhy(project: string, epic: string, id: string, why: string): 
   const at = key(project, epic)
   const held = pending.get(at)
   if (!held) return
-  pending.set(at, held.map((p) => (p.id === id ? { ...p, why, adjusted: true } : p)))
+  pending.set(at, held.map((p) => (p.id === id ? { ...p, why } : p)))
 }
 
 /** Forget one, whether it was accepted, rejected or refused. */

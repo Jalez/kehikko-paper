@@ -702,7 +702,6 @@ export function setReason(ctx: Ctx, id: string, why: string): boolean {
   if (!one) return false
   if (why) c.state.reasons[id] = { why, at: Date.now() }
   else delete c.state.reasons[id]
-  c.state.adjusted[id] = c.state.adjusted[id] ?? Date.now()
   keepState(ctx.project, ctx.epic)
   return true
 }
