@@ -1373,6 +1373,28 @@ async function partOnce(
 
   const tectonic = engine.name === 'tectonic'
   const tree = join(pdir, 'tree')
+  /* A run that was killed — a newer request superseded it — or that failed
+     leaves what it was half-way through writing: an `.out` cut off mid-line
+     is read by the next run's `hyperref` and stops it with a fatal error, and
+     every run after that, since none gets far enough to write it again. So a
+     folder such a run used is emptied, and seeded afresh, before the next. */
+  const dirty = join(pdir, 'dirty')
+  try {
+    if (existsSync(dirty)) {
+      rmSync(work, { recursive: true, force: true })
+      rmSync(dirty, { force: true })
+    }
+  } catch {
+    /* Left as it is: the run says what it says. */
+  }
+  const soil = () => {
+    try {
+      mkdirSync(pdir, { recursive: true })
+      writeFileSync(dirty, '')
+    } catch {
+      /* Nothing to mark it with: the next run reads the folder as it is. */
+    }
+  }
   try {
     mkdirSync(work, { recursive: true })
     mkdirSync(good, { recursive: true })
@@ -1410,7 +1432,10 @@ async function partOnce(
   rmSync(made, { force: true })
   const runs = partRunsFor(engine, tectonic ? `${DRIVER}.tex` : MAIN, work, onlyLine(only))
   const went = await runAll(runs, tectonic ? tree : root, engine, started, job, superseded, { root, project, biber: false })
-  if (went === 'superseded') return 'superseded'
+  if (went === 'superseded') {
+    soil()
+    return 'superseded'
+  }
   if ('error' in went) return { last: failed(engine, started, `${engine.name} could not be started: ${went.error}`), unresolved: [] }
   const { output, timedOut, code, places, confined } = went
 
@@ -1427,6 +1452,7 @@ async function partOnce(
   const missing = unresolved(log)
 
   const ok = !timedOut && code === 0 && existsSync(made)
+  if (!ok) soil()
   if (!ok && places) problems.unshift(...outside([output, log, logOf(join(work, 'main.blg'))].join('\n'), root, places))
   if (ok) {
     try {
