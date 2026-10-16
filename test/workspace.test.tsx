@@ -748,14 +748,17 @@ describe('a change that arrives', () => {
     await new Promise((done) => setTimeout(done, 40))
     expect(lastPreview!.reveal?.nonce).toBe(was)
 
+    /* Walking to a change is asking to be taken there: the PDF turns to it. */
     press('sg-next')
     await waitFor(() => expect(row('sg-accept')!.disabled).toBe(false))
+    await waitFor(() => expect(lastPreview!.reveal?.nonce).not.toBe(was))
+    const walked = lastPreview!.reveal?.nonce
     press('sg-accept')
     await waitFor(() => expect(posted('/api/proposal')).toHaveLength(1))
     disk['main.tex'] = disk['main.tex']!.replace('tpyo', 'typo')
     wake()
-    await waitFor(() => expect(lastPreview!.reveal?.nonce).not.toBe(was))
-    expect(orange()).toBe(true)
+    await waitFor(() => expect(lastPreview!.reveal?.nonce).not.toBe(walked))
+    await waitFor(() => expect(orange()).toBe(true))
   })
 })
 

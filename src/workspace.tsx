@@ -28,7 +28,7 @@ import { placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
 import { placement, position as positionOf, stopKeyOf, stopsOf, step as stepOf } from './suggestions.ts'
 import type { InlineSuggestion } from './editor/source-editor.tsx'
-import { anchorWas, keptPlace, pdfWas, placeWas, rememberAnchor, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
+import { anchorWas, forgetAnchor, keptPlace, pdfWas, placeWas, rememberAnchor, rememberPdf, rememberPlace, rememberSaid, rememberSpot, saidWas, spotWas } from './remembered.ts'
 import { useBuild } from './use-build.ts'
 import { useChapters } from './use-chapters.ts'
 import type { PressHandler, usePaper } from './use-paper.ts'
@@ -306,6 +306,7 @@ export function Workspace({
       })
       return
     }
+    if (anchor) forgetAnchor(standingIn(), paper.epic)
     const spot = was && was.file === (next ?? MAIN_FILE) ? spotWas(standingIn(), paper.epic, was.file) : null
     if (!was || !spot || spot.hash !== paper.hashes[was.file]) return
     putBack.current = { file: was.file, from: spot.from, to: spot.to }
