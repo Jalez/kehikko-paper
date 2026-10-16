@@ -521,6 +521,52 @@ const marksField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
+/**
+ * Keep a place put back where it was put until the layout under it has settled.
+ *
+ * ## Why one scroll is not enough
+ *
+ * An editor draws the lines near the viewport and ESTIMATES the height of the
+ * rest, so where an offset is on the page is only a guess until the lines
+ * above it have been drawn and measured. A place put back with one scroll lands
+ * where the estimate said, and then the lines come into view, are measured, and
+ * everything below them moves — by a few lines, or by thousands of pixels in a
+ * long chapter. So after the scroll the place is asked for again each frame:
+ * where is that offset NOW, and how far is it from where it was meant to be?
+ * — and the difference is scrolled away, until it has stayed under a pixel for
+ * a moment. Anything the person does to the scroll (wheel, touch, a key, a
+ * press) ends it at once: it is theirs again.
+ */
+function holdPlace(view: EditorView, offset: number, margin: number, column: boolean): void {
+  const scroller: HTMLElement = (column ? view.dom.closest<HTMLElement>('[data-source-column]') : null) ?? view.scrollDOM
+  let frames = 0
+  let steady = 0
+  let stopped = false
+  const stop = () => {
+    stopped = true
+    for (const name of ['wheel', 'touchstart', 'keydown', 'mousedown'] as const) scroller.removeEventListener(name, stop)
+  }
+  for (const name of ['wheel', 'touchstart', 'keydown', 'mousedown'] as const) scroller.addEventListener(name, stop, { passive: true })
+  const started = performance.now()
+  const step = () => {
+    if (stopped || !view.dom.isConnected) return stop()
+    frames += 1
+    const row = view.coordsAtPos(offset, 1)
+    const box = scroller.getBoundingClientRect()
+    if (row && box.height > 0) {
+      const delta = row.top - (box.top + margin)
+      if (Math.abs(delta) > 1) {
+        scroller.scrollTop += delta
+        steady = 0
+      } else steady += 1
+    }
+    /* Quiet for a third of a second, or six seconds: whichever comes first. */
+    if (steady >= 20 || performance.now() - started > 6000) return stop()
+    requestAnimationFrame(step)
+  }
+  requestAnimationFrame(step)
+}
+
 export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScrolled, mark, problems, theme, suggestions, drafts, onToggleSuggestion, onAnswerSuggestion, onWhy, onPickSuggestion, onArmedKey, onDisarm, onStopEditing, embedded, landed, memory }: EditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null)
   const scrolled = useRef(onScrolled)
@@ -642,6 +688,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
             EditorView.scrollIntoView(EditorSelection.cursor(Math.min(to.top, length), 1), { y: 'start', yMargin: (embedded ? EMBED_TOP : 0) - Math.max(0, to.past ?? 0) }),
     })
     if (to.focus) view.focus()
+    if (to.top !== undefined) holdPlace(view, Math.min(to.top, length), (embedded ? EMBED_TOP : 0) - Math.max(0, to.past ?? 0), embedded === true)
   }
   useEffect(() => {
     land(ref.current?.view)
