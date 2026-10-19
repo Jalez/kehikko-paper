@@ -79,7 +79,7 @@ import { templateById, titleFor, type TemplateFile } from './templates.ts'
  * ## What was here before, and why one rule replaced two
  *
  * There was a DEFAULT and an EXCEPTION. The default was
- * `<project>/data/papers/<epic>/`, which the roadmap project already had; the
+ * `<project>/data/papers/<epic>/`, which the host project already had; the
  * exception lived in `<project>/.kehikot/paper/papers.json` and said where a
  * paper was when it was somewhere else — `{"papers": {"thesis": "."}}` for a
  * thesis, where the paper IS the project.
