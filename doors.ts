@@ -1,4 +1,5 @@
-import { establishBuild, mintTicket, refuseTicket, type Reply as DoorReply } from 'kehikot-module-protocol/serve'
+import { doorContext } from 'kehikot-module-protocol'
+import { DOOR_PROJECT_SAYS, establishBuild, mintTicket, refuseTicket, resolveDoorProject, type Reply as DoorReply } from 'kehikot-module-protocol/serve'
 import { join, relative } from 'node:path'
 
 import { commitPaper, commitStaged, saveMessage, standing, standingStaged, type Committed, type Standing } from './git.ts'
@@ -27,6 +28,7 @@ import { MAX_EDIT_BYTES, bytesOf } from './latex/edit.ts'
 import { plainText, spanOf } from './latex/parse.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
+import { vouched } from './stale.ts'
 import type { Proposal } from './latex/propose.ts'
 import {
   groupOf,
@@ -1318,7 +1320,7 @@ function mcp(rpc: Rpc): Reply {
  * which is how the page, the client module and Vite's own hot-reload socket
  * keep working without being enumerated here.
  */
-export function answer(
+export function answerAt(
   method: string,
   path: string,
   query: URLSearchParams,
@@ -2259,7 +2261,7 @@ export function answer(
  * when the whole paper is not of the text on disk, `force` whatever stands.
  * See `compilePart`.
  */
-export function later(
+export function laterAt(
   method: string,
   path: string,
   query: URLSearchParams,
@@ -2292,6 +2294,60 @@ function pickedFiles(named: unknown): string[] {
 /** The selection a request says is on screen, or null for the whole paper. Its shape is checked where it is used. */
 function partOf(query: URLSearchParams): string | null {
   return str(query.get('part'), 32) || null
+}
+
+/**
+ * Every door, asked of the host first.
+ *
+ * `answerAt` and `laterAt` work on a project path as written; this decides which path that is. A
+ * project is its id, not its folder: a path a caller learnt may be one the project has left, or one
+ * that is somebody else's now. So the project a caller names — `project` in a tool call or in a
+ * page request's query — is put to the host (`resolveDoorProject`), and the doors are only given the
+ * path it vouched for. A refusal is the shared sentence, in this door's own refusal shape; with no
+ * host to ask, nothing is read and nothing is written. A request that names no project is the
+ * doors' own business: they already say what to pass.
+ */
+export async function answer(
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: Record<string, unknown> | null,
+  ticket: string | null = null,
+): Promise<Reply | null> {
+  const through = (q: URLSearchParams, b: Record<string, unknown> | null): Promise<Reply | null> | Reply | null =>
+    laterAt(method, path, q, b, ticket) ?? answerAt(method, path, q, b, ticket)
+  const refusal = (why: string): Reply => ({ status: 409, body: { ok: false, error: why, project: null } })
+
+  if (path === '/mcp' && method === 'POST' && body && body.method === 'tools/call') {
+    const params = (body.params ?? {}) as { name?: unknown; arguments?: unknown }
+    const args = params.arguments && typeof params.arguments === 'object' ? { ...(params.arguments as Record<string, unknown>) } : {}
+    if (!Object.hasOwn(TOOLS, String(params.name ?? '')) || !doorContext(args).project) return answerAt(method, path, query, body, ticket)
+    const at = await resolveDoorProject(args)
+    if (!at.ok) return { status: 200, body: { jsonrpc: '2.0', id: body.id ?? null, result: { content: [{ type: 'text', text: at.why }], isError: true } } }
+    vouched(at.path, at.id, at.movedFrom)
+    delete args.projectPath
+    const reply = answerAt(method, path, query, { ...body, params: { ...params, arguments: { ...args, project: at.path } } }, ticket)
+    if (at.movedFrom) {
+      const result = (reply?.body as { result?: { content?: { type: string; text: string }[] } } | null)?.result
+      result?.content?.push({ type: 'text', text: DOOR_PROJECT_SAYS.followed(at.movedFrom, at.path) })
+    }
+    return reply
+  }
+
+  const named = query.get('project')
+  if (path.startsWith('/api/') && named?.trim() && (method === 'GET' || !unticketed(ticket))) {
+    const at = await resolveDoorProject(named)
+    if (!at.ok) return refusal(at.why)
+    vouched(at.path, at.id, at.movedFrom)
+    const asked = new URLSearchParams(query)
+    asked.set('project', at.path)
+    const reply = await through(asked, body)
+    if (at.movedFrom && reply && typeof reply.body === 'object' && reply.body && (reply as { raw?: unknown }).raw === undefined) {
+      return { ...reply, body: { ...reply.body, said: DOOR_PROJECT_SAYS.followed(at.movedFrom, at.path) } }
+    }
+    return reply
+  }
+  return through(query, body)
 }
 
 export { MANIFEST }

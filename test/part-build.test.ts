@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 import { buildDir, buildStatus, compile, compilePart, forgetBuilds, partStatus, readPdf, syncForward } from '../compile/build.ts'
 import { KEPT_PARTS } from '../compile/part.ts'
-import { TICKET, answer, later } from '../doors.ts'
+import { TICKET, answerAt as answer, laterAt as later } from '../doors.ts'
 
 /**
  * A picked part compiled on its own, run for real against engines that are not.

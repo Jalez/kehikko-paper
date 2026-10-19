@@ -1,4 +1,6 @@
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+/* Before the document: the stand-in host takes Bun's own `Response` (see host.ts). */
+import './host.ts'
 import { beforeEach } from 'bun:test'
 
 /**

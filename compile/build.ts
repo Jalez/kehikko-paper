@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
+import { onProjectLeft } from '../stale.ts'
 import { MAIN, hashesOf, paperRoot, projectOf, readPaper } from '../store.ts'
 import {
   HOW_TO_INSTALL,
@@ -1530,6 +1531,15 @@ function evict(root: string, current: string, job: Job): void {
     job.parts.delete(key)
   }
 }
+
+/* The folder left (renamed, moved away, or now another project's): a build of a paper under it is stopped and forgotten. */
+onProjectLeft((project) => {
+  for (const [root, job] of [...jobs]) {
+    if (root !== project && !root.startsWith(`${project}/`)) continue
+    stop(job.child)
+    jobs.delete(root)
+  }
+})
 
 /** For tests: forget every job. The folders in the temp directory are left; a test makes its own paper and so its own hash. */
 export function forgetBuilds(): void {

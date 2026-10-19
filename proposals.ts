@@ -3,6 +3,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { rebase, relocate, type Proposal } from './latex/propose.ts'
 import { epicsWithState, paperState, readJson, removeState, writeJson } from './machine.ts'
 import { join } from 'node:path'
+import { onProjectLeft } from './stale.ts'
 
 /**
  * The suggestions nobody has answered yet, and the argument for where they
@@ -86,6 +87,13 @@ const memory = new Map<string, Proposal[]>()
 const memoryOutcomes = new Map<string, Outcome[]>()
 const loaded = new Set<string>()
 const SEP_RE = /\0/
+
+/* The folder left (renamed, moved away, or now another project's): what is held under its path goes. Memory only: the file is filed by the project's id and is read again under the path it has now. */
+onProjectLeft((project) => {
+  const prefix = `${project}${SEP}`
+  for (const held of [memory, memoryOutcomes]) for (const key of [...held.keys()]) if (key.startsWith(prefix)) held.delete(key)
+  for (const key of [...loaded]) if (key.startsWith(prefix)) loaded.delete(key)
+})
 
 function fileOf(at: string): string {
   const [project, epic] = at.split(SEP_RE) as [string, string]

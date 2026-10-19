@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 import { doors, serves, type Answer } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
-import { BUILD, MANIFEST, TICKET, answer, later } from './doors.ts'
+import { BUILD, MANIFEST, TICKET, answer } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 
 /**
@@ -37,8 +37,8 @@ import { ID, PREFERRED_PORT } from './manifest.ts'
  * The protocol's `doors()`: the manifest at both well-known paths, `/app`
  * (generated, with the write ticket and this process's build printed into it,
  * `no-store`, `frame-ancestors`), and `/healthz`, `/mcp` and `/api/*` through
- * `through` below — `later` for the one door that takes seconds, `answer` for
- * every other. See the protocol's docs/module-plumbing.md.
+ * `through` below — `answer` asks the host which folder a request means, then
+ * `laterAt` for the one door that takes seconds, `answerAt` for every other. See the protocol's docs/module-plumbing.md.
  *
  * ## Why the page is generated rather than a file
  *
@@ -53,8 +53,7 @@ import { ID, PREFERRED_PORT } from './manifest.ts'
  * and nothing answers. Here `/app` is claimed before Vite's resolver ever sees
  * it, so no file that happens to sit next to this one can take it.
  */
-const through: Answer = (method, path, query, body, ticket) =>
-  later(method, path, query, body, ticket) ?? answer(method, path, query, body, ticket)
+const through: Answer = (method, path, query, body, ticket) => answer(method, path, query, body, ticket)
 
 /** One line at startup, and the reason it is still worth a plugin of its own. */
 function says(): Plugin {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { chaptersIn, holdingsOf, readChapters, republish, setChapters } from '../chapters.ts'
-import { TICKET, answer } from '../doors.ts'
+import { TICKET, answerAt as answer } from '../doors.ts'
 import { chaptersOf, chaptersSaid, moveOf, movedWords, nameFor, partOfChapter, withChapter } from '../src/chapters.ts'
 import { inProject } from '../src/focus.ts'
 import { readPaper } from '../store.ts'
