@@ -7,7 +7,7 @@ import { gzipSync } from 'node:zlib'
 
 import { createInstaller, extract, toolsDir, trusted, type Installer } from '../compile/install.ts'
 import type { Artefact } from '../compile/toolchain.ts'
-import { TICKET, answer } from '../doors.ts'
+import { TICKET, answerAt as answer } from '../doors.ts'
 import { tarOf, zipOf, type Entry } from './archives.ts'
 
 /**

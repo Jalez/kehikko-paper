@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { TICKET, answer } from '../doors.ts'
+import { TICKET, answerAt as answer } from '../doors.ts'
 import { forgetAllProposals, restartProposals } from '../proposals.ts'
 import { forgetReview, restartReview } from '../review.ts'
 

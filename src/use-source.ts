@@ -6,7 +6,8 @@ import { held } from 'kehikot-module-protocol/client'
 
 import { hunksOf } from '../latex/hunks.ts'
 import { mergeThree } from '../latex/merge.ts'
-import { json, post, standingIn } from './api.ts'
+import { json, post, standingAs, standingIn } from './api.ts'
+import { heldAtProject } from './held-at-project.ts'
 import { eolOf, toDisk, toEditor, type Eol } from './lib/offsets.ts'
 
 /**
@@ -109,6 +110,9 @@ const unsaved = held<Unsaved>('kehikot.paper.unsaved', (stored) => {
 
 const aimedAt = (epic: string, file: string) => `${epic}\u0000${file}`
 
+/* Held under the project's id, so a folder renamed while words are unsaved still has them; the path's copy, from before, is read once. */
+const unsavedHere = () => heldAtProject(unsaved, { projectId: standingAs(), projectPath: standingIn() }) ?? unsaved.at(null)
+
 export function useSource({
   paper,
   disk,
@@ -157,7 +161,7 @@ export function useSource({
     const on = epicRef.current
     const doc = docs.current.get(name)
     if (on === null || !doc) return
-    unsaved.at(standingIn()).keep(aimedAt(on, name), doc.text === doc.saved ? null : { text: doc.text, hash: doc.hash })
+    unsavedHere().keep(aimedAt(on, name), doc.text === doc.saved ? null : { text: doc.text, hash: doc.hash })
   }, [])
 
   if (epicRef.current !== epic) {
@@ -199,7 +203,7 @@ export function useSource({
         .then((got) => {
           loading.current.delete(name)
           if (!got || epicRef.current !== epic || docs.current.has(name)) return
-          const typed = unsaved.at(standingIn()).read(aimedAt(epic, name))
+          const typed = unsavedHere().read(aimedAt(epic, name))
           if (!typed || typed.text === got.text) {
             docs.current.set(name, { text: got.text, saved: got.text, hash: got.hash, eol: got.eol })
             hold(name)

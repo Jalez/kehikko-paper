@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { TICKET, answer } from '../doors.ts'
+import { TICKET, answerAt as answer } from '../doors.ts'
 import { bytesOf, narrow, onBoundary } from '../latex/edit.ts'
 import { readPaper, writeFile, writeRange } from '../store.ts'
 

@@ -7,6 +7,7 @@ import { accept as applyHunks, grouping, hunkIds, hunksOf, ownSave, type Hunk } 
 import { bytesOf } from './latex/edit.ts'
 import type { Proposal } from './latex/propose.ts'
 import { paperState, readJson, removeState, writeJson } from './machine.ts'
+import { onProjectLeft } from './stale.ts'
 import { MAIN, confine, hashOf, hashesOf, isEpic, paperRoot, writeRange, writeRanges } from './store.ts'
 
 /**
@@ -273,6 +274,12 @@ function trackedView(ctx: Ctx): GitView | null {
 }
 
 const diffs = new Map<string, { hash: string; base: string; hunks: Hunk[]; ids: string[] }>()
+
+/* The folder left (renamed, moved away, or now another project's): what is held under its path goes. Memory only: the state is filed by the project's id and is read again under the path it has now. */
+onProjectLeft((project) => {
+  const prefix = `${project}\0`
+  for (const held of [states, snapshots, diffs]) for (const key of [...held.keys()]) if (key.startsWith(prefix)) held.delete(key)
+})
 
 function compute(ctx: Ctx): Computed {
   const state = stateOf(ctx.project, ctx.epic)

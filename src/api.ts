@@ -1,3 +1,4 @@
+import { projectKey } from 'kehikot-module-protocol'
 import { ask, replied } from 'kehikot-module-protocol/client'
 
 /**
@@ -68,6 +69,11 @@ export function standingAs(): string | null {
 /** Set with every context the host sends: an older host sends no id, and that is null. */
 export function knownAs(next: string | null): void {
   projectId = next
+}
+
+/** What this page keys what it holds by: the project's id, or its path when the host sent no id. Null with no project. */
+export function standingKey(): string | null {
+  return projectKey({ projectId, projectPath: project })?.key ?? null
 }
 
 /** A URL under this app's own `/api`, with the project attached. */

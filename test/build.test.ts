@@ -7,7 +7,7 @@ import { buildDir, buildStatus, compile, forgetBuilds, readPdf, syncForward } fr
 import { BUILD_HEADER, buildStamp } from 'kehikot-module-protocol'
 import { TICKET_HEADER, doorsFetch } from 'kehikot-module-protocol/serve'
 
-import { BUILD, MANIFEST, TICKET, answer, later } from '../doors.ts'
+import { BUILD, MANIFEST, TICKET, answerAt as answer, laterAt as later } from '../doors.ts'
 
 /**
  * The build queue, run for real against an engine that is not one.

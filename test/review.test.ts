@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { TICKET, answer } from '../doors.ts'
+import { TICKET, answerAt as answer } from '../doors.ts'
 import { accept as takeIn, grouping, hunkIds, hunksOf, ownSave, revert } from '../latex/hunks.ts'
 import { forgetAllProposals, restartProposals } from '../proposals.ts'
 import { paperState } from '../machine.ts'
