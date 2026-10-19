@@ -58,6 +58,18 @@ export function standIn(next: string | null): void {
   project = next
 }
 
+let projectId: string | null = null
+
+/** The open project's permanent id (protocol 2.1.0), or null when the host sent none. */
+export function standingAs(): string | null {
+  return projectId
+}
+
+/** Set with every context the host sends: an older host sends no id, and that is null. */
+export function knownAs(next: string | null): void {
+  projectId = next
+}
+
 /** A URL under this app's own `/api`, with the project attached. */
 export function apiUrl(path: string, params: Record<string, string> = {}): string {
   const query = new URLSearchParams(params)

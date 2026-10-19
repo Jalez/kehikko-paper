@@ -13,7 +13,7 @@ import { pageOfLine, type PageRect } from '../compile/synctex.ts'
 import { plainText } from '../latex/parse.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
-import { apiUrl, json, standingIn } from './api.ts'
+import { apiUrl, json, standingAs, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import { SourceColumn, type ColumnRegion } from './editor/source-column.tsx'
 import type { Editor, EditorControl } from './editor/source-editor.tsx'
@@ -274,7 +274,7 @@ export function Workspace({
        is about to open a file over it: the walk is owed again. Without it the
        second of StrictMode's two runs left the page off the passage. */
     walkedFor.current = null
-    const was = placeWas(standingIn(), paper.epic, wire.kept.current)
+    const was = placeWas(standingIn(), paper.epic, wire.kept.current, standingAs())
     if (was) setTab(was.tab)
     const next = fileOnOpening(focusRef.current, paper.files, was?.file ?? null)
     if (next !== null) openAt(next)
@@ -630,7 +630,7 @@ export function Workspace({
     if (!doc) return
     const place = { file, tab }
     rememberPlace(standingIn(), paper.epic, place)
-    const line = keptPlace(standingIn(), paper.epic, place)
+    const line = keptPlace(standingIn(), paper.epic, place, standingAs())
     if (line !== null) keep(line)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paper.epic, file, tab, doc === null, keep])

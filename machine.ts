@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { moduleFolder } from 'kehikot-module-protocol'
+import { moduleFolder, projectFile, projectKey, readProjectFile } from 'kehikot-module-protocol'
 import { registryDir } from 'kehikot-module-protocol/serve'
 
 import { ID } from './manifest.ts'
@@ -12,7 +12,8 @@ import { ID } from './manifest.ts'
  * machine's Kehikot folder, beside the module registry, so it never travels in
  * the project's git history.
  *
- *     <Kehikot machine folder>/module-state/paper/<project hash>/<epic>/…
+ *     <Kehikot machine folder>/module-state/paper/id-<project id>/<epic>/…
+ *     <Kehikot machine folder>/module-state/paper/<project path hash>/<epic>/…   (no id yet)
  *
  * What lives there: suggestions an agent filed and nobody has answered
  * (`suggestions.json`), what the author last accepted when the project has no
@@ -33,9 +34,63 @@ export function stateRoot(env: Record<string, string | undefined> = process.env)
 
 const short = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
 
-/** The folder one project's state is in. */
+/**
+ * The project's permanent id, from `<project>/.kehikot/project.json` (protocol
+ * 2.1.0), or null when the host has not given it one yet. Read from the file
+ * rather than from the page's context because the server is handed a path —
+ * by the page and by an agent's MCP call alike — and the file is beside it.
+ * The host writes that file; this module only reads it.
+ */
+export function projectIdOf(project: string): string | null {
+  const file = projectFile(project)
+  if (file === null) return null
+  return readProjectFile(readJson(file))?.id ?? null
+}
+
+/**
+ * The folder one project's state is in.
+ *
+ * Filed under the project's id when it has one (`id-<id>`), so renaming or
+ * moving the project folder keeps its suggestions, baseline and Auto accept;
+ * under a hash of the absolute path otherwise, as before 2.1.0. The two are
+ * spelled apart (`id-` against bare hex) so a name is never guessed at.
+ *
+ * The first time a project is seen with an id, what was filed under the hash
+ * of the path it has NOW is moved to the id (`adopt`). State kept under a path
+ * the project no longer has cannot be matched: the hash does not say which
+ * path it was, and this module does not know a project's former paths. Such a
+ * folder is left where it is, untouched.
+ */
 export function projectState(project: string): string {
-  return join(stateRoot(), short(project))
+  const key = projectKey({ projectId: projectIdOf(project), projectPath: project })
+  const byPath = join(stateRoot(), short(project))
+  if (key === null || key.by === 'path') return byPath
+  const byId = join(stateRoot(), `id-${key.key}`)
+  adopt(byPath, byId)
+  return byId
+}
+
+/**
+ * Move a project's state from its path hash to its id. The whole folder in one
+ * rename when the id has nothing yet; otherwise each epic the id lacks, and
+ * the hash folder goes once it is empty. An epic both have stays in both: the
+ * id's copy is the one in use, and the other is not destroyed. Never throws.
+ */
+export function adopt(from: string, to: string): void {
+  try {
+    if (!existsSync(from)) return
+    if (!existsSync(to)) {
+      mkdirSync(dirname(to), { recursive: true })
+      renameSync(from, to)
+      return
+    }
+    for (const entry of readdirSync(from)) {
+      if (!existsSync(join(to, entry))) renameSync(join(from, entry), join(to, entry))
+    }
+    if (readdirSync(from).length === 0) rmdirSync(from)
+  } catch {
+    /* State is a convenience: a move that failed leaves both folders as they were. */
+  }
 }
 
 /** The folder one paper's state is in; the epic is a validated slug. */

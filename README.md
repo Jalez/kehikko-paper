@@ -791,12 +791,23 @@ puts the old text back as one step of the editor's own undo.
 ### Where it is kept
 
 All of this is on the machine, never in the project, under the Kehikot folder's
-`module-state/paper/<project hash>/<epic>/`: `suggestions.json` (pending
+`module-state/paper/id-<project id>/<epic>/` — or, while the host has given
+the project no id (`.kehikot/project.json`, protocol 2.1.0), under
+`<hash of the project's path>/<epic>/`: `suggestions.json` (pending
 suggestions and what became of them: quoted text, replacement, why, the **hash**
 of each revision token, group, revision count), `review.json` (Auto accept, Jump,
 reasons, the accepted records, first-seen times; bounded: 40 accepted, 400
 reasons, 600 first-seen), and `baseline/` (the snapshots, only without git;
-files of the paper that are gone are pruned). `PAPER_STATE_DIR` moves it. A
+files of the paper that are gone are pruned). `PAPER_STATE_DIR` moves it.
+
+Keyed by the id, it survives the project folder being renamed or moved. The
+first time a project is seen with an id, the folder kept under the hash of its
+CURRENT path is moved to the id (epic by epic when the id already has some).
+A folder kept under a path the project no longer has — it was renamed before
+it had an id — cannot be matched, since the hash does not say which path it
+was, and is left where it is.
+
+A
 suggestion survives a restart of the module; one whose quoted text no longer
 matches is **never dropped**: found again where it moved, or marked *out of date*
 (*the text changed since this was suggested*: drawn at the nearest match with

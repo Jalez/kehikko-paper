@@ -1,4 +1,4 @@
-import { sameParts, type EpicPart, type Goto, type Passage } from 'kehikot-module-protocol'
+import { projectKey, sameParts, type EpicPart, type Goto, type Passage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useHost } from 'kehikot-module-protocol/client/react'
@@ -6,7 +6,7 @@ import { useHost } from 'kehikot-module-protocol/client/react'
 import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
-import { json, post, standIn, standingIn } from './api.ts'
+import { json, knownAs, post, standIn, standingIn } from './api.ts'
 import { headerDrawn, rememberHeaderDrawn } from './header-fallback.tsx'
 
 /**
@@ -215,9 +215,11 @@ export function usePaper(framed: boolean) {
    * hook's, by the rule `useHost` is given below.
    */
   const arrived = (
-    context: { epic: string | null; projectPath?: string | null; parts?: readonly EpicPart[] },
+    context: { epic: string | null; projectPath?: string | null; projectId?: string | null; parts?: readonly EpicPart[] },
     greeting: boolean,
   ) => {
+    /* Before anything is remembered or looked up: what the place the host kept is compared by. */
+    knownAs(projectKey(context)?.by === 'id' ? (context.projectId as string) : null)
     /* Compared by value: a host composes the list afresh for every context
        it sends, and one that says what the last one said must not redraw a
        PDF. Before the early return below, which is about the EPIC. */
