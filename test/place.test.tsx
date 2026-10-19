@@ -329,6 +329,25 @@ describe('the rule, and what is read first', () => {
     /* No project, no record: nothing is filed under a slug alone. */
     expect(keptPlace(null, 'a-paper', { file: 'main.tex', tab: 'source' })).toBeNull()
   })
+
+  test('with a project id the host’s record is matched by the id, so a renamed project comes back to its place', () => {
+    const ID = '3f2b8c1e-0d4a-4e5b-9c6d-7e8f9a0b1c2d'
+    const line = keptPlace('/tmp/before-rename', 'a-paper', { file: 'chapters/design.tex', tab: 'pdf' }, ID)
+    expect(JSON.parse(line!).projectId).toBe(ID)
+    /* The folder was renamed: the path differs, the id does not. */
+    expect(placeWas('/tmp/after-rename', 'a-paper', line, ID)).toEqual({ file: 'chapters/design.tex', tab: 'pdf' })
+    /* Another project at the old path is not this one. */
+    expect(placeWas('/tmp/before-rename', 'a-paper', line, 'aaaaaaaa-0000-4000-8000-000000000000')).toBeNull()
+    expect(placeWas('/tmp/after-rename', 'another-paper', line, ID)).toBeNull()
+  })
+
+  test('without an id on either side the path is compared, as before', () => {
+    const old = keptPlace('/tmp/p', 'a-paper', { file: 'main.tex', tab: 'source' })
+    expect(JSON.parse(old!).projectId).toBeUndefined()
+    /* A record kept before the host gave ids, read by a host that now does: the path decides. */
+    expect(placeWas('/tmp/p', 'a-paper', old, '3f2b8c1e-0d4a-4e5b-9c6d-7e8f9a0b1c2d')).toEqual({ file: 'main.tex', tab: 'source' })
+    expect(placeWas('/tmp/q', 'a-paper', old, '3f2b8c1e-0d4a-4e5b-9c6d-7e8f9a0b1c2d')).toBeNull()
+  })
 })
 
 describe('the spot that is kept', () => {
