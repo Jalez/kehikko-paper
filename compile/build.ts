@@ -519,7 +519,7 @@ async function once(
       severity: 'error',
       file: null,
       line: null,
-      message: `${engine.name} stopped without making a PDF and without naming an error. Its last words are below.`,
+      message: sandboxDenied(engine.name, output, places) ?? `${engine.name} stopped without making a PDF and without naming an error. Its last words are below.`,
     })
   }
 
@@ -740,20 +740,44 @@ function confinement(
 }
 
 /**
+ * The sentence for Tectonic stopped by the sandbox itself: it was refused a
+ * folder (its cache, when the sandbox is not told where it lives) and said only
+ * "Operation not permitted". Null for anything else.
+ */
+export function sandboxDenied(engine: string, output: string, places: Places | null): string | null {
+  if (engine !== 'tectonic' || !places || !/Operation not permitted/.test(output)) return null
+  const tried = places.kept.length ? places.kept.join(' and ') : 'its cache folder'
+  return `tectonic was stopped by the sandbox with "Operation not permitted": it may only use ${tried} as its cache, and was refused a folder outside it. If Tectonic keeps its cache elsewhere, set TECTONIC_CACHE_DIR to that folder.`
+}
+
+/**
  * Where Tectonic keeps the packages it fetched: read and written by it.
  *
- * Its own choice of place, said the way it says it — `TECTONIC_CACHE_DIR`, or
- * the platform's cache folder. Named even when it is not there yet, since the
- * first run is what makes it.
+ * Its own choice of place, said the way it says it: `TECTONIC_CACHE_DIR`, which
+ * wins alone, or the platform's cache folder. Tectonic 0.17 asks the
+ * `directories` crate for `ProjectDirs::from("", "TectonicProject", "Tectonic")`,
+ * which is `~/Library/Caches/TectonicProject.Tectonic` on a Mac and
+ * `$XDG_CACHE_HOME/Tectonic` (else `~/.cache/Tectonic`) elsewhere; older
+ * Tectonic, through `app_dirs2`, used `~/Library/Caches/Tectonic` on a Mac. A
+ * Mac names both, since which one runs is not known here. Each is named even
+ * when it is not there yet, since the first run is what makes it.
  */
-function tectonicKeeps(env: Record<string, string>, home: string | null): string[] {
+export function tectonicKeeps(env: Record<string, string>, home: string | null, platform: string = process.platform): string[] {
   const said = env.TECTONIC_CACHE_DIR
-  const at = said ? said : !home ? null : process.platform === 'darwin' ? join(home, 'Library', 'Caches', 'Tectonic') : join(env.XDG_CACHE_HOME || join(home, '.cache'), 'Tectonic')
-  if (!at || !isAbsolute(at)) return []
-  const whole = real(at)
-  if (whole) return [whole]
-  const parent = real(dirname(at))
-  return parent ? [join(parent, at.slice(dirname(at).length + 1))] : []
+  const wanted = said
+    ? [said]
+    : !home
+      ? []
+      : platform === 'darwin'
+        ? [join(home, 'Library', 'Caches', 'TectonicProject.Tectonic'), join(home, 'Library', 'Caches', 'Tectonic')]
+        : [join(env.XDG_CACHE_HOME || join(home, '.cache'), 'Tectonic')]
+  return wanted.flatMap((at) => {
+    if (!isAbsolute(at)) return []
+    const whole = real(at)
+    if (whole) return [whole]
+    const parent = real(dirname(at))
+    return parent ? [join(parent, at.slice(dirname(at).length + 1))] : []
+  })
 }
 
 /**
@@ -1494,7 +1518,7 @@ async function partOnce(
       severity: 'error',
       file: null,
       line: null,
-      message: `${engine.name} stopped without making a PDF of the picked part and without naming an error. Its last words are below.`,
+      message: sandboxDenied(engine.name, output, places) ?? `${engine.name} stopped without making a PDF of the picked part and without naming an error. Its last words are below.`,
     })
   }
 
