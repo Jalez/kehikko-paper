@@ -229,6 +229,10 @@ export const MANIFEST: Manifest = manifestSchema.parse({
   protocol: PROTOCOL,
   id: ID,
   name: 'Paper',
+  /* The icon a host draws beside the name: a key of the protocol's module icons, never a path
+     or URL. The mark of the tool this module fronts, which identifies that tool and nothing
+     else; the same key Kehikot's official list gives it. */
+  icon: 'brand:latex',
   version: VERSION,
   /* Where a host files this module in its list, most fitting first. */
   tags: ['writing', 'reading'],
