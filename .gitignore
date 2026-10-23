@@ -19,3 +19,8 @@ dist
 # directory somebody else owns, named by `KEHIKKO_PAPERS_DIR`, and this program
 # only reads it. There is therefore no store to keep out of a commit — and if a
 # line ever appears here, something has started writing where it should not.
+
+# Written by `build.ts` for the length of a build and taken away after. Left
+# behind by a killed build, it would be what Vite answers at `/`, with no
+# ticket in it.
+/index.html

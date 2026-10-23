@@ -62,23 +62,27 @@
 # framed at 7870 in particular, and a registration still naming a port this app
 # has drifted off is one the host sweeps to find nothing.
 #
-# ## There is no build here, and no `dist`
+# ## The built page, when it is this checkout's, and Vite otherwise
 #
-# The argument for one is that starting should be starting: a start that shells
-# out to a build is a start that fails when the network is down. The argument is
-# fine and the shape is still wrong, because this program is not deployed — it
-# runs on the machine of the person editing it. What `dist` actually buys is a
-# STALE page served with a 200, every symptom of a working app and none of the
-# changes, and that failure has cost this codebase whole afternoons three
-# separate times in three different programs. A missing build announces itself.
-# A stale one does not.
+# There is a build: `bun run build` compiles the page into `dist/` and stamps it
+# with the commit (`dist/.kehikot-built`), and `serve.ts` serves it on the same
+# doors and the same port, with a fraction of the memory a Vite dev server holds.
+# A host builds an installed copy when it installs or updates it, at the tag; a
+# start never builds, because a start that builds is a start that fails when the
+# network is down.
 #
-# So Vite serves the page, as Vite is for. The manifest, the health check, the
-# MCP door and this app's own `/api` are middleware in front of the same server
-# — see `doors()` in `vite.config.ts` — because a module is one origin or it is
-# nothing, and because a page that fetched its own papers from a second port
-# would be fetching them cross-origin, which is where the wide-open `cors()` in
-# the program this replaces came from.
+# The old objection to a `dist` here was the right one: a STALE page served with
+# a 200 has every symptom of a working app and none of the changes, and that has
+# cost this codebase whole afternoons. So the built page is served only when its
+# stamp is the commit checked out here, which is checked at the bottom of this
+# file before anything is started. A checkout somebody edits has no stamp, or one
+# of an older commit, and gets Vite as it always did; a build of an edited tree is
+# never stamped. `serve.ts` refuses a stale build itself too (a 503 that says
+# why), so even `bun run start` by hand cannot serve one.
+#
+# On the Vite path the manifest, the health check, the MCP door and this app's
+# own store are middleware in front of the same server — see `doors()` in
+# `vite.config.ts` — because a module is one origin or it is nothing.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -101,6 +105,22 @@ if [ ! -d node_modules ] || [ ! -f "$INSTALLED" ] || [ bun.lock -nt "$INSTALLED"
   touch "$INSTALLED"
   # Rebuild Vite's pre-bundle rather than trust one made from the old packages.
   VITE_FORCE=--force
+fi
+
+# The built page, when its stamp is this checkout's HEAD (`bun run build`, which a
+# host runs at install and update, never at start). Read here, in the shell, so
+# choosing costs a `git rev-parse` and not a process. A checkout somebody edits
+# has no stamp, or one of an older commit, and gets Vite; a stale build is never
+# served (`serve.ts` refuses one too, with a 503 that says why).
+BUILT=
+if [ -f dist/.kehikot-built ] && [ -f dist/index.html ]; then
+  read -r BUILT < dist/.kehikot-built || true
+fi
+if [ -n "$BUILT" ] && [ "$BUILT" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
+  exec bun run serve.ts
+fi
+if [ -n "$BUILT" ]; then
+  echo "paper: dist/ is a build of ${BUILT:0:7}, not of this checkout, so Vite serves the page. \`bun run build\` would make it current." >&2
 fi
 
 exec bunx vite $VITE_FORCE

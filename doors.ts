@@ -293,6 +293,18 @@ export const TICKET = mintTicket()
 export const BUILD = establishBuild({ version: VERSION, dir: import.meta.dirname })
 
 /**
+ * The most a request body may be.
+ *
+ * Bounded, because the caller is whatever on this machine found the port —
+ * loopback is a fence around the machine and not around the programs on it —
+ * and a handler that reads until the socket closes is a handler that can be
+ * asked to read forever. Six megabytes, because the largest body this app
+ * reads is a whole `.tex` file being saved. Past it `doors()` answers 413 and
+ * `answer` is never called.
+ */
+export const MAX_BODY_BYTES = 6_000_000
+
+/**
  * The refusal for a write that did not carry this process's ticket, or `null`
  * when it did.
  *
