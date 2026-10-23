@@ -5,8 +5,9 @@ import react from '@vitejs/plugin-react'
 import { doors, serves, type Answer } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
-import { BUILD, MANIFEST, TICKET, answer } from './doors.ts'
+import { BUILD, MANIFEST, MAX_BODY_BYTES, TICKET, answer } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
+import { SAYS } from './says.ts'
 
 /**
  * Every door this app answers on, served by the one process that serves the
@@ -83,26 +84,10 @@ function says(): Plugin {
        * who set `KEHIKKO_PAPERS_DIR` in a shell profile months ago and cannot
        * see why it has stopped doing anything.
        */
-      server.config.logger.info(
-        'paper: papers come from the open project — <project>/.kehikot/paper/<epic>/main.tex, and nowhere else. '
-          + 'KEHIKKO_PAPERS_DIR and KEHIKKO_THESIS_DIR are gone, and so is the papers.json that briefly replaced '
-          + 'them; all three are ignored if they are still there.',
-      )
+      server.config.logger.info(SAYS)
     },
   }
 }
-
-/**
- * The most a request body may be.
- *
- * Bounded, because the caller is whatever on this machine found the port —
- * loopback is a fence around the machine and not around the programs on it —
- * and a handler that reads until the socket closes is a handler that can be
- * asked to read forever. Six megabytes, because the largest body this app
- * reads is a whole `.tex` file being saved. Past it `doors()` answers 413 and
- * `answer` is never called.
- */
-const MAX_BODY_BYTES = 6_000_000
 
 /**
  * The dev server, and the one line that is absent from it.
