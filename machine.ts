@@ -6,6 +6,7 @@ import { moduleFolder, projectFile, projectKey, readProjectFile } from 'kehikot-
 import { registryDir } from 'kehikot-module-protocol/serve'
 
 import { ID } from './manifest.ts'
+import { touched } from './news.ts'
 
 /**
  * This module's state about a project that is NOT the project's: kept in the
@@ -109,11 +110,24 @@ export function readJson<T>(path: string): T | null {
 /** Written to a temporary file and renamed. Failures are swallowed: state is a convenience, never a reason to fail a request. */
 export function writeJson(path: string, value: unknown): boolean {
   try {
+    const text = `${JSON.stringify(value)}\n`
+    /* The same state again is not a write, and not news (`news.ts`): a page watching the paper is
+       told only of what moved. */
+    if (sameText(path, text)) return true
     mkdirSync(dirname(path), { recursive: true })
     const scratch = `${path}.${process.pid}.tmp`
-    writeFileSync(scratch, `${JSON.stringify(value)}\n`)
+    writeFileSync(scratch, text)
     renameSync(scratch, path)
+    touched()
     return true
+  } catch {
+    return false
+  }
+}
+
+function sameText(path: string, text: string): boolean {
+  try {
+    return readFileSync(path, 'utf8') === text
   } catch {
     return false
   }
@@ -121,7 +135,9 @@ export function writeJson(path: string, value: unknown): boolean {
 
 export function removeState(path: string): void {
   try {
+    if (!existsSync(path)) return
     rmSync(path, { recursive: true, force: true })
+    touched()
   } catch {
     /* nothing to do */
   }

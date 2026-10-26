@@ -101,6 +101,7 @@ beforeEach(() => {
       case '/api/build': return json({ ok: true, build: { engine: null, engines: [], how: '', running: false, last: null, pdf: null } })
       case '/api/proposals': return json({ ok: true, proposals: [], said: '' })
       case '/api/uncommitted': return json({ ok: true, standing: { at: 'nogit' }, hashes: hashes() })
+      case '/api/changes': return json({ ok: true, proposals: [], said: '', standing: { at: 'nogit' }, hashes: hashes() })
       case '/api/file':
         posted.push({ file, text: String(body?.text) })
         disk[file] = String(body?.text)

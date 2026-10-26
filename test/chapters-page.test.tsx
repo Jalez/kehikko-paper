@@ -77,6 +77,8 @@ let listed: { id: string; name: string }[]
 const fetchWas = globalThis.fetch
 
 function serve(path: string, query: URLSearchParams, body: Record<string, unknown> | null, method: string): [number, unknown] {
+  /* 2.8.0: the page asks both in one (`/api/changes`); no tag, so every answer is news. */
+  if (path === '/api/changes') return [200, { ...((serve('/api/proposals', query, body, method))[1] as object), ...((serve('/api/uncommitted', query, body, method))[1] as object), ok: true }]
   const file = String(query.get('file') ?? body?.file ?? 'main.tex')
   if (path === '/api/paper') return [200, { ok: true, paper: paperNow() }]
   if (path === '/api/source') return [200, { ok: true, source: TEXT[file], hash: hashOf(TEXT[file]!) }]

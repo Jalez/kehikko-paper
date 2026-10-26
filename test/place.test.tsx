@@ -76,6 +76,8 @@ const buildNow = () => ({
 })
 
 function serve(path: string, query: URLSearchParams): [number, unknown] {
+  /* 2.8.0: the page asks both in one (`/api/changes`); no tag, so every answer is news. */
+  if (path === '/api/changes') return [200, { ...((serve('/api/proposals', query))[1] as object), ...((serve('/api/uncommitted', query))[1] as object), ok: true }]
   const file = String(query.get('file') ?? 'main.tex')
   if (path === '/api/paper') return [200, { ok: true, paper: paperNow(String(query.get('epic'))) }]
   if (path === '/api/source') return [200, { ok: true, source: disk[file], hash: hashOf(disk[file]!) }]

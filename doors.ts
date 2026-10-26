@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { doorContext } from 'kehikot-module-protocol'
 import { DOOR_PROJECT_SAYS, establishBuild, mintTicket, refuseTicket, resolveDoorProject, type Reply as DoorReply } from 'kehikot-module-protocol/serve'
 import { join, relative } from 'node:path'
@@ -1217,6 +1218,72 @@ function versionsOf(all: Proposal[]): Proposal[] {
   return all.map((p) => (alt.has(p.id) ? { ...p, alt: alt.get(p.id)! } : p))
 }
 
+/**
+ * What `/api/proposals` answers: what has been suggested about this paper and not yet answered,
+ * and the facts beside it. No project is an empty list (see the door).
+ */
+export function proposalsAnswer(project: string | null, epic: string): Record<string, unknown> {
+  if (project === null) return { ok: true, proposals: [], auto: false, jump: true, baseline: null, accepted: [], untracked: [] }
+  /* Measured against the disk first — see `settled` — and what that holds
+     back rides along as a sentence, because a suggestion going out of date
+     while somebody was deciding about it reads as the page losing it. Then
+     the files are compared with their baseline: see `review.ts`. */
+  const all = everything(project, epic)
+  return { ok: true, proposals: all.proposals, ...reviewFacts(all.review), said: all.said }
+}
+
+/** What `/api/uncommitted` answers: git's standing and the disk's hashes. No project, or no paper, is `nogit`. */
+export function uncommittedAnswer(project: string | null, epic: string): Record<string, unknown> {
+  if (project === null) return { ok: true, standing: { at: 'nogit' }, hashes: null }
+  const dir = paperRoot(epic, project)
+  if (!dir) return { ok: true, standing: { at: 'nogit' }, hashes: null }
+  /*
+   * Two answers to one question — "what has changed under this paper since
+   * I last looked?" — from the two things that can answer it.
+   *
+   * `standing` is git's: what would go into a commit. `hashes` is the
+   * disk's: what each file of the paper IS right now, keyed exactly as
+   * `Paper.hashes` is, so a page can lay the two side by side and learn
+   * that a chapter it is showing has been rewritten under it — by an
+   * editor, by a merge, by a checkout — without re-reading the paper on
+   * every tick to find out. It is how the page hears about a change this
+   * process did not make — since 2.8.0 told that something moved by
+   * `watch.ts`, which watches the folder, and then reading this — and the
+   * paper door is deliberately not what it reads, because a paper is tens of
+   * kilobytes parsed and a hash is a line. See `hashesOf`.
+   *
+   * The two ride together rather than on two doors because they are read on
+   * the same tick for the same reason, and because they are the same
+   * question asked of two witnesses; a `standing` of `clean` beside hashes
+   * that differ from the page's is the reader's editor having committed for
+   * them, which is a thing worth being able to see in one answer.
+   *
+   * The union as `git.ts` composed it, not flattened into a row of always-
+   * present fields. The page draws a different control for each branch, and
+   * a `files: []` sitting beside `at: 'refused'` is an empty list that means
+   * nothing pretending to be one that means "none".
+   */
+  const ctx = ctxOf(project, epic)
+  const gitBacked = ctx !== null && isGitBacked(ctx)
+  return {
+    ok: true,
+    standing: gitBacked ? standingStaged(dir) : standing(dir),
+    /* What "changed since the last commit" is measured by: what was accepted
+       (staged) where the paper is tracked in git, the working files otherwise. */
+    measuredBy: gitBacked ? 'staged' : 'files',
+    hashes: hashesOf(epic, project),
+  }
+}
+
+/**
+ * Both answers in one, and its tag (2.8.0): `/api/changes`, and what `watch.ts` measures to decide
+ * whether a page watching the paper is told. The tag is the first 16 hex of a sha-256 of the answer.
+ */
+export function changesOf(project: string | null, epic: string): { body: Record<string, unknown>; tag: string } {
+  const body = { ...proposalsAnswer(project, epic), ...uncommittedAnswer(project, epic), ok: true }
+  return { body, tag: createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 16) }
+}
+
 /** What goes beside the list in every answer: the setting, the baseline in words, what was accepted lately. */
 function reviewFacts(review: Review | null): Record<string, unknown> {
   return {
@@ -1567,13 +1634,7 @@ export function answerAt(
        nowhere to have filed anything, so the honest answer is that nothing is
        waiting. The page polls this, and a refusal every four seconds while
        nobody has a project open would be a container that looks broken. */
-    if (project === null) return ok({ ok: true, proposals: [], auto: false, jump: true, baseline: null, accepted: [], untracked: [] })
-    /* Measured against the disk first — see `settled` — and what that holds
-       back rides along as a sentence, because a suggestion going out of date
-       while somebody was deciding about it reads as the page losing it. Then
-       the files are compared with their baseline: see `review.ts`. */
-    const all = everything(project, epic)
-    return ok({ ok: true, proposals: all.proposals, ...reviewFacts(all.review), said: all.said })
+    return ok(proposalsAnswer(project, epic))
   }
 
   /*
@@ -2022,44 +2083,26 @@ export function answerAt(
        is nowhere to have changed anything, so nothing is waiting. The page
        polls this and a refusal every four seconds would be a container that
        looks broken while a reader has simply not opened a project. */
-    if (project === null) return ok({ ok: true, standing: { at: 'nogit' }, hashes: null })
-    const dir = paperRoot(epic, project)
-    if (!dir) return ok({ ok: true, standing: { at: 'nogit' }, hashes: null })
-    /*
-     * Two answers to one question — "what has changed under this paper since
-     * I last looked?" — from the two things that can answer it.
-     *
-     * `standing` is git's: what would go into a commit. `hashes` is the
-     * disk's: what each file of the paper IS right now, keyed exactly as
-     * `Paper.hashes` is, so a page can lay the two side by side and learn
-     * that a chapter it is showing has been rewritten under it — by an
-     * editor, by a merge, by a checkout — without re-reading the paper on
-     * every tick to find out. That is the page's only way of hearing about a
-     * change this process did not make: nothing pushes, there is no watcher,
-     * and the paper door is deliberately not polled, because a paper is tens
-     * of kilobytes parsed and a hash is a line. See `hashesOf`.
-     *
-     * The two ride together rather than on two doors because they are read on
-     * the same tick for the same reason, and because they are the same
-     * question asked of two witnesses; a `standing` of `clean` beside hashes
-     * that differ from the page's is the reader's editor having committed for
-     * them, which is a thing worth being able to see in one answer.
-     *
-     * The union as `git.ts` composed it, not flattened into a row of always-
-     * present fields. The page draws a different control for each branch, and
-     * a `files: []` sitting beside `at: 'refused'` is an empty list that means
-     * nothing pretending to be one that means "none".
-     */
-    const ctx = ctxOf(project, epic)
-    const gitBacked = ctx !== null && isGitBacked(ctx)
-    return ok({
-      ok: true,
-      standing: gitBacked ? standingStaged(dir) : standing(dir),
-      /* What "changed since the last commit" is measured by: what was accepted
-         (staged) where the paper is tracked in git, the working files otherwise. */
-      measuredBy: gitBacked ? 'staged' : 'files',
-      hashes: hashesOf(epic, project),
-    })
+    return ok(uncommittedAnswer(project, epic))
+  }
+
+  /*
+   * Both of the above in one answer, with a tag, for a page that keeps up with a paper (2.8.0).
+   *
+   * The page used to ask `/api/proposals` and `/api/uncommitted` every four seconds each, and every
+   * one of those made this server ask the host whether the project was a project. Now it asks this
+   * when this server says something moved (`/api/watch`, `watch.ts`), and once a minute besides,
+   * naming the tag of what it holds: a `since` that is still the tag is answered `{ ok, same: true,
+   * tag }`, a few bytes, and nothing else is sent. The tag is a hash of the whole answer, so
+   * anything either half would have said differently is a different tag.
+   */
+  if (path === '/api/changes' && method === 'GET') {
+    const epic = str(query.get('epic'), MAX_SLUG)
+    if (!isEpic(epic)) return bad('that is not an epic name')
+    const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    const now = changesOf(project, epic)
+    if (str(query.get('since'), 64) === now.tag) return ok({ ok: true, same: true, tag: now.tag })
+    return ok({ ...now.body, tag: now.tag })
   }
 
   if (path === '/api/figure' && method === 'GET') {

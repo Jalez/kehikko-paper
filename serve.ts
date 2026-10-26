@@ -4,6 +4,7 @@ import { run } from 'kehikot-module-protocol/run'
 import { answer, BUILD, MANIFEST, MAX_BODY_BYTES, TICKET } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { SAYS } from './says.ts'
+import { watchDoor } from './watch.ts'
 
 /**
  * This module over its BUILT page (`bun run build`), on the same doors and the
@@ -26,4 +27,6 @@ await run({
   build: BUILD,
   ticket: TICKET,
   maxBodyBytes: MAX_BODY_BYTES,
+  /* `/api/watch`, the stream that tells the page a paper moved (`watch.ts`); the same door Vite mounts. */
+  before: watchDoor,
 })
