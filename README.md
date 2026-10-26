@@ -1009,6 +1009,8 @@ pushing. `git.ts` says what it refuses and why.
 | `GET /api/proposals`, `POST /api/proposal` | everything waiting for review (staged and in the files, with Auto accept, the baseline in words and what was accepted lately); accept or cancel one |
 | `POST /api/review` | the person's own settings and notes: Auto accept, Jump to next change, a reason, cancel a change accepted lately |
 | `GET /api/uncommitted`, `POST /api/save` | where the repository stands; commit |
+| `GET /api/changes` | both of the above reads in one, with a `tag`; `since=<tag>` that is still the tag answers `{ ok, same: true, tag }` |
+| `GET /api/watch` | server-sent events: `ready`, then `changed` with the new tag whenever the paper's files, its repository's `HEAD`/`index` or this process's suggestions and review state move |
 | `GET /api/templates` | the built-in starting points |
 | `POST /mcp` | the nine tools |
 
@@ -1025,6 +1027,19 @@ server has stopped says so with a Try again. Whatever was typed and not yet
 saved is written to this tab as it changes (`held`), so it is back in the same
 file after a reload — and if that file was written by somebody else meanwhile,
 it comes back as the ordinary conflict rather than over their version.
+
+### Keeping up with a paper
+
+The page asks `/api/changes` only while it is shown: not when its container is
+folded (the host's `containers[].folded`), not under "All epics", not when it
+is drawn at no size (a kehikko switched away from), not scrolled off the
+canvas, not in a hidden tab. While shown it listens to `/api/watch`
+(`watch.ts`), which watches the paper's folder recursively, the repository's
+`HEAD` and `index`, and this process's own state, and says `changed` only when
+the answer's tag moved. It then asks once, naming the tag it holds. Besides
+that it asks once a minute in case an event was missed (a network drive); with
+no stream open it polls every four seconds, as it always did. The stream is
+the same `before` door on Vite (`beforeDoors`) and on `run`.
 
 ## Layout
 

@@ -611,6 +611,12 @@ export function gitView(dir: string): GitView | null {
   return { prefix: prefix.out.toString().trim(), index, head, untracked, unmerged, operation: operationIn(dir) }
 }
 
+/** The repository's own folder (`.git`, or a worktree's) for a directory inside it, or null when there is none. */
+export function gitDirOf(dir: string): string | null {
+  const gitDir = runRaw(dir, ['rev-parse', '--absolute-git-dir'])
+  return gitDir.ok ? gitDir.out.toString().trim() || null : null
+}
+
 /** The markers git itself documents for an operation in progress; the filesystem answers, not six processes. */
 function operationIn(dir: string): string | null {
   const gitDir = runRaw(dir, ['rev-parse', '--absolute-git-dir'])

@@ -91,6 +91,8 @@ const buildNow = () => ({
 })
 
 function serve(path: string, query: URLSearchParams, body: Record<string, unknown> | null): [number, unknown] {
+  /* 2.8.0: the page asks both in one (`/api/changes`); no tag, so every answer is news. */
+  if (path === '/api/changes') return [200, { ...((serve('/api/proposals', query, body))[1] as object), ...((serve('/api/uncommitted', query, body))[1] as object), ok: true }]
   const file = String(query.get('file') ?? body?.file ?? 'main.tex')
   if (path === '/api/paper') return [200, { ok: true, paper: paperNow() }]
   if (path === '/api/source') return [200, { ok: true, source: disk[file], hash: hashOf(disk[file]!) }]
@@ -100,7 +102,11 @@ function serve(path: string, query: URLSearchParams, body: Record<string, unknow
     return [200, { ok: true, build: buildNow() }]
   }
   if (path === '/api/proposals') return [200, { ok: true, proposals: waiting, auto: autoOnHere, jump: true, accepted: [], baseline: { mode: 'snapshot', says: 'compared with what you last accepted in Paper' }, untracked: [], said: '' }]
-  if (path === '/api/review') return [200, { ok: true, proposals: [], auto: body?.action === 'auto' ? body.on === true : false, jump: true, accepted: [], baseline: null, untracked: [] }]
+  if (path === '/api/review') {
+    /* Kept, as the server keeps it: the page reads it back on its next ask (`/api/changes`). */
+    if (body?.action === 'auto') autoOnHere = body.on === true
+    return [200, { ok: true, proposals: [], auto: autoOnHere, jump: true, accepted: [], baseline: null, untracked: [] }]
+  }
   if (path === '/api/uncommitted') return [200, { ok: true, standing: { at: 'nogit' }, hashes: hashes() }]
   if (path === '/api/file') {
     disk[file] = String(body?.text)

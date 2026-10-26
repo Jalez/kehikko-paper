@@ -2,12 +2,13 @@ import { resolve } from 'node:path'
 
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { doors, serves, type Answer } from 'kehikot-module-protocol/serve'
+import { beforeDoors, doors, serves, type Answer } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
 import { BUILD, MANIFEST, MAX_BODY_BYTES, TICKET, answer } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { SAYS } from './says.ts'
+import { watchDoor } from './watch.ts'
 
 /**
  * Every door this app answers on, served by the one process that serves the
@@ -175,6 +176,8 @@ export default defineConfig({
   plugins: [
     serves({ id: ID, prefer: PREFERRED_PORT }),
     says(),
+    /* `/api/watch`, a stream the doors cannot answer (`watch.ts`): ahead of them, as on `run`. */
+    beforeDoors(watchDoor, { name: 'paper-watch' }),
     doors({
       manifest: MANIFEST,
       answer: through,

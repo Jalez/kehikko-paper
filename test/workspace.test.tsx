@@ -91,6 +91,8 @@ const buildNow = () => ({
 })
 
 function serve(method: string, path: string, query: URLSearchParams, body: Record<string, unknown> | null): [number, unknown] {
+  /* 2.8.0: the page asks both in one (`/api/changes`); no tag, so every answer is news. */
+  if (path === '/api/changes') return [200, { ...((serve(method, '/api/proposals', query, body))[1] as object), ...((serve(method, '/api/uncommitted', query, body))[1] as object), ok: true }]
   if (path === '/api/paper') return [200, { ok: true, paper: paperNow() }]
   if (path === '/api/source') return [200, { ok: true, source: disk['main.tex'], hash: hashOf(disk['main.tex']!) }]
   if (path === '/api/build') return [200, { ok: true, build: buildNow() }]

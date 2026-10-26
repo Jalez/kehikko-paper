@@ -8,6 +8,8 @@ import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
 import { json, knownAs, post, standIn, standingIn } from './api.ts'
 import { headerDrawn, rememberHeaderDrawn } from './header-fallback.tsx'
+import { useChanges } from './use-changes.ts'
+import { useShown } from './use-shown.ts'
 
 /**
  * Which paper this page is on, and the conversation with whatever framed it.
@@ -106,8 +108,6 @@ const ID = 'kehikot.paper'
 /** One empty list, so that "no parts" is the same value every time it is said. */
 const NO_PARTS: readonly EpicPart[] = []
 
-/** How often the two polls ask. Slow enough to be nothing, fast enough that a suggestion appears while its author is still watching. */
-const POLL_MS = 4000
 
 function asStanding(value: unknown): Standing | null {
   if (!value || typeof value !== 'object') return null
@@ -133,6 +133,17 @@ function asHashes(value: unknown): Record<string, string> | null {
   return out
 }
 
+/**
+ * Whether the host's context says this page is not shown (2.8.0): this module's container is folded
+ * (`containers[].folded`, protocol 2.9.0), or the canvas is on "All epics" (`scope: 'project'`),
+ * under which a host covers a module that works on one epic. What else hides a page — another
+ * kehikko, a hidden tab — reaches the page another way (`use-shown.ts`).
+ */
+export function hiddenBy(context: { containers?: readonly { module: string; folded?: boolean }[]; scope?: string }): boolean {
+  if (context.scope === 'project') return true
+  return context.containers?.find((one) => one.module === ID)?.folded === true
+}
+
 export function projectFromUrl(search: string): string | null {
   const asked = new URLSearchParams(search).get('project')?.trim()
   return asked ? asked : null
@@ -153,6 +164,8 @@ export function usePaper(framed: boolean) {
   const askAgain = useCallback(() => setNudge((n) => n + 1), [])
   /** The open epic's parts, as the host last said them. `[]` from a host that has none to say, and when nothing frames this page. */
   const [parts, setParts] = useState<readonly EpicPart[]>(NO_PARTS)
+  /** The host's context says this page is not shown: its container folded, or the canvas on "All epics". */
+  const [hostHides, setHostHides] = useState(false)
 
   const goto = useRef<GotoHandler>(() => {})
   /* The open paper's workspace puts its handler here, as it does for `goto`,
@@ -215,9 +228,18 @@ export function usePaper(framed: boolean) {
    * hook's, by the rule `useHost` is given below.
    */
   const arrived = (
-    context: { epic: string | null; projectPath?: string | null; projectId?: string | null; parts?: readonly EpicPart[] },
+    context: {
+      epic: string | null
+      projectPath?: string | null
+      projectId?: string | null
+      parts?: readonly EpicPart[]
+      containers?: readonly { module: string; folded?: boolean }[]
+      scope?: string
+    },
     greeting: boolean,
   ) => {
+    /* Before the early returns below: folding is news even when the epic is not. */
+    setHostHides(hiddenBy(context))
     /* Before anything is remembered or looked up: what the place the host kept is compared by. */
     knownAs(projectKey(context)?.by === 'id' ? (context.projectId as string) : null)
     /* Compared by value: a host composes the list afresh for every context
@@ -315,70 +337,33 @@ export function usePaper(framed: boolean) {
   const [heardFor, setHeardFor] = useState<string | null>(null)
   const epicOnScreen = sight.at === 'reading' ? sight.paper.epic : null
 
+  /*
+   * What has been suggested, what is waiting to be saved, and what each file is on disk: one
+   * answer, asked while this page is shown and when its server says something moved
+   * (`use-changes.ts`). It used to be two polls every four seconds each, folded or not.
+   */
   useEffect(() => {
-    if (epicOnScreen === null) {
-      setProposals([])
-      setFacts(NO_FACTS)
-      return
-    }
-    let stopped = false
-    const ask = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-      void json('/api/proposals', { epic: epicOnScreen })
-        .then((body) => {
-          if (stopped) return
-          if (Array.isArray(body.proposals)) {
-            setProposals(body.proposals as Proposal[])
-            const next = factsOf(body)
-            if (next) setFacts((was) => (JSON.stringify(was) === JSON.stringify(next) ? was : next))
-            setHeardFor(epicOnScreen)
-          }
-          if (typeof body.said === 'string' && body.said) setSaid(body.said)
-        })
-        .catch(() => {
-          /* A poll that failed is retried by the next one. Saying so every
-             four seconds would be a container that looks broken. */
-        })
-    }
-    ask()
-    const every = setInterval(ask, POLL_MS)
-    const woke = () => ask()
-    document.addEventListener('visibilitychange', woke)
-    return () => {
-      stopped = true
-      clearInterval(every)
-      document.removeEventListener('visibilitychange', woke)
-    }
+    if (epicOnScreen !== null) return
+    setProposals([])
+    setFacts(NO_FACTS)
+    setSaving({ at: 'nogit' })
   }, [epicOnScreen])
 
-  useEffect(() => {
-    if (epicOnScreen === null) {
-      setSaving({ at: 'nogit' })
-      return
+  const shown = useShown(hostHides)
+  useChanges(epicOnScreen, shown, nudge, (body) => {
+    if (epicOnScreen === null) return
+    if (Array.isArray(body.proposals)) {
+      setProposals(body.proposals as Proposal[])
+      const next = factsOf(body)
+      if (next) setFacts((was) => (JSON.stringify(was) === JSON.stringify(next) ? was : next))
+      setHeardFor(epicOnScreen)
     }
-    let stopped = false
-    const ask = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-      void json('/api/uncommitted', { epic: epicOnScreen })
-        .then((body) => {
-          if (stopped) return
-          const read = asStanding(body.standing)
-          if (read) setSaving(read)
-          const now = asHashes(body.hashes)
-          if (now) setDisk((was) => (sameHashes(was, now) ? was : now))
-        })
-        .catch(() => {})
-    }
-    ask()
-    const every = setInterval(ask, POLL_MS)
-    const woke = () => ask()
-    document.addEventListener('visibilitychange', woke)
-    return () => {
-      stopped = true
-      clearInterval(every)
-      document.removeEventListener('visibilitychange', woke)
-    }
-  }, [epicOnScreen, nudge])
+    if (typeof body.said === 'string' && body.said) setSaid(body.said)
+    const read = asStanding(body.standing)
+    if (read) setSaving(read)
+    const now = asHashes(body.hashes)
+    if (now) setDisk((was) => (sameHashes(was, now) ? was : now))
+  })
 
   /* One decision at a time. Accepting writes a file and commits it; two of
      those racing is two writers on one file and two `git commit`s on one
