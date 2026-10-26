@@ -18,6 +18,12 @@ describe('what this app claims about itself', () => {
     expect(MANIFEST.declares.protocol).toBe(`>=2 <3`)
   })
 
+  test('it says it provides documents for the parts of an epic, the chapters it publishes (protocol 2.21.0)', () => {
+    /* What a skill that needs "a module that keeps documents" — Flows' /flow-design — is matched against. */
+    expect(MANIFEST.declares.provides).toEqual(['documents'])
+    expect(manifestSchema.parse(MANIFEST).declares.provides).toEqual(['documents'])
+  })
+
   test('its mode is scoped to an epic, in protocol 2’s word for it', () => {
     /* `journey` was protocol 1's spelling and is what raised the number. An
        epic-scoped mode is the only kind that is told which epic is open, which
