@@ -256,7 +256,10 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     '.tex on disk with the tools you already have. Never restate here what the paper already says, ' +
     'because two copies of an argument drift.',
   entry: '/app',
-  modes: [{ id: 'paper', label: 'Paper', scope: 'epic' }],
+  /* What its content belongs to (protocol 2.29.0): one mode per scope, the default first. */
+  modes: [
+    { id: 'paper', label: 'Paper', scope: 'epic', scopeSays: 'the open epic’s paper' },
+  ],
   mcp: {
     url: '/mcp',
     transport: 'http',
