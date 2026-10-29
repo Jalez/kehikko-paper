@@ -28,7 +28,6 @@ import { useToolchain } from './use-toolchain.ts'
 export function CompilerOffer({
   build,
   onInstalled,
-  pollMs,
 }: {
   build: BuildStatus
   /**
@@ -37,14 +36,13 @@ export function CompilerOffer({
    * cancelled install of both leaves the Tectonic it had finished.
    */
   onInstalled: (what: 'compiler' | 'biber', complete: boolean) => void
-  pollMs?: number
 }) {
   const none = build.engines.length === 0
   const mismatch = build.engine && build.last && !build.last.ok && build.last.biber?.fetchable ? build.last.biber : null
   const what: 'compiler' | 'biber' | null = none ? 'compiler' : mismatch ? 'biber' : null
   const { toolchain, unreachable, install, cancel } = useToolchain((complete) => {
     if (what) onInstalled(what, complete)
-  }, pollMs)
+  })
 
   const fallback =
     !build.engine && build.how ? (

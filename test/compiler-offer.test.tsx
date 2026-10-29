@@ -23,6 +23,38 @@ interface Call {
   ticket: string | null
 }
 
+/**
+ * The server's stream of an install's status (`/api/toolchain/events`): opening sends the status as
+ * it stands, as the server's `initial` does, and `push` is the server publishing a move.
+ */
+class Source {
+  static open: Source[] = []
+  static made = 0
+  readyState = 0
+  onopen: (() => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: (() => void) | null = null
+  constructor(readonly url: string) {
+    Source.made++
+    Source.open.push(this)
+    queueMicrotask(() => {
+      if (this.readyState === 2) return
+      this.readyState = 1
+      this.onopen?.()
+      this.send()
+    })
+  }
+  addEventListener() {}
+  close() {
+    this.readyState = 2
+    Source.open = Source.open.filter((one) => one !== this)
+  }
+  send() {
+    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ ok: true, toolchain: state }) }))
+  }
+}
+const push = () => act(() => Source.open.forEach((one) => one.send()))
+
 let calls: Call[]
 let state: ToolchainStatus
 let onInstall: (pieces: string[]) => void
@@ -56,6 +88,9 @@ const mismatched: BuildStatus = {
 }
 
 beforeEach(() => {
+  Source.open = []
+  Source.made = 0
+  ;(globalThis as { EventSource?: unknown }).EventSource = Source
   calls = []
   state = fresh()
   onInstall = (pieces) => {
@@ -76,16 +111,17 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   globalThis.fetch = fetchWas
+  ;(globalThis as { EventSource?: unknown }).EventSource = undefined
 })
 
-/** Let the page's polling run for a moment, inside React's own bookkeeping. */
+/** Let the page run for a moment, inside React's own bookkeeping. */
 const idle = (ms: number) => act(async () => void (await new Promise((done) => setTimeout(done, ms))))
 const posts = () => calls.filter((one) => one.method === 'POST')
 const offer = () => document.querySelector('[data-compiler-offer]')
 
 describe('no compiler on this machine', () => {
   test('the pane says what a compiler is and what the button would fetch — and opening it fetches nothing', async () => {
-    render(<CompilerOffer build={noEngine} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={noEngine} onInstalled={() => {}} />)
     const button = await screen.findByRole('button', { name: 'Install the compiler (about 111 MB)' })
     expect(offer()?.getAttribute('data-compiler-offer')).toBe('offer')
     const said = offer()!.textContent!
@@ -102,7 +138,7 @@ describe('no compiler on this machine', () => {
   })
 
   test('the press starts it, with the page’s ticket; while it runs there is progress and Cancel, and no second button', async () => {
-    render(<CompilerOffer build={noEngine} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={noEngine} onInstalled={() => {}} />)
     fireEvent.click(await screen.findByRole('button', { name: /Install the compiler/ }))
     await waitFor(() => expect(offer()?.getAttribute('data-compiler-offer')).toBe('installing'))
     expect(posts()).toHaveLength(1)
@@ -114,6 +150,7 @@ describe('no compiler on this machine', () => {
     expect(screen.queryByRole('button', { name: /Install the compiler/ })).toBeNull()
 
     state = { ...state, received: 34_000_000 }
+    push()
     await waitFor(() => expect(offer()!.textContent).toContain('34 of 111 MB'))
     const bar = screen.getByLabelText('Download progress') as HTMLProgressElement
     expect(bar.getAttribute('value')).toBe('34000000')
@@ -125,11 +162,43 @@ describe('no compiler on this machine', () => {
     expect(document.querySelector('[data-install-error]')).toBeNull()
   })
 
+  test('while it runs nothing is asked on a clock: one stream says how it goes, and closes when it ends', async () => {
+    const intervals: unknown[] = []
+    const realInterval = globalThis.setInterval
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => (intervals.push(args[1]), realInterval(...args))) as typeof setInterval
+    try {
+      /* No `findBy`/`waitFor` in here: they keep an interval of their own. */
+      render(<CompilerOffer build={noEngine} onInstalled={() => {}} />)
+      await idle(20)
+      fireEvent.click(screen.getByRole('button', { name: /Install the compiler/ }))
+      await idle(20)
+      expect(offer()?.getAttribute('data-compiler-offer')).toBe('installing')
+    } finally {
+      globalThis.setInterval = realInterval
+    }
+    expect(intervals).toEqual([])
+    expect(Source.made).toBe(1)
+    expect(Source.open[0]!.url).toBe('/api/toolchain/events')
+    const before = calls.length
+    await idle(50)
+    /* An install left running asks nothing more. */
+    expect(calls.length).toBe(before)
+    expect(calls.filter((one) => one.path === '/api/toolchain')).toHaveLength(1)
+    state = { ...state, received: 50_000_000 }
+    push()
+    await waitFor(() => expect(offer()!.textContent).toContain('50 of 111 MB'))
+    state = { ...state, running: false, received: state.total, pieces: state.pieces.map((one) => ({ ...one, installed: true })) }
+    push()
+    await waitFor(() => expect(Source.open).toHaveLength(0))
+    expect(calls.length).toBe(before)
+  })
+
   test('a failure is the reason and Retry, and Retry asks again', async () => {
-    render(<CompilerOffer build={noEngine} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={noEngine} onInstalled={() => {}} />)
     fireEvent.click(await screen.findByRole('button', { name: /Install the compiler/ }))
     await waitFor(() => expect(offer()?.getAttribute('data-compiler-offer')).toBe('installing'))
     state = { ...state, running: false, error: 'github.com could not be reached, so nothing was downloaded. Check that this machine is online and try again.' }
+    push()
     await waitFor(() => expect(offer()?.getAttribute('data-compiler-offer')).toBe('failed'))
     expect(document.querySelector('[data-install-error]')!.textContent).toContain('github.com could not be reached')
     fireEvent.click(screen.getByRole('button', { name: 'Retry: install the compiler (about 111 MB)' }))
@@ -139,16 +208,18 @@ describe('no compiler on this machine', () => {
 
   test('the page is told once when an install ends, and whether everything is in place', async () => {
     const told: string[] = []
-    render(<CompilerOffer build={noEngine} onInstalled={(what, complete) => told.push(`${what}:${complete}`)} pollMs={5} />)
+    render(<CompilerOffer build={noEngine} onInstalled={(what, complete) => told.push(`${what}:${complete}`)} />)
     fireEvent.click(await screen.findByRole('button', { name: /Install the compiler/ }))
     await waitFor(() => expect(offer()?.getAttribute('data-compiler-offer')).toBe('installing'))
     state = { ...state, running: false, error: 'it broke' }
+    push()
     await waitFor(() => expect(offer()?.getAttribute('data-compiler-offer')).toBe('failed'))
     expect(told).toEqual(['compiler:false'])
 
     fireEvent.click(screen.getByRole('button', { name: /Retry/ }))
     await waitFor(() => expect(offer()?.getAttribute('data-compiler-offer')).toBe('installing'))
     state = { ...state, running: false, received: state.total, pieces: state.pieces.map((one) => ({ ...one, installed: true })) }
+    push()
     await waitFor(() => expect(told).toEqual(['compiler:false', 'compiler:true']))
     await idle(30)
     expect(told).toEqual(['compiler:false', 'compiler:true'])
@@ -157,7 +228,7 @@ describe('no compiler on this machine', () => {
   test('only what is missing is offered: with Tectonic already fetched, the button is the biber alone', async () => {
     state = fresh()
     state.pieces[0]!.installed = true
-    render(<CompilerOffer build={noEngine} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={noEngine} onInstalled={() => {}} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Install the compiler (about 89 MB)' }))
     await waitFor(() => expect(posts()).toHaveLength(1))
     expect(posts()[0]!.body!.pieces).toEqual(['biber'])
@@ -165,7 +236,7 @@ describe('no compiler on this machine', () => {
 
   test('where there is nothing to fetch for this machine, it says what it always said', async () => {
     state = fresh({ supported: false, pieces: [] })
-    render(<CompilerOffer build={noEngine} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={noEngine} onInstalled={() => {}} />)
     await waitFor(() => expect(document.querySelector('[data-no-engine]')).not.toBeNull())
     expect(document.querySelector('[data-no-engine]')!.textContent).toContain('brew install tectonic')
     expect(offer()).toBeNull()
@@ -174,7 +245,7 @@ describe('no compiler on this machine', () => {
 
   test('a paper that names an engine the machine lacks is told that, and offered nothing', async () => {
     const named: BuildStatus = { ...noEngine, engines: ['tectonic'], how: 'main.tex asks for xelatex in its “% !TEX program” line, and xelatex is not installed on this machine (installed: tectonic).' }
-    render(<CompilerOffer build={named} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={named} onInstalled={() => {}} />)
     expect(document.querySelector('[data-no-engine]')!.textContent).toContain('asks for xelatex')
     await idle(20)
     expect(offer()).toBeNull()
@@ -184,7 +255,7 @@ describe('no compiler on this machine', () => {
 describe('the machine’s biber is the wrong release', () => {
   test('the one piece is offered in place of advice, and a compile follows it', async () => {
     const told: string[] = []
-    render(<CompilerOffer build={mismatched} onInstalled={(what, complete) => told.push(`${what}:${complete}`)} pollMs={5} />)
+    render(<CompilerOffer build={mismatched} onInstalled={(what, complete) => told.push(`${what}:${complete}`)} />)
     const button = await screen.findByRole('button', { name: 'Install biber 2.17 (about 89 MB)' })
     expect(offer()!.getAttribute('data-offer-for')).toBe('biber')
     const said = offer()!.textContent!
@@ -198,6 +269,7 @@ describe('the machine’s biber is the wrong release', () => {
     await waitFor(() => expect(posts()).toHaveLength(1))
     expect(posts()[0]!.body!.pieces).toEqual(['biber'])
     state = { ...state, running: false, pieces: state.pieces.map((one) => (one.id === 'biber' ? { ...one, installed: true } : one)) }
+    push()
     await waitFor(() => expect(told).toEqual(['biber:true']))
     /* Fetched: there is nothing left to offer. */
     await waitFor(() => expect(offer()).toBeNull())
@@ -205,7 +277,7 @@ describe('the machine’s biber is the wrong release', () => {
 
   test('no biber at all is the same offer, said as what it is', async () => {
     const absent: BuildStatus = { ...mismatched, last: { ...mismatched.last!, biber: { have: null, biblatex: '3.17', need: '2.17', fetchable: true } } }
-    render(<CompilerOffer build={absent} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={absent} onInstalled={() => {}} />)
     await screen.findByRole('button', { name: 'Install biber 2.17 (about 89 MB)' })
     expect(offer()!.textContent).toContain('The bibliography needs biber')
     expect(offer()!.textContent).toContain('this machine has no biber')
@@ -213,11 +285,11 @@ describe('the machine’s biber is the wrong release', () => {
 
   test('a mismatch this module has no biber for is not an offer; nor is a compile that worked', async () => {
     const other: BuildStatus = { ...mismatched, last: { ...mismatched.last!, biber: { have: '2.17', biblatex: '3.20', need: '2.20', fetchable: false } } }
-    render(<CompilerOffer build={other} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={other} onInstalled={() => {}} />)
     await idle(20)
     expect(offer()).toBeNull()
     cleanup()
-    render(<CompilerOffer build={{ ...mismatched, last: { ...mismatched.last!, ok: true, biber: null } }} onInstalled={() => {}} pollMs={5} />)
+    render(<CompilerOffer build={{ ...mismatched, last: { ...mismatched.last!, ok: true, biber: null } }} onInstalled={() => {}} />)
     await idle(20)
     expect(offer()).toBeNull()
     expect(screen.queryByRole('button')).toBeNull()

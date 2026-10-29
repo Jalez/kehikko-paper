@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react'
 import { beforeDoors, doors, serves, type Answer } from 'kehikot-module-protocol/serve'
 import { defineConfig, type Plugin } from 'vite'
 
+import { toolchainStream } from './compile/install.ts'
 import { BUILD, MANIFEST, MAX_BODY_BYTES, TICKET, answer } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { SAYS } from './says.ts'
@@ -184,6 +185,8 @@ export default defineConfig({
       build: BUILD,
       page: { title: 'Paper', ticket: TICKET },
       maxBodyBytes: MAX_BODY_BYTES,
+      /* `/api/toolchain/events`, how an install is going (`compile/install.ts`); the same door `run` mounts. */
+      stream: toolchainStream,
     }),
     react(),
     tailwindcss(),

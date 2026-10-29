@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { act, renderHook } from '@testing-library/react'
+import { act, cleanup, renderHook } from '@testing-library/react'
 
 import { standIn } from '../src/api.ts'
-import { POLL_MS, SAFETY_MS, useChanges } from '../src/use-changes.ts'
+import { useChanges } from '../src/use-changes.ts'
 import { hiddenBy } from '../src/use-paper.ts'
 import { useShown } from '../src/use-shown.ts'
 
 /**
  * 2.8.0: the page asks its server about a paper only while it is shown, in one request, when the
- * server says something moved — and polls (every `POLL_MS`) only when no stream is open.
+ * server says something moved. 2.9.0: never on a clock — no poll while the stream is down, no
+ * once-a-minute ask while it is up; the stream reopening says what moved meanwhile.
  */
 
 /** A stand-in for the browser's EventSource: the test says what the server sends. */
@@ -16,6 +17,9 @@ class Stream {
   static made: Stream[] = []
   readonly url: string
   closed = false
+  readyState = 0
+  onopen: (() => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
   onerror: (() => void) | null = null
   readonly #on = new Map<string, ((event: MessageEvent) => void)[]>()
   constructor(url: string) {
@@ -27,6 +31,7 @@ class Stream {
   }
   close() {
     this.closed = true
+    this.readyState = 2
   }
   send(name: string, data: unknown) {
     for (const listener of this.#on.get(name) ?? []) listener(new MessageEvent(name, { data: JSON.stringify(data) }))
@@ -59,6 +64,7 @@ beforeEach(() => {
   }) as typeof setTimeout
 })
 afterEach(() => {
+  cleanup()
   globalThis.fetch = realFetch
   globalThis.setTimeout = realTimeout
   ;(globalThis as { EventSource?: unknown }).EventSource = undefined
@@ -111,10 +117,20 @@ describe('useChanges', () => {
     expect(Stream.made).toEqual([])
   })
 
-  test('shown: one ask and one stream; a quiet stream asks only once a minute', async () => {
+  test('shown: one ask and one stream, and nothing scheduled on a clock', async () => {
     ;(globalThis as { EventSource?: unknown }).EventSource = Stream
     const heard: unknown[] = []
-    renderHook(() => useChanges('a-paper', true, 0, (body) => heard.push(body)))
+    const intervals: unknown[] = []
+    const realInterval = globalThis.setInterval
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => (intervals.push(args[1]), realInterval(...args))) as typeof setInterval
+    try {
+      renderHook(() => useChanges('a-paper', true, 0, (body) => heard.push(body)))
+    } finally {
+      globalThis.setInterval = realInterval
+    }
+    /* Counted before anything of the test's own waits. */
+    expect(intervals).toEqual([])
+    expect(timeouts).toEqual([])
     await settle()
     expect(changesAsked().length).toBe(1)
     expect(heard.length).toBe(1)
@@ -122,9 +138,21 @@ describe('useChanges', () => {
     expect(new URL(Stream.made[0]!.url, 'http://x').searchParams.get('project')).toBe('/work/project')
     await act(async () => Stream.made[0]!.send('ready', { tag: 't1' }))
     await settle()
-    /* Ready with the tag already held: nothing more to ask; the next ask is a minute away. */
+    /* Ready with the tag already held: nothing more to ask, and nothing waiting to ask later. */
     expect(changesAsked().length).toBe(1)
-    expect(timeouts.at(-1)).toBe(SAFETY_MS)
+    expect(timeouts).toEqual([])
+  })
+
+  test('an hour of a quiet stream is still one ask', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    renderHook(() => useChanges('a-paper', true, 0, () => {}))
+    await settle()
+    await act(async () => Stream.made[0]!.send('ready', { tag: 't1' }))
+    await settle()
+    /* Every wait anything scheduled, run now, as if an hour went by. */
+    expect(timeouts).toEqual([])
+    expect(changesAsked().length).toBe(1)
+    expect(asked.filter((url) => url.pathname !== '/api/changes')).toEqual([])
   })
 
   test('changed with a new tag asks once; with the tag held, not at all', async () => {
@@ -159,22 +187,47 @@ describe('useChanges', () => {
     expect(Stream.made.length).toBe(2)
   })
 
-  test('with no stream to listen to, it polls every four seconds, as it did', async () => {
-    renderHook(() => useChanges('a-paper', true, 0, () => {}))
-    await settle()
-    expect(changesAsked().length).toBe(1)
-    expect(timeouts).toContain(POLL_MS)
-    expect(timeouts).not.toContain(SAFETY_MS)
-  })
-
-  test('a stream that drops goes back to polling', async () => {
+  test('a stream that drops does not start a poll: it is reopened, and its ready asks only if the tag moved', async () => {
     ;(globalThis as { EventSource?: unknown }).EventSource = Stream
     renderHook(() => useChanges('a-paper', true, 0, () => {}))
     await settle()
     await act(async () => Stream.made[0]!.send('ready', { tag: 't1' }))
-    expect(timeouts.at(-1)).toBe(SAFETY_MS)
+    /* The server went away: the browser gave up on this one. */
+    Stream.made[0]!.readyState = 2
     await act(async () => Stream.made[0]!.onerror?.())
-    expect(timeouts.at(-1)).toBe(POLL_MS)
+    await settle()
+    /* One reconnect, waiting a moment; no ask of /api/changes on a clock. */
+    expect(timeouts.length).toBe(1)
+    expect(changesAsked().length).toBe(1)
+    /* What a reopened stream would say, with a change made meanwhile. */
+    tag = 't2'
+    await act(async () => Stream.made[0]!.send('ready', { tag: 't2' }))
+    await settle()
+    expect(changesAsked().length).toBe(2)
+  })
+
+  test('a tab put behind closes the stream; brought back, it opens again and its ready catches up', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    let state: DocumentVisibilityState = 'visible'
+    const was = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState') ?? Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    try {
+      renderHook(() => useChanges('a-paper', true, 0, () => {}))
+      await settle()
+      state = 'hidden'
+      await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+      expect(Stream.made[0]!.closed).toBe(true)
+      tag = 't2'
+      state = 'visible'
+      await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+      expect(Stream.made.length).toBe(2)
+      await act(async () => Stream.made[1]!.send('ready', { tag: 't2' }))
+      await settle()
+      expect(changesAsked().length).toBe(2)
+    } finally {
+      if (was) Object.defineProperty(document, 'visibilityState', was)
+      else delete (document as { visibilityState?: unknown }).visibilityState
+    }
   })
 
   test('a nudge asks at once', async () => {

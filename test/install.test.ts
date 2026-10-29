@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 
-import { createInstaller, extract, toolsDir, trusted, type Installer } from '../compile/install.ts'
+import { TOOLCHAIN_EVENTS, createInstaller, extract, installer, toolchainStream, toolsDir, trusted, type Installer } from '../compile/install.ts'
 import type { Artefact } from '../compile/toolchain.ts'
 import { TICKET, answerAt as answer } from '../doors.ts'
 import { tarOf, zipOf, type Entry } from './archives.ts'
@@ -415,5 +415,52 @@ describe('the doors in front of it', () => {
     const said = JSON.stringify(listed?.body ?? '')
     expect(said).toContain('read_paper')
     expect(said).not.toMatch(/install|toolchain|download/i)
+  })
+})
+
+describe('the page is told how an install goes, over its stream (never asked on a clock)', () => {
+  test('the installer says every move: the start, bytes arriving, the end', async () => {
+    const net = server({ 'tectonic.tar.gz': tectonicArchive, 'biber.tar.gz': biberArchive })
+    const moves: { running: boolean; received: number }[] = []
+    const tools: Installer = createInstaller({ dir, artefacts: both(), fetch: net.fetcher, probe: async () => '3.17', onChange: () => moves.push({ running: tools.status().running, received: tools.status().received }) })
+    tools.install()
+    await tools.settled()
+    expect(moves[0]!.running).toBe(true)
+    expect(moves.filter((one) => one.running && one.received > 0).length).toBeGreaterThan(1)
+    expect(moves.at(-1)).toEqual({ running: false, received: tools.status().total })
+  })
+
+  test('/api/toolchain/events opens with the status, and is sent the end of an install started at the door', async () => {
+    const was = process.env.KEHIKOT_PAPER_TOOLS_DIR
+    const fetchWas = globalThis.fetch
+    process.env.KEHIKOT_PAPER_TOOLS_DIR = dir
+    /* No network: the install fails at once, which is an end like any other. */
+    globalThis.fetch = (async () => new Response('no', { status: 404 })) as unknown as typeof fetch
+    const heard: { ok: boolean; toolchain: { running: boolean; error: string | null } }[] = []
+    try {
+      expect(toolchainStream('GET', '/api/nope', new URLSearchParams(), () => {}, null)).toBeNull()
+      const opened = toolchainStream('GET', TOOLCHAIN_EVENTS, new URLSearchParams(), (data) => void heard.push(data as (typeof heard)[number]), null) as { close: () => void }
+      expect(opened && 'close' in opened).toBe(true)
+      expect(heard).toHaveLength(1)
+      expect(heard[0]!.toolchain.running).toBe(false)
+      if (!installer().status().supported) return opened.close()
+      const started = await answer('POST', '/api/toolchain/install', new URLSearchParams(), { pieces: ['tectonic'] }, TICKET)
+      expect((started?.body as { toolchain: { running: boolean } }).toolchain.running).toBe(true)
+      await installer().settled()
+      const last = heard.at(-1)!
+      expect(last.ok).toBe(true)
+      expect(last.toolchain.running).toBe(false)
+      expect(last.toolchain.error).toContain('404')
+      /* Nobody following: nothing is sent, and nothing waits to be. */
+      opened.close()
+      const count = heard.length
+      installer().install(['tectonic'])
+      await installer().settled()
+      expect(heard.length).toBe(count)
+    } finally {
+      globalThis.fetch = fetchWas
+      if (was === undefined) delete process.env.KEHIKOT_PAPER_TOOLS_DIR
+      else process.env.KEHIKOT_PAPER_TOOLS_DIR = was
+    }
   })
 })

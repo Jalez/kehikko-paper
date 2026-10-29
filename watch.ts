@@ -40,9 +40,19 @@ import { isEpic, paperRoot } from './store.ts'
  * ## What it is not
  *
  * A promise. A network drive may send no events at all, and a watcher can be dropped by the
- * system. The page still asks once a minute while it is shown (`SAFETY_MS` in `use-changes.ts`),
- * and at once after anything it does itself (a save, an accept), so a missed event costs at most a
- * minute, never a lost suggestion.
+ * system. The page does not poll to make up for it (a page never polls its own module): it asks at
+ * once after anything it does itself (a save, an accept), and again whenever this stream reopens
+ * (`ready` carries the tag, so a tab brought back to the front, a dropped connection or a restarted
+ * server is caught up). Suggestions are this process's state (`news.ts`) and never depend on a
+ * watcher, so a missed folder event delays a hand edit on screen, never loses a suggestion.
+ *
+ * ## Why this is not the protocol's `events` door
+ *
+ * `events(route)` routes synchronously, and this door must first put the named project to the host
+ * (`resolveDoorProject`, asynchronous, the same check every door here makes) and know the folder it
+ * vouched for before it watches anything. It also opens one set of watchers per paper and closes
+ * them exactly when the last page leaves, which a topic has no hook for. It is the same wire (an
+ * `EventSource` reading `event:` lines) and the page follows it with the protocol's `subscribe`.
  */
 
 export const WATCH_PATH = '/api/watch'
@@ -140,7 +150,7 @@ function groupFor(project: string, epic: string): Group {
     try {
       group.watchers.push(watchFiles(dir, { recursive: true }, () => soon(group)))
     } catch {
-      /* A folder that cannot be watched is asked about once a minute by the page. */
+      /* A folder that cannot be watched: the page still asks after its own writes and as the stream reopens. */
     }
     const git = gitDirOf(dir)
     if (git && existsSync(git)) {
