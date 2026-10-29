@@ -1,7 +1,7 @@
 import { subscribe } from 'kehikot-module-protocol/client'
 import { useEffect, useRef } from 'react'
 
-import { apiUrl, json } from './api.ts'
+import { apiUrl, json, standingIn } from './api.ts'
 
 /**
  * Keeping up with a paper (2.8.0): what has been suggested, what is waiting to be saved and what
@@ -23,6 +23,9 @@ import { apiUrl, json } from './api.ts'
  * stream that cannot be held is reopened (with a pause, doubling to 15 s), and its `ready` says
  * what moved meanwhile.
  *
+ * A paper this page lets go of (another project or epic is being read, so none is on screen) is held
+ * under no tag: coming back asks for it in full, whatever the server says its tag is.
+ *
  * Not shown — folded, on another kehikko, scrolled off, a hidden tab: nothing is asked and the
  * stream is closed. Shown again, it asks once and listens again.
  *
@@ -35,14 +38,20 @@ export function useChanges(
   nudge: number,
   heard: (body: Record<string, unknown>) => void,
 ): void {
-  const tag = useRef<{ epic: string | null; tag: string }>({ epic: null, tag: '' })
+  /* The tag of what this page holds, for ONE paper: an epic in a project. */
+  const tag = useRef<{ epic: string | null; project: string | null; tag: string }>({ epic: null, project: null, tag: '' })
   const told = useRef(heard)
   told.current = heard
   const askNow = useRef<(() => void) | null>(null)
 
   useEffect(() => {
+    /* No paper on screen: the page has let go of the list it held (`use-paper.ts` empties it), so a
+       tag kept from before would say "nothing new" about a list that is now empty. Going to another
+       project and back, or to another epic and back, passes through here (#56). */
+    if (epic === null) tag.current = { epic: null, project: null, tag: '' }
     if (epic === null || !shown) return
-    if (tag.current.epic !== epic) tag.current = { epic, tag: '' }
+    const project = standingIn()
+    if (tag.current.epic !== epic || tag.current.project !== project) tag.current = { epic, project, tag: '' }
     let stopped = false
     let asking = false
     let again = false
@@ -57,7 +66,7 @@ export function useChanges(
       void json('/api/changes', { epic, since: tag.current.tag })
         .then((body) => {
           if (stopped) return
-          if (typeof body.tag === 'string') tag.current = { epic, tag: body.tag }
+          if (typeof body.tag === 'string') tag.current = { epic, project, tag: body.tag }
           if (body.same !== true && body.ok === true) told.current(body)
         })
         .catch(() => {

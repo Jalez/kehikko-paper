@@ -237,4 +237,76 @@ describe('useChanges', () => {
     await settle()
     expect(changesAsked().length).toBe(2)
   })
+
+  /* #56: the page clears what it holds when no paper is on screen (a project or epic switch goes
+     through that), so a tag kept from before says "nothing new" about a list that is empty. */
+  const waiting = [{ id: 'p1' }, { id: 'p2' }]
+  const withProposals = () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input), 'http://127.0.0.1:7870')
+      asked.push(url)
+      const body = url.searchParams.get('since') === tag ? { ok: true, same: true, tag } : { ok: true, proposals: waiting, standing: { at: 'nogit' }, hashes: {}, tag }
+      return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+  }
+
+  test('project A, then B, then A again: the pending suggestions are read again on return', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    withProposals()
+    const heard: Record<string, unknown>[] = []
+    const { rerender } = renderHook(({ epic }) => useChanges(epic, true, 0, (body) => heard.push(body)), { initialProps: { epic: 'thesis' as string | null } })
+    await settle()
+    expect(heard.length).toBe(1)
+    /* The page leaves A: no paper on screen while B's is asked for. */
+    standIn('/work/other')
+    rerender({ epic: null })
+    await settle()
+    rerender({ epic: 'thesis' })
+    await settle()
+    expect(heard.length).toBe(2)
+    /* And back to A, whose server still says the very same tag. */
+    standIn('/work/project')
+    rerender({ epic: null })
+    await settle()
+    rerender({ epic: 'thesis' })
+    await settle()
+    expect(heard.length).toBe(3)
+    expect(heard.at(-1)!.proposals).toEqual(waiting)
+    expect(changesAsked().at(-1)!.searchParams.get('since')).toBe('')
+    expect(changesAsked().at(-1)!.searchParams.get('project')).toBe('/work/project')
+  })
+
+  test('epic X, then Y, then X again within one project: X is read again on return', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    withProposals()
+    const heard: Record<string, unknown>[] = []
+    const { rerender } = renderHook(({ epic }) => useChanges(epic, true, 0, (body) => heard.push(body)), { initialProps: { epic: 'x' as string | null } })
+    await settle()
+    for (const epic of ['y', 'x']) {
+      rerender({ epic: null })
+      await settle()
+      rerender({ epic })
+      await settle()
+    }
+    expect(heard.length).toBe(3)
+    expect(changesAsked().map((url) => url.searchParams.get('epic'))).toEqual(['x', 'y', 'x'])
+    expect(changesAsked().at(-1)!.searchParams.get('since')).toBe('')
+  })
+
+  test('a stream reopened after the switch says ready with a tag already seen: the list still arrives once', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    withProposals()
+    const heard: Record<string, unknown>[] = []
+    const { rerender } = renderHook(({ epic }) => useChanges(epic, true, 0, (body) => heard.push(body)), { initialProps: { epic: 'thesis' as string | null } })
+    await settle()
+    await act(async () => Stream.made[0]!.send('ready', { tag: 't1' }))
+    rerender({ epic: null })
+    await settle()
+    rerender({ epic: 'thesis' })
+    await act(async () => Stream.made.at(-1)!.send('ready', { tag: 't1' }))
+    await settle()
+    expect(Stream.made.length).toBe(2)
+    expect(heard.length).toBe(2)
+    expect(changesAsked().length).toBe(2)
+  })
 })
