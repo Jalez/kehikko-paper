@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { run } from 'kehikot-module-protocol/run'
 
+import { toolchainStream } from './compile/install.ts'
 import { answer, BUILD, MANIFEST, MAX_BODY_BYTES, TICKET } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { SAYS } from './says.ts'
@@ -27,6 +28,8 @@ await run({
   build: BUILD,
   ticket: TICKET,
   maxBodyBytes: MAX_BODY_BYTES,
+  /* `/api/toolchain/events`, how an install is going (`compile/install.ts`); the same door Vite mounts. */
+  stream: toolchainStream,
   /* `/api/watch`, the stream that tells the page a paper moved (`watch.ts`); the same door Vite mounts. */
   before: watchDoor,
 })

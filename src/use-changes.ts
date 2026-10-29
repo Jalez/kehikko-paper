@@ -1,11 +1,7 @@
+import { subscribe } from 'kehikot-module-protocol/client'
 import { useEffect, useRef } from 'react'
 
 import { apiUrl, json } from './api.ts'
-
-/** How often the page asks while its server's stream is not open: as before 2.8.0. */
-export const POLL_MS = 4000
-/** How often it asks while the stream is open: in case the watcher missed something (a network drive). */
-export const SAFETY_MS = 60_000
 
 /**
  * Keeping up with a paper (2.8.0): what has been suggested, what is waiting to be saved and what
@@ -18,17 +14,21 @@ export const SAFETY_MS = 60_000
  * - While shown, the server is listened to (`/api/watch`, server-sent events, `watch.ts`): it
  *   watches the paper's folder, its repository and its own state, and says `changed` when the
  *   answer moved. Then it is asked once.
- * - While that stream is open, once a minute besides (`SAFETY_MS`), in case a change went unseen.
- * - While it is not open (a server from before 2.8.0, a stream that dropped): every `POLL_MS`, as
- *   the page always did.
- * - `nudge` asks at once: after something this page did itself. So does the page coming back to
- *   the front (`visibilitychange`).
+ * - Each time that stream (re)opens — after a drop, a server that restarted, or the tab coming back
+ *   to the front — it says `ready` with the tag the server holds, and a tag other than this page's
+ *   is asked once. The stream is reopened by `subscribe`, which closes it while the tab is hidden.
+ * - `nudge` asks at once: after something this page did itself.
+ *
+ * Never on a clock: no poll while the stream is down and no "just in case" ask while it is up. A
+ * stream that cannot be held is reopened (with a pause, doubling to 15 s), and its `ready` says
+ * what moved meanwhile.
  *
  * Not shown — folded, on another kehikko, scrolled off, a hidden tab: nothing is asked and the
  * stream is closed. Shown again, it asks once and listens again.
  *
  * `heard` is handed every answer that is not `same`.
  */
+
 export function useChanges(
   epic: string | null,
   shown: boolean,
@@ -46,17 +46,6 @@ export function useChanges(
     let stopped = false
     let asking = false
     let again = false
-    let pushing = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-
-    const schedule = () => {
-      if (timer) clearTimeout(timer)
-      if (stopped) return
-      timer = setTimeout(() => {
-        ask()
-        schedule()
-      }, pushing ? SAFETY_MS : POLL_MS)
-    }
 
     const ask = () => {
       if (stopped) return
@@ -72,8 +61,8 @@ export function useChanges(
           if (body.same !== true && body.ok === true) told.current(body)
         })
         .catch(() => {
-          /* A failed ask is asked again by the next one. Saying so every few seconds would be a
-             container that looks broken. */
+          /* A failed ask is asked again by the next piece of news, or the stream opening again.
+             Saying so would be a container that looks broken. */
         })
         .finally(() => {
           asking = false
@@ -84,55 +73,25 @@ export function useChanges(
         })
     }
 
-    let stream: EventSource | null = null
-    if (typeof EventSource === 'function') {
-      try {
-        stream = new EventSource(apiUrl('/api/watch', { epic }))
-        const fresh = (event: MessageEvent) => {
-          let said: unknown = null
-          try {
-            said = JSON.parse(String(event.data))
-          } catch {
-            said = null
-          }
-          const now = said && typeof said === 'object' ? (said as { tag?: unknown }).tag : null
-          if (typeof now === 'string' && now === tag.current.tag) return
-          /* The first answer is still on its way: it will say what this one would. */
-          if (asking && tag.current.tag === '') return
-          ask()
-        }
-        stream.addEventListener('ready', (event) => {
-          pushing = true
-          schedule()
-          /* Opened again after a drop, or by a server that restarted: whatever moved meanwhile. */
-          fresh(event as MessageEvent)
-        })
-        stream.addEventListener('changed', (event) => fresh(event as MessageEvent))
-        stream.onerror = () => {
-          if (!pushing) return
-          pushing = false
-          schedule()
-        }
-      } catch {
-        stream = null
-      }
+    /* `ready` as the stream (re)opens and `changed` when the answer moved: each carries the tag the
+       server measured, and only a tag this page does not hold is asked about. */
+    const fresh = (said: unknown) => {
+      const now = said && typeof said === 'object' ? (said as { tag?: unknown }).tag : null
+      if (typeof now === 'string' && now === tag.current.tag) return
+      /* The first answer is still on its way: it will say what this one would. */
+      if (asking && tag.current.tag === '') return
+      ask()
     }
-
-    /* The page coming back to the front asks at once, as it always did. */
-    const woke = () => {
-      if (document.visibilityState !== 'hidden') ask()
-    }
-    document.addEventListener('visibilitychange', woke)
+    const unsubscribe = subscribe<unknown>(apiUrl('/api/watch', { epic }), (said, name) => {
+      if (name === 'ready' || name === 'changed') fresh(said)
+    }, { events: ['ready', 'changed'], probe: true })
 
     askNow.current = ask
     ask()
-    schedule()
     return () => {
       stopped = true
       askNow.current = null
-      if (timer) clearTimeout(timer)
-      document.removeEventListener('visibilitychange', woke)
-      stream?.close()
+      unsubscribe()
     }
   }, [epic, shown])
 

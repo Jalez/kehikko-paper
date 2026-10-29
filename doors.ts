@@ -2091,7 +2091,7 @@ export function answerAt(
    *
    * The page used to ask `/api/proposals` and `/api/uncommitted` every four seconds each, and every
    * one of those made this server ask the host whether the project was a project. Now it asks this
-   * when this server says something moved (`/api/watch`, `watch.ts`), and once a minute besides,
+   * when this server says something moved (`/api/watch`, `watch.ts`) and when that stream (re)opens,
    * naming the tag of what it holds: a `since` that is still the tag is answered `{ ok, same: true,
    * tag }`, a few bytes, and nothing else is sent. The tag is a hash of the whole answer, so
    * anything either half would have said differently is a different tag.
@@ -2197,9 +2197,11 @@ export function answerAt(
    * There is no address, version or path in the request: what is fetched and
    * where it goes is the table's and the server's.
    *
-   * It answers AT ONCE with the status. The page asks `/api/toolchain` again
-   * while `running` is true; a request held open for a hundred megabytes is a
-   * request a proxy, a sleep or a reload would cut.
+   * It answers AT ONCE with the status. While `running` is true the page
+   * follows `/api/toolchain/events` (`compile/install.ts`), which sends the
+   * status as it moves; a request held open for a hundred megabytes is a
+   * request a proxy, a sleep or a reload would cut, and a stream that drops is
+   * reopened and sent the status again.
    */
   if (path === '/api/toolchain/install' && method === 'POST') {
     const refused = unticketed(ticket)

@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGunzip } from 'node:zlib'
 
+import { events, publish, watching } from 'kehikot-module-protocol/serve'
+
 import {
   BIBER_VERSION,
   artefactsFor,
@@ -111,6 +113,8 @@ export interface InstallerOptions {
   fetch?: typeof fetch
   /** The biblatex in the bundle a Tectonic uses, or null when it cannot be asked. */
   probe?: (tectonic: string) => Promise<string | null>
+  /** Told whenever the status moved: an install started, bytes arrived, it ended or was cancelled. */
+  onChange?: () => void
 }
 
 export interface Installer {
@@ -175,6 +179,13 @@ export function createInstaller(options: InstallerOptions): Installer {
   let received = 0
   let total = 0
   let error: string | null = null
+  const changed = () => {
+    try {
+      options.onChange?.()
+    } catch {
+      /* Telling a page is not the install's business. */
+    }
+  }
 
   const installed = (artefact: Artefact) => trusted(dir) && trusted(pieceDir(dir, artefact)) && executable(piecePath(dir, artefact))
   const partial = (artefact: Artefact) => join(dir, `${artefact.piece}-${artefact.version}.${artefact.format}.part`)
@@ -211,6 +222,8 @@ export function createInstaller(options: InstallerOptions): Installer {
     const part = partial(artefact)
     await download(artefact, part, fetcher, signal, (bytes) => {
       received = before + bytes
+      /* Not before `install` has said it started: the first bytes are counted while it is still starting. */
+      if (running) changed()
     })
     const sum = await sha256Of(part)
     if (!verified(artefact, sum.bytes, sum.sha256)) {
@@ -287,11 +300,14 @@ export function createInstaller(options: InstallerOptions): Installer {
         .finally(() => {
           running = null
           abort = null
+          changed()
         })
+      changed()
       return status()
     },
     cancel() {
       abort?.abort()
+      changed()
       return status()
     },
   }
@@ -545,9 +561,43 @@ let own: { dir: string; installer: Installer } | null = null
  */
 export function installer(env: Env = process.env): Installer {
   const dir = toolsDir(env)
-  if (!own || own.dir !== dir) own = { dir, installer: createInstaller({ dir, artefacts: artefactsFor(process.platform, process.arch) }) }
+  if (!own || own.dir !== dir) {
+    const made: Installer = createInstaller({ dir, artefacts: artefactsFor(process.platform, process.arch), onChange: () => toolchainChanged(made) })
+    own = { dir, installer: made }
+  }
   return own.installer
 }
+
+/**
+ * The page hears how an install is going over one held stream (protocol 2.32.0 `events`), never by
+ * asking on a clock: `GET /api/toolchain/events` sends the status as it opens, and again whenever it
+ * moved. Bytes arrive many times a second, so progress is sent at most every `PROGRESS_MS` (one
+ * timer per burst, not a repeating one); the end of an install is sent at once.
+ */
+export const TOOLCHAIN_EVENTS = '/api/toolchain/events'
+export const TOOLCHAIN_TOPIC = 'toolchain'
+export const PROGRESS_MS = 250
+let progressTimer: ReturnType<typeof setTimeout> | null = null
+
+const said = (from: Installer) => ({ ok: true, toolchain: from.status() })
+
+function toolchainChanged(from: Installer): void {
+  if (watching(TOOLCHAIN_TOPIC) === 0) return
+  if (!from.status().running) {
+    if (progressTimer) clearTimeout(progressTimer)
+    progressTimer = null
+    publish(TOOLCHAIN_TOPIC, said(from))
+    return
+  }
+  if (progressTimer) return
+  progressTimer = setTimeout(() => {
+    progressTimer = null
+    publish(TOOLCHAIN_TOPIC, said(from))
+  }, PROGRESS_MS)
+}
+
+/** The doors' `stream` option, on Vite and on `run` alike. */
+export const toolchainStream = events((path) => (path === TOOLCHAIN_EVENTS ? { topic: TOOLCHAIN_TOPIC, initial: () => said(installer()) } : null))
 
 /** What `build.ts` asks: the managed tools that are in place right now. */
 export function managed(env: Env = process.env): Managed {

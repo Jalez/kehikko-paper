@@ -238,6 +238,31 @@ describe('opening a paper', () => {
   })
 })
 
+class WatchStream {
+  static open: WatchStream[] = []
+  readyState = 1
+  onopen: (() => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: (() => void) | null = null
+  readonly #on = new Map<string, ((event: MessageEvent) => void)[]>()
+  constructor(readonly url: string) {
+    WatchStream.open.push(this)
+  }
+  addEventListener(name: string, listener: (event: MessageEvent) => void) {
+    this.#on.set(name, [...(this.#on.get(name) ?? []), listener])
+  }
+  close() {
+    this.readyState = 2
+    WatchStream.open = WatchStream.open.filter((one) => one !== this)
+  }
+  send(name: string, data: unknown) {
+    for (const listener of this.#on.get(name) ?? []) listener(new MessageEvent(name, { data: JSON.stringify(data) }))
+  }
+}
+let news = 0
+/** The server saying something moved: every open watch stream is told `changed`, with a tag never seen. */
+const arrives = () => act(() => WatchStream.open.filter((one) => one.url.startsWith('/api/watch')).forEach((one) => one.send('changed', { tag: `news-${(news += 1)}` })))
+
 describe('saving', () => {
   test('typing saves the whole file against the hash it was read at, then compiles', async () => {
     const editor = await open()
@@ -295,15 +320,21 @@ describe('saving', () => {
   })
 
   test('a file changed on disk with nothing typed here is simply taken, and compiled', async () => {
-    await open()
-    await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
-    const theirs = MAIN.replace('A claim', 'Edited elsewhere')
-    disk['main.tex'] = theirs
-    /* The poll is every four seconds; the visibility event asks at once. */
-    document.dispatchEvent(new Event('visibilitychange'))
-    await waitFor(() => expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(theirs))
-    await waitFor(() => expect(posted('/api/compile').length).toBeGreaterThanOrEqual(2))
-    expect(posted('/api/file')).toHaveLength(0)
+    WatchStream.open = []
+    ;(globalThis as { EventSource?: unknown }).EventSource = WatchStream
+    try {
+      await open()
+      await waitFor(() => expect(posted('/api/compile')).toHaveLength(1))
+      const theirs = MAIN.replace('A claim', 'Edited elsewhere')
+      disk['main.tex'] = theirs
+      /* The server's watch says the paper moved; nothing is asked on a clock. */
+      arrives()
+      await waitFor(() => expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(theirs))
+      await waitFor(() => expect(posted('/api/compile').length).toBeGreaterThanOrEqual(2))
+      expect(posted('/api/file')).toHaveLength(0)
+    } finally {
+      ;(globalThis as { EventSource?: unknown }).EventSource = undefined
+    }
   })
 })
 
@@ -638,13 +669,20 @@ describe('a suggested change', () => {
 /**
  * A change nobody on this page made: where it is, shown without being asked.
  *
- * The polls are woken the way a returning tab wakes them, so a suggestion or a
- * save "arrives" here exactly as it does while somebody watches.
+ * The server's watch stream (`/api/watch`) is a stand-in here that says `changed` with a new tag,
+ * so a suggestion or a save "arrives" exactly as it does while somebody watches.
  */
 describe('a change that arrives', () => {
+  beforeEach(() => {
+    WatchStream.open = []
+    ;(globalThis as { EventSource?: unknown }).EventSource = WatchStream
+  })
+  afterEach(() => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = undefined
+  })
   const at = MAIN.indexOf('tpyo')
   const suggestion = () => ({ id: 'p1', file: 'main.tex', from: at, to: at + 4, text: 'typo', was_text: 'tpyo', was: hashOf(MAIN), why: 'A misspelling.', by: 'an agent', at: 1, asked: { find: 'tpyo', replace: 'typo' } })
-  const wake = () => act(() => void document.dispatchEvent(new Event('visibilitychange')))
+  const wake = arrives
   const source = () => screen.getByLabelText('LaTeX source')
 
   test('a suggestion already waiting when the paper is opened takes nobody anywhere', async () => {

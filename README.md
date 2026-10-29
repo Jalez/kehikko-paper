@@ -1036,10 +1036,17 @@ is drawn at no size (a kehikko switched away from), not scrolled off the
 canvas, not in a hidden tab. While shown it listens to `/api/watch`
 (`watch.ts`), which watches the paper's folder recursively, the repository's
 `HEAD` and `index`, and this process's own state, and says `changed` only when
-the answer's tag moved. It then asks once, naming the tag it holds. Besides
-that it asks once a minute in case an event was missed (a network drive); with
-no stream open it polls every four seconds, as it always did. The stream is
-the same `before` door on Vite (`beforeDoors`) and on `run`.
+the answer's tag moved. It then asks once, naming the tag it holds. It never
+asks on a clock: the stream is followed with the protocol's `subscribe`, which
+reopens it after a drop and closes it while the tab is hidden, and every
+(re)open says `ready` with the server's tag, which is asked about only when it
+is not the page's. The stream is the same `before` door on Vite
+(`beforeDoors`) and on `run`.
+
+An install of the compiler is followed the same way: while it runs the page
+subscribes to `/api/toolchain/events` (the protocol's `events` door, on Vite's
+`doors({ stream })` and `run({ stream })` alike), which sends the status as it
+opens, progress at most every 250 ms, and the end at once.
 
 ## Layout
 
