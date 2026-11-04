@@ -66,8 +66,8 @@ export type Sight =
   | { at: 'broke'; why: string }
 
 export type GotoHandler = (goto: Goto, answer: (found: boolean, why?: string) => void) => void
-/** What takes a press on one of this page's header items: nothing for "taken", a sentence for "not taken, and why". */
-export type PressHandler = (press: { item: string; value?: string | boolean }) => string | void
+/** What takes a press on one of this page's header or footer items (`place: 'footer'`): nothing for "taken", a sentence for "not taken, and why". */
+export type PressHandler = (press: { item: string; value?: string | boolean; place?: 'header' | 'footer' }) => string | void
 /** With no paper open there is nothing declared, so nothing to press. */
 const NO_PRESS: PressHandler = () => 'No paper is open here.'
 
@@ -301,7 +301,7 @@ export function usePaper(framed: boolean) {
     },
     { gotoBackstop: 900, same: { passage: samePassage } },
   )
-  const { where, resize, request, point, passage: pointed, header, answers, drawsHeader, activity } = host
+  const { where, resize, request, point, passage: pointed, header, footer, answers, drawsHeader, drawsFooter, activity } = host
   /* Whether the host draws this module's header: its own word when it has one (1.4.0), else a press having arrived. */
   const hostDraws = drawsHeader ?? pressed
 
@@ -553,6 +553,9 @@ export function usePaper(framed: boolean) {
       /** Where the workspace puts what takes a header press, and how it declares the items (`kehikot.header`). */
       press,
       header,
+      /** Declare the footer's items (`kehikot.footer`, 2.38.0), and whether the host draws them: only when `drawsFooter` is true. */
+      footer,
+      drawsFooter,
       /** What this module's things are doing now, for the host's Inbox (`activity.set`). Replaces the whole list. */
       activity,
       /** Whether the host draws the header: its greeting says (`drawsHeader`), and from an older host a press having arrived does. */
@@ -580,7 +583,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, host.openAddress, parts, keep, show, start, setPaper, disk, proposals, facts, review, refreshProposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, activity, hostDraws, answers],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, host.openAddress, parts, keep, show, start, setPaper, disk, proposals, facts, review, refreshProposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, footer, drawsFooter, activity, hostDraws, answers],
   )
 }
 

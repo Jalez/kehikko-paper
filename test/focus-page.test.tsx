@@ -907,6 +907,76 @@ describe('the header the host draws', () => {
   })
 })
 
+/**
+ * The footer: what is going on now, declared to a host that says it draws one
+ * (`hello.footer`, 2.38.0), and the page's own line over the editor otherwise.
+ */
+describe('the footer the host draws', () => {
+  interface Declared {
+    type?: string
+    items?: { id: string; kind: string; text?: string; label?: string }[]
+  }
+  const sent = (type: string) => (asks as Declared[]).filter((one) => one.type === type)
+  const footer = () => sent(MESSAGE.FOOTER).at(-1)?.items ?? null
+  const footed = (id: string) => footer()?.find((one) => one.id === id)
+  const headed = (id: string) => sent(MESSAGE.HEADER).at(-1)?.items?.find((one) => one.id === id)
+  const pressed = () => (asks as { type?: string; id?: string; ok?: boolean }[]).filter((one) => one.type === MESSAGE.PRESSED)
+  let n = 0
+  const send = (canvas: ReturnType<typeof host>, item: string, value?: string, place?: 'footer') => {
+    n += 1
+    canvas.post({ type: MESSAGE.PRESS, protocol: PROTOCOL, id: `foot-${n}`, item, ...(value === undefined ? {} : { value }), ...(place ? { place } : {}) })
+    return `foot-${n}`
+  }
+  const greeted = async (facts: { header?: boolean; footer?: boolean }) => {
+    built = 'kept'
+    const canvas = host()
+    render(<Framed />)
+    canvas.post({ type: MESSAGE.HELLO, protocol: PROTOCOL, session: 's', context: { epic: EPIC, project: 'project', projectPath: PROJECT, theme: 'light', selection: [], parts: PARTS(), passage: null }, state: null, ...facts })
+    await screen.findByLabelText('LaTeX source')
+    await waitFor(() => expect(lastPreview).not.toBeNull())
+    return canvas
+  }
+
+  test('a host that draws it is told the line over the editor, and the page draws none of it', async () => {
+    await greeted({ header: true, footer: true })
+    await waitFor(() => expect(footed('file')?.text).toBe('main.tex'))
+    expect(footed('saved')?.text).toBe('Saved')
+    expect(document.querySelector('[data-editing]')).toBeNull()
+    /* The readouts left the header: the walk and the comparison are the footer's now. */
+    await waitFor(() => expect(headed('compile')).toBeDefined())
+    expect(headed('sg-prev')).toBeUndefined()
+    expect(headed('sg-next')).toBeUndefined()
+    expect(headed('sg-baseline')).toBeUndefined()
+  })
+
+  test('"← main.tex" in the footer goes back from the file it names', async () => {
+    const canvas = await greeted({ header: true, footer: true })
+    await waitFor(() => expect(headed('section')).toBeDefined())
+    send(canvas, 'section', 's1')
+    await waitFor(() => expect(footed('file')?.text).toBe('chapters/design.tex'))
+    expect(footed('main')?.label).toBe('← main.tex')
+    const id = send(canvas, 'main', undefined, 'footer')
+    await waitFor(() => expect(pressed().find((one) => one.id === id)).toMatchObject({ ok: true }))
+    await waitFor(() => expect(footed('file')?.text).toBe('main.tex'))
+    expect(footed('main')).toBeUndefined()
+  })
+
+  test('a host that does not draw it is told nothing, and the page draws its line as before', async () => {
+    await greeted({ header: true, footer: false })
+    await waitFor(() => expect(headed('compile')).toBeDefined())
+    expect(sent(MESSAGE.FOOTER)).toEqual([])
+    expect(openFile()).toBe('main.tex')
+    expect(headed('sg-prev')).toBeDefined()
+  })
+
+  test('an older host, which says nothing of a footer, is told nothing either', async () => {
+    await framed(PARTS())
+    await waitFor(() => expect(headed('compile')).toBeDefined())
+    expect(sent(MESSAGE.FOOTER)).toEqual([])
+    expect(openFile()).toBe('main.tex')
+  })
+})
+
 describe('the host’s Inbox: what is waiting for the person', () => {
   const change = (id: string, file: string) => ({ id, file, from: 1, to: 3, text: 'old', was_text: 'new', was: 'h', why: '', by: 'changed on disk', at: 1, kind: 'disk' })
   const activity = () => {
