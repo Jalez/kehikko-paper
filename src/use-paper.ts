@@ -1,7 +1,10 @@
 import { projectKey, sameParts, type EpicPart, type Goto, type Passage } from 'kehikot-module-protocol'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { useHost } from 'kehikot-module-protocol/client/react'
+import { useHost, type KeptCodec } from 'kehikot-module-protocol/client/react'
+
+/** The kept string as the host keeps it: `remembered.ts` reads and writes its own spelling. */
+const AS_WRITTEN: KeptCodec<string> = { read: (state) => state, write: (state) => state }
 
 import type { Standing } from '../git.ts'
 import type { Proposal } from '../latex/propose.ts'
@@ -172,7 +175,7 @@ export function usePaper(framed: boolean) {
      and counts the presses a host sent: a host that sends one draws the header. */
   const press = useRef<PressHandler>(NO_PRESS)
   const [pressed, setPressed] = useState(headerDrawn)
-  /** What the host kept for this module and handed back on its greeting; after that, what it was last asked to keep. */
+  /** What the host keeps for this container (this Paper on this kehikko), as the host store holds it: read where it is needed. */
   const kept = useRef<string | null>(null)
   const standingOn = useRef<string | null | undefined>(undefined)
   const standingInRef = useRef<string | null | undefined>(undefined)
@@ -287,10 +290,7 @@ export function usePaper(framed: boolean) {
   const host = useHost(
     ID,
     {
-      onHello: (context, was) => {
-        kept.current = was ?? null
-        arrived(context, true)
-      },
+      onHello: (context) => arrived(context, true),
       onContext: (context) => arrived(context, false),
       onGoto: (message, answer) => goto.current(message, answer),
       onPress: (pressing) => {
@@ -299,8 +299,10 @@ export function usePaper(framed: boolean) {
         return press.current(pressing)
       },
     },
-    { gotoBackstop: 900, same: { passage: samePassage } },
+    { gotoBackstop: 900, same: { passage: samePassage }, kept: AS_WRITTEN },
   )
+  /* The container's string, which the host store replaces when the person moves to another kehikko. */
+  kept.current = host.kept
   const { where, resize, request, point, passage: pointed, header, footer, answers, drawsHeader, drawsFooter, activity } = host
   /* Whether the host draws this module's header: its own word when it has one (1.4.0), else a press having arrived. */
   const hostDraws = drawsHeader ?? pressed
@@ -499,11 +501,13 @@ export function usePaper(framed: boolean) {
   }, [askAgain])
 
   /** Ask the host to keep a string. Said once per change, and a host that refuses or is not there is not an error: see `remembered.ts`. */
+  const { remember } = host
   const keep = useCallback((state: string) => {
     if (kept.current === state) return
     kept.current = state
-    void request('state.set', { state }).catch(() => {})
-  }, [request])
+    /* Through the store, so the write names the kehikko it is for and the store holds it. */
+    remember(state)
+  }, [remember])
 
   /**
    * Say which documents this container is showing (`showing.set`), so that a
