@@ -64,6 +64,8 @@ let lastEditor: EditorProps | null
 let rectPage: number
 /** Whether the fake SyncTeX has a record under a press on the PDF. */
 let recorded: boolean
+/** Which line the fake SyncTeX says a press came from, by the page pressed. Line 6 for every page unless a test says. */
+let linesByPage: Record<string, number>
 const fetchWas = globalThis.fetch
 
 const paperNow = () => {
@@ -123,7 +125,7 @@ function serve(method: string, path: string, query: URLSearchParams, body: Recor
     return [200, { ok: true, proposals, paper: paperNow(), said: body?.decision === 'accept' ? 'Committed.' : '' }]
   }
   if (path === '/api/sync') {
-    if (query.has('page')) return [200, { ok: true, found: recorded ? { build: built, file: 'main.tex', line: 6 } : null }]
+    if (query.has('page')) return [200, { ok: true, found: recorded ? { build: built, file: 'main.tex', line: linesByPage[query.get('page')!] ?? 6 } : null }]
     return [200, { ok: true, found: { build: built, exact: true, line: Number(query.get('line')), rects: [{ page: rectPage, x: 10, y: 20, w: 30, h: 8 }] } }]
   }
   return [404, { ok: false, error: `no ${method} ${path} in this test` }]
@@ -166,6 +168,7 @@ beforeEach(() => {
   lastEditor = null
   rectPage = 2
   recorded = true
+  linesByPage = {}
   ;(window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(`http://127.0.0.1:7870/app?project=${encodeURIComponent(PROJECT)}&epic=a-paper`)
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), 'http://127.0.0.1:7870')
@@ -504,6 +507,92 @@ describe('between the source and the PDF', () => {
     lastPreview!.onPoint({ page: 2, x: 1, y: 1, word: null })
     const at = MAIN.indexOf('Fin')
     await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${at}-${at}`))
+  })
+})
+
+describe('a selection dragged over the PDF', () => {
+  const pick = (from: [number, string | null], to: [number, string | null]) =>
+    lastPreview!.onPick!({ from: { page: from[0], x: 72, y: 100, word: from[1] }, to: { page: to[0], x: 300, y: 120, word: to[1] }, text: 'selected words' })
+
+  test('both ends are asked of the source, and the stretch between their words is selected there — what the canvas is told is pointed at', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview?.onPick).toBeDefined())
+    linesByPage = { '2': 4, '3': 4 }
+    press('pane', 'pdf')
+    pick([2, 'claim'], [3, 'tpyo'])
+    await waitFor(() => expect(calls.filter((one) => one.path === '/api/sync' && one.query.has('page'))).toHaveLength(2))
+    const from = MAIN.indexOf('claim')
+    const to = MAIN.indexOf('tpyo') + 4
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${from}-${to}`))
+    expect(lastEditor!.jump!.select).toBe(true)
+    /* The reader stays on the PDF, where the words they selected are still selected to copy. */
+    expect(pane()).toBe('pdf')
+    expect(lastEditor!.jump!.focus).toBe(false)
+  })
+
+  test('across lines — a page break, a section heading — from the first word to the last', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview?.onPick).toBeDefined())
+    linesByPage = { '2': 4, '3': 6 }
+    pick([2, 'claim'], [3, 'Fin'])
+    const from = MAIN.indexOf('claim')
+    const to = MAIN.indexOf('Fin') + 3
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${from}-${to}`))
+  })
+
+  test('an end whose word is not known runs to the end of its line', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview?.onPick).toBeDefined())
+    linesByPage = { '2': 4, '3': 4 }
+    pick([2, 'claim'], [3, null])
+    const from = MAIN.indexOf('claim')
+    const to = MAIN.indexOf('in it.') + 'in it.'.length
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${from}-${to}`))
+  })
+
+  test('ends the source records in the wrong order are the first end, to the end of its line', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview?.onPick).toBeDefined())
+    linesByPage = { '2': 6, '3': 4 }
+    pick([2, 'Fin'], [3, 'claim'])
+    const from = MAIN.indexOf('Fin')
+    await waitFor(() => expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe(`${from}-${from + 'Fin ä.'.length}`))
+  })
+
+  test('a selection nothing in the paper’s files is recorded at says so, and moves nothing', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview?.onPick).toBeDefined())
+    recorded = false
+    pick([2, 'claim'], [3, 'tpyo'])
+    await waitFor(() => expect(screen.getByText(/recorded where that selection is/)).toBeTruthy())
+    expect(screen.getByLabelText('LaTeX source').getAttribute('data-jump')).toBe('')
+  })
+
+  test('framed, a link is handed to the canvas (`address.open`) with the address as the PDF wrote it', async () => {
+    built = 'kept'
+    const asked: string[] = []
+    function Hosted() {
+      const wire = usePaper(false)
+      const all = useMemo(() => ({ ...wire, where: 'hosted' as const, openAddress: async (url: string) => (asked.push(url), { outcome: 'shown' as const, why: '' }) }), [wire])
+      if (wire.sight.at !== 'reading') return null
+      return <Workspace paper={wire.sight.paper} wire={all as typeof wire} editor={Textarea} preview={Stub} saveDelay={15} settle={5} />
+    }
+    render(<Hosted />)
+    await waitFor(() => expect(lastPreview?.onAddress).toBeDefined())
+    expect(await lastPreview!.onAddress!('https://github.com/Jalez/skills')).toMatchObject({ outcome: 'shown' })
+    expect(asked).toEqual(['https://github.com/Jalez/skills'])
+  })
+
+  test('outside a host, a link is not handed to a canvas: the PDF opens it in a new tab itself', async () => {
+    built = 'kept'
+    await open()
+    await waitFor(() => expect(lastPreview?.onPick).toBeDefined())
+    expect(lastPreview!.onAddress).toBeUndefined()
   })
 })
 

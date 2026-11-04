@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import type { PageRect } from '../../compile/synctex.ts'
 import { locate, read, type Text } from './find.ts'
+import { endsOf, isDrag, type Sheet } from './gesture.ts'
+import { follow, linksOf, placeOf, type PageLink } from './links.ts'
 import { spanOf } from './printed.ts'
 import { wordAt, type Run } from './words.ts'
 
@@ -60,6 +62,19 @@ import { wordAt, type Run } from './words.ts'
  * swapped in under the reader and the scroll does not move; a PDF of another
  * kind is another document, and it opens at `from`.
  *
+ * ## Text that can be selected, and links that can be followed
+ *
+ * Over each canvas lies pdf.js's text layer: the page's words as transparent
+ * text, placed where they are printed, so dragging selects them across lines,
+ * columns and pages and the selection copies. How a drag is told from a press
+ * is `gesture.ts`. A drag that selected words is a pick (`onPick`): its two
+ * ends, asked of the source like a press, select that stretch of the source,
+ * and that is what the canvas is told is pointed at.
+ *
+ * Over that lie the page's links (`links.ts`): an address goes to the canvas
+ * first (`onAddress`), and to a new tab when nothing there took it; a place in
+ * the paper — a `\ref`, a line of the contents — scrolls this pane to it.
+ *
  * ## Units
  *
  * Everything crossing this component's boundary is in PDF points from the
@@ -80,6 +95,14 @@ export interface PdfMark {
   foreign?: boolean
 }
 
+/** A place on a page, in PDF points, and the word printed there if the PDF's text says. */
+export interface PdfPoint {
+  page: number
+  x: number
+  y: number
+  word: string | null
+}
+
 export interface PreviewProps {
   /** Where the PDF's bytes are. Changes when a new build lands. Null when there is none. */
   url: string | null
@@ -90,6 +113,16 @@ export interface PreviewProps {
   onPoint(point: { page: number; x: number; y: number; word: string | null }): void
   /** A double press on a page: the person wants the source it came from in front of them. */
   onOpen?(): void
+  /**
+   * Words were selected by dragging over them: where the selection begins and ends, each as a press
+   * would say it — the first word and the last — and the text selected.
+   */
+  onPick?(pick: { from: PdfPoint; to: PdfPoint; text: string }): void
+  /**
+   * A link to an address was pressed. Hand it to the canvas (`address.open`) and say what the host
+   * answered, or null when nothing took it; the address is then opened in a new tab. Absent, it always is.
+   */
+  onAddress?(url: string): Promise<{ outcome: string } | null>
   /** The page most in view changed. One-based. */
   onPage?(page: number): void
   /** How far down to start, in PDF points of what is drawn. Read once, when this is first shown. */
@@ -113,12 +146,15 @@ interface PdfPage {
   getViewport(options: { scale: number }): { width: number; height: number }
   render(options: { canvas: HTMLCanvasElement; canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void>; cancel(): void }
   getTextContent(): Promise<{ items: unknown[] }>
+  getAnnotations(options?: { intent?: string }): Promise<unknown[]>
   /** Asked for only because it is what makes pdf.js load the page's fonts. */
   getOperatorList(): Promise<unknown>
 }
 interface PdfDocument {
   numPages: number
   getPage(n: number): Promise<PdfPage>
+  getDestination(id: string): Promise<unknown[] | null>
+  getPageIndex(ref: unknown): Promise<number>
 }
 /** What `getDocument` hands back. The TASK is what is destroyed, and the worker's copy of the file with it. */
 interface PdfTask {
@@ -126,7 +162,17 @@ interface PdfTask {
   destroy(): Promise<void>
 }
 
-let library: Promise<{ getDocument(source: { data: Uint8Array }): PdfTask }> | null = null
+/** pdf.js's text layer, the part of it used here. */
+interface TextLayerLike {
+  render(): Promise<unknown>
+  cancel(): void
+}
+interface PdfLibrary {
+  getDocument(source: { data: Uint8Array }): PdfTask
+  TextLayer: new (options: { textContentSource: unknown; container: HTMLElement; viewport: unknown }) => TextLayerLike
+}
+
+let library: Promise<PdfLibrary> | null = null
 
 function pdfjs() {
   library ??= (async () => {
@@ -135,7 +181,7 @@ function pdfjs() {
       import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
     ])
     lib.GlobalWorkerOptions.workerSrc = worker.default
-    return lib as unknown as { getDocument(source: { data: Uint8Array }): PdfTask }
+    return lib as unknown as PdfLibrary
   })()
   return library
 }
@@ -248,6 +294,8 @@ export function PdfView({
   reveal,
   onPoint,
   onOpen,
+  onPick,
+  onAddress,
   onPage,
   from = 0,
   onScrolled,
@@ -612,9 +660,20 @@ export function PdfView({
     }
   }, [onPage, onScrolled, scale, sizes, pages])
 
+  /* Where the button last went down in this pane: what tells a press from a drag (`gesture.ts`). */
+  const down = useRef<{ x: number; y: number } | null>(null)
+  const selectedHere = useCallback((): Range | null => {
+    const node = scroller.current
+    const selection = typeof window === 'undefined' ? null : window.getSelection()
+    if (!node || !selection || selection.isCollapsed || !selection.rangeCount) return null
+    const range = selection.getRangeAt(0)
+    return node.contains(range.commonAncestorContainer) ? range : null
+  }, [])
+
   const press = useCallback(
     async (page: number, event: React.MouseEvent<HTMLDivElement>) => {
       if (scale <= 0) return
+      if (isDrag(down.current, { x: event.clientX, y: event.clientY }, selectedHere() !== null)) return
       const box = event.currentTarget.getBoundingClientRect()
       const x = (event.clientX - box.left) / scale
       const y = (event.clientY - box.top) / scale
@@ -626,7 +685,82 @@ export function PdfView({
       }
       onPoint({ page, x, y, word })
     },
-    [onPoint, scale, measure],
+    [onPoint, scale, measure, selectedHere],
+  )
+
+  /* A drag ends: the text layers stop stretching to catch it, and words it
+     selected are a pick. Listened for on the document, since a drag may end
+     anywhere — over the desk, over the zoom control, outside the pane. */
+  const pickNow = useRef<(event: MouseEvent) => void>(() => {})
+  pickNow.current = (event: MouseEvent) => {
+    scroller.current?.classList.remove('pdf-selecting')
+    const started = down.current !== null
+    if (!started || event.button !== 0) return
+    /* The second press of a double press selects the word under it, natively: that is `onOpen`'s, not a pick. */
+    if (event.detail === 2) return
+    /* After the click this mouseup is followed by, which has then seen the selection and not pressed. */
+    setTimeout(() => {
+      down.current = null
+      const range = selectedHere()
+      const node = scroller.current
+      if (!range || !node || !onPick || scale <= 0) return
+      const text = range.toString().replace(/\s+/g, ' ').trim()
+      if (!text) return
+      const sheets: Sheet[] = [...node.querySelectorAll<HTMLElement>('[data-page]')].map((sheet) => ({ page: Number(sheet.dataset.page), box: sheet.getBoundingClientRect() }))
+      const ends = endsOf([...range.getClientRects()], sheets, scale)
+      if (!ends) return
+      const wordOf = async (at: { page: number; x: number; y: number }) => {
+        try {
+          return wordAt(await measure(at.page), at.x, at.y)
+        } catch {
+          return null
+        }
+      }
+      void Promise.all([wordOf(ends.from), wordOf(ends.to)]).then(([first, last]) => {
+        onPick({ from: { ...ends.from, word: first }, to: { ...ends.to, word: last }, text })
+      })
+    }, 0)
+  }
+  useEffect(() => {
+    const up = (event: MouseEvent) => pickNow.current(event)
+    document.addEventListener('mouseup', up)
+    return () => document.removeEventListener('mouseup', up)
+  }, [])
+  const onDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    down.current = { x: event.clientX, y: event.clientY }
+    /* Pressed on the words: every text layer stretches under the pointer, so a drag that leaves the
+       printed lines — across a gap between columns, past the foot of a page — keeps selecting, as in
+       pdf.js's own viewer, instead of jumping to wherever the next text node happens to be. */
+    if ((event.target as HTMLElement | null)?.closest?.('.textLayer')) scroller.current?.classList.add('pdf-selecting')
+  }, [])
+
+  /* A link to a place in this PDF: its page, and how far down when the destination says. */
+  const goToPlace = useCallback(
+    async (dest: string | readonly unknown[]) => {
+      if (!doc) return
+      const place = await placeOf(doc, dest)
+      const node = scroller.current
+      if (!place || !node || scale <= 0 || shown.current !== doc) return
+      const sheet = node.querySelector<HTMLElement>(`[data-page="${place.page}"]`)
+      /* Under a focus a sheet that is not drawn is nowhere to scroll to. */
+      if (!sheet) return
+      const top = sheet.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop
+      node.scrollTo({ top: Math.max(0, top + (place.y ?? 0) * scale - 8), behavior: 'smooth' })
+    },
+    [doc, scale],
+  )
+  const openLink = useCallback(
+    (link: PageLink) => {
+      if (link.to.kind === 'dest') {
+        void goToPlace(link.to.dest)
+        return
+      }
+      void follow(link.to.url, onAddress, (url) => {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      })
+    },
+    [goToPlace, onAddress],
   )
 
   /* What a sheet is called: its own number, or — in a PDF that is not the
@@ -655,7 +789,7 @@ export function PdfView({
           </button>
         </div>
       )}
-      <div ref={scroller} className="pdf-scroller min-h-0 flex-1 overflow-auto" onScroll={onScroll} style={{ padding: PAD }}>
+      <div ref={scroller} className="pdf-scroller min-h-0 flex-1 overflow-auto" onScroll={onScroll} onMouseDownCapture={onDown} style={{ padding: PAD }}>
         {trouble && <p className="text-muted-foreground p-2 text-xs">{trouble}</p>}
         {/* Under a focus the first thing in the pane is words — a sheet's
             number — and the zoom control sits over that corner. Room for
@@ -680,6 +814,7 @@ export function PdfView({
                 words={!runs.current.has(number) ? '' : (runs.current.get(number) ?? []).some((run) => run.xs !== undefined) ? 'measured' : 'estimated'}
                 onPress={press}
                 onOpen={onOpen}
+                onLink={openLink}
               />
             )
             if (pages === null) return sheet
@@ -710,6 +845,7 @@ function PageCanvas({
   words,
   onPress,
   onOpen,
+  onLink,
 }: {
   doc: PdfDocument
   version: number
@@ -722,10 +858,13 @@ function PageCanvas({
   words: string
   onPress(page: number, event: React.MouseEvent<HTMLDivElement>): void
   onOpen?: () => void
+  onLink(link: PageLink): void
 }) {
   const holder = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const text = useRef<HTMLDivElement>(null)
   const [near, setNear] = useState(false)
+  const [links, setLinks] = useState<PageLink[]>([])
 
   /* Drawn only when near the viewport. A thesis is two hundred pages and a
      canvas each, at a retina scale, is more memory than the tab has. */
@@ -748,6 +887,7 @@ function PageCanvas({
     if (!near) return
     let stopped = false
     let task: { promise: Promise<void>; cancel(): void } | null = null
+    let layer: TextLayerLike | null = null
     /* A pause before drawing, so dragging a divider does not render the page
        once per pixel of width. */
     const timer = setTimeout(() => {
@@ -769,6 +909,21 @@ function PageCanvas({
           shown.width = off.width
           shown.height = off.height
           shown.getContext('2d')?.drawImage(off, 0, 0)
+          /* The words, as text that selects, laid where they are printed — into a
+             new layer, swapped in once laid out, like the canvas. */
+          const [lib, content] = await Promise.all([pdfjs(), page.getTextContent()])
+          const slot = text.current
+          if (stopped || !slot) return
+          const fresh = document.createElement('div')
+          fresh.className = 'textLayer'
+          layer = new lib.TextLayer({ textContentSource: content, container: fresh, viewport: page.getViewport({ scale }) })
+          await layer.render()
+          if (stopped) return
+          /* What a drag lands on between the lines: see `onDown`. */
+          const end = document.createElement('div')
+          end.className = 'endOfContent'
+          fresh.append(end)
+          slot.replaceChildren(fresh)
         } catch {
           /* Cancelled by the next draw, or a page the PDF cannot give. The
              sheet stays as it was. */
@@ -779,8 +934,27 @@ function PageCanvas({
       stopped = true
       clearTimeout(timer)
       task?.cancel()
+      layer?.cancel()
     }
   }, [doc, version, number, scale, near])
+
+  /* The page's links, read once per document: they are in points, not pixels. */
+  useEffect(() => {
+    if (!near) return
+    let stopped = false
+    void (async () => {
+      try {
+        const page = await doc.getPage(number)
+        const found = linksOf(await page.getAnnotations({ intent: 'display' }), height)
+        if (!stopped) setLinks(found)
+      } catch {
+        if (!stopped) setLinks([])
+      }
+    })()
+    return () => {
+      stopped = true
+    }
+  }, [doc, version, number, height, near])
 
   return (
     <div
@@ -788,16 +962,33 @@ function PageCanvas({
       className="pdf-page relative mx-auto bg-white"
       data-page={number}
       data-words={words}
-      style={{ width: width * scale, height: height * scale, marginBottom: GAP }}
+      style={{ width: width * scale, height: height * scale, marginBottom: GAP, ['--total-scale-factor' as string]: scale, ['--scale-round-x' as string]: '1px', ['--scale-round-y' as string]: '1px' }}
       onClick={(event) => onPress(number, event)}
       onDoubleClick={onOpen}
     >
       <canvas ref={canvas} className="block size-full" />
+      <div ref={text} className="pdf-text" />
       {marks.map(({ rect, foreign, coarse }, i) => (
         <span
           key={i}
           className={`pdf-mark${foreign ? ' pdf-mark-foreign' : ''}${coarse ? ' pdf-mark-coarse' : ''}`}
           style={{ left: rect.x * scale, top: rect.y * scale, width: rect.w * scale, height: rect.h * scale }}
+        />
+      ))}
+      {links.map((link, i) => (
+        <a
+          key={`link-${i}`}
+          className="pdf-link"
+          data-link={link.to.kind}
+          /* A real address on a real anchor, so hovering says where it goes. The press is this page's (`onLink`). */
+          {...(link.to.kind === 'web' ? { href: link.to.url, target: '_blank', rel: 'noopener noreferrer', title: link.to.url } : { href: '#', 'aria-label': 'Go to this place in the paper' })}
+          style={{ left: link.rect.x * scale, top: link.rect.y * scale, width: link.rect.w * scale, height: link.rect.h * scale }}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onLink(link)
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
         />
       ))}
     </div>

@@ -24,7 +24,7 @@ import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
 import { pdfIsOf } from './pdf/of.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
-import { placeWord, wholeWords } from './pdf/words.ts'
+import { endOfPick, placeWord, wholeWords } from './pdf/words.ts'
 import { keyOf, received } from './pointed.ts'
 import { placement, position as positionOf, stopKeyOf, stopsOf, step as stepOf } from './suggestions.ts'
 import type { InlineSuggestion } from './editor/source-editor.tsx'
@@ -137,6 +137,8 @@ interface Going {
   /** …or a one-based line, optionally narrowed to a word printed there. */
   line?: number
   word?: string | null
+  /** With `line`: the range runs on to here — a one-based line, and the last word on it, if known. A selection on the PDF. */
+  until?: { line: number; word: string | null }
   select?: boolean
   focus?: boolean
   /** Mark it as somebody else's anchor rather than moving the selection onto it. */
@@ -546,6 +548,10 @@ export function Workspace({
         const start = startOfLine(doc.text, going.line)
         const text = textOfLine(doc.text, going.line)
         from = to = start + (text.length - text.trimStart().length)
+      }
+      if (going.until) {
+        const end = endOfPick(doc.text, going.until)
+        if (end > from) to = end
       }
     }
     const top =
@@ -1258,6 +1264,38 @@ export function Workspace({
     },
     [paper.epic, go, setSaid, wandered],
   )
+
+  /* A drag over the PDF selected words: both ends asked of the source like a
+     press, and the stretch between them selected there — which is what is
+     pointed at for the canvas, as a press's word is. Ends in two files (a
+     selection running over a chapter break) select from the first end to
+     the end of its line: the source is shown one file at a time. */
+  const onPick = useCallback(
+    (pick: { from: { page: number; x: number; y: number; word: string | null }; to: { page: number; x: number; y: number; word: string | null } }) => {
+      const on = screen.current
+      const ask = (at: { page: number; x: number; y: number }) =>
+        json('/api/sync', { epic: paper.epic, page: String(at.page), x: at.x.toFixed(2), y: at.y.toFixed(2), ...(on ? { part: on.key } : {}) })
+          .then((body) => body.found as { file?: string; line?: number } | null | undefined)
+          .catch(() => null)
+      void Promise.all([ask(pick.from), ask(pick.to)]).then(([first, last]) => {
+        const start = first?.file && first.line ? { file: first.file, line: first.line, word: pick.from.word } : null
+        const end = last?.file && last.line ? { file: last.file, line: last.line, word: pick.to.word } : null
+        const anchor = start ?? end
+        if (!anchor) {
+          setSaid('Nothing in this paper’s own files is recorded where that selection is — it was set by the class or a package.')
+          return
+        }
+        wandered()
+        const until = start && end && end.file === start.file && end.line >= start.line ? { line: end.line, word: end.word } : { line: anchor.line, word: null }
+        /* Not focused: the person is reading the PDF, and the words they selected stay selected there to be copied. */
+        go({ file: anchor.file, line: anchor.line, word: anchor.word, until, select: true, focus: false })
+      })
+    },
+    [paper.epic, go, setSaid, wandered],
+  )
+  /* A link to an address, handed to the canvas: the module there that shows pages opens it. Null outside a host. */
+  const openAddress = wire.openAddress
+  const onAddress = useMemo(() => (wire.where === 'hosted' && openAddress ? (url: string) => openAddress(url) : undefined), [wire.where, openAddress])
 
   /* ---- The engine's complaints ------------------------------------------ */
 
@@ -2313,6 +2351,8 @@ export function Workspace({
                   reveal={reveal?.part ? reveal : null}
                   onPoint={onPoint}
                   onOpen={() => setTab('source')}
+                  onPick={onPick}
+                  {...(onAddress ? { onAddress } : {})}
                   from={partFrom}
                   onScrolled={onPartScrolled}
                   numbers={partNumbers}
@@ -2329,6 +2369,8 @@ export function Workspace({
                   reveal={reveal && !reveal.part ? reveal : null}
                   onPoint={onPoint}
                   onOpen={() => setTab('source')}
+                  onPick={onPick}
+                  {...(onAddress ? { onAddress } : {})}
                   from={pdfFrom}
                   onScrolled={onPdfScrolled}
                   {...(sheets ? { pages: sheets.pages } : {})}
