@@ -18,6 +18,8 @@
  * flipped by the caller, so no pdf.js type reaches this file.
  */
 
+import { startOfLine, textOfLine } from '../lib/offsets.ts'
+
 /** One run of text on a page: where it is and what it says. */
 export interface Run {
   x: number
@@ -150,4 +152,18 @@ export function wholeWords(text: string, from: number, to: number): { from: numb
   if (startsInWord) while (from > 0 && letter.test(text[from - 1]!)) from -= 1
   if (endsInWord) while (to < text.length && letter.test(text[to]!)) to += 1
   return { from, to }
+}
+
+/**
+ * Where a selection on the PDF ends in the source: just after `until.word`,
+ * looked for on its line and the lines either side (`placeWord`), or — the
+ * word not known, or not there once — the end of the line's text.
+ */
+export function endOfPick(text: string, until: { line: number; word: string | null }): number {
+  const lines = [until.line - 2, until.line - 1, until.line, until.line + 1, until.line + 2].filter((n) => n >= 1)
+  const named = lines.indexOf(until.line)
+  const placed = until.word ? placeWord(lines.map((n) => textOfLine(text, n)), named, until.word) : null
+  if (placed && until.word) return startOfLine(text, lines[placed.line]!) + placed.column + until.word.length
+  const line = textOfLine(text, until.line)
+  return startOfLine(text, until.line) + line.trimEnd().length
 }

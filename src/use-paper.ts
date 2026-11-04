@@ -546,6 +546,8 @@ export function usePaper(framed: boolean) {
       pointed,
       /** Ask the host something: `parts.set`, `content.changed`. Rejects when it refuses or is not there. */
       request,
+      /** Hand a web address to the canvas (`address.open`), for the module there that shows pages. Null when nothing took it. */
+      openAddress: host.openAddress,
       parts,
       goto,
       /** Where the workspace puts what takes a header press, and how it declares the items (`kehikot.header`). */
@@ -578,7 +580,7 @@ export function usePaper(framed: boolean) {
       askAgain,
       again,
     }),
-    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, parts, keep, show, start, setPaper, disk, proposals, facts, review, refreshProposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, activity, hostDraws, answers],
+    [sight, where, host.projectPath, host.epic, said, resize, point, pointed, request, host.openAddress, parts, keep, show, start, setPaper, disk, proposals, facts, review, refreshProposals, heardFor, epicOnScreen, answerOne, acceptAll, busy, saving, save, askAgain, again, header, activity, hostDraws, answers],
   )
 }
 

@@ -310,8 +310,13 @@ export const MANIFEST: Manifest = manifestSchema.parse({
 
        `parts.set` and `content.changed` are for the chapters: a part to each
        chapter, on a press, and saying that what this module holds for the
-       parts has changed. */
-    uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report'],
+       parts has changed.
+
+       `address:open` (2.10.0) is a link in the PDF — an `\href`, a `\url` —
+       pressed by the reader: the address is handed to the canvas, for the module
+       there that shows pages, under the host's rules. Only on a press, never by
+       itself; without a host, or when the host declines, it opens in a new tab. */
+    uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open'],
     /* What this module publishes for the others (protocol 2.21.0): documents for the parts of an
        epic, the chapter files each part has, in its `parts.json` (`chapters.ts`). A skill that needs
        "a module that keeps documents for an epic's parts" — Flows' `/flow-design` — finds it by this

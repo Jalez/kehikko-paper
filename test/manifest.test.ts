@@ -54,8 +54,9 @@ describe('what this app claims about itself', () => {
        module alone so a paper opens where its reader left it. `parts:set` is
        one press, "a part for each chapter", asked of the host that keeps the
        list; `content:report` says that what this module holds for the parts
-       changed, so the host reads it again. */
-    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report'])
+       changed, so the host reads it again. `address:open` hands a link the
+       reader pressed in the PDF to the canvas, for the module that shows pages. */
+    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open'])
     expect(MANIFEST.declares.prompt).toBe(false)
   })
 

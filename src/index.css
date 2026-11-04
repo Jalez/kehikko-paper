@@ -386,6 +386,107 @@
     cursor: crosshair;
   }
 
+  /* ---- The words over the canvas, and its links ----------------------
+
+     pdf.js's text layer (`TextLayer`): the page's words as transparent text,
+     each span sized and placed by pdf.js over the glyphs it stands for. What
+     follows is the part of pdf.js's own viewer stylesheet the layer needs,
+     not the 160 kB of the viewer. The canvas is what is seen; the layer is
+     only what a drag selects, and the selection is the one thing it shows. */
+  .pdf-text {
+    position: absolute;
+    inset: 0;
+  }
+
+  .pdf-page .textLayer {
+    position: absolute;
+    text-align: initial;
+    inset: 0;
+    overflow: clip;
+    opacity: 1;
+    line-height: 1;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-size-adjust: none;
+    forced-color-adjust: none;
+    transform-origin: 0 0;
+    z-index: 0;
+    --min-font-size: 1;
+    --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+  }
+
+  .pdf-page .textLayer :is(span, br) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+    user-select: text;
+  }
+
+  .pdf-page .textLayer > :not(.markedContent),
+  .pdf-page .textLayer .markedContent span:not(.markedContent) {
+    z-index: 1;
+    --font-height: 0;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    --scale-x: 1;
+    --rotate: 0deg;
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+  }
+
+  .pdf-page .textLayer .markedContent {
+    display: contents;
+  }
+
+  .pdf-page .textLayer span[role='img'] {
+    user-select: none;
+    cursor: default;
+  }
+
+  .pdf-page .textLayer ::selection {
+    background: rgb(0 90 255 / 28%);
+  }
+
+  .pdf-page .textLayer br::selection {
+    background: transparent;
+  }
+
+  /* Below the words, stretched over the whole page while a drag that began on
+     them is going on (`pdf-selecting`), so the drag has somewhere to be
+     between lines and columns and the selection does not jump. */
+  .pdf-page .textLayer .endOfContent {
+    display: block;
+    position: absolute;
+    inset: 100% 0 0;
+    z-index: 0;
+    cursor: default;
+    user-select: none;
+  }
+
+  .pdf-selecting .pdf-page .textLayer .endOfContent {
+    top: 0;
+  }
+
+  /* A link: invisible until pointed at, like a link in any PDF reader, then a
+     thin outline so it is clear what a press will follow. */
+  .pdf-link {
+    position: absolute;
+    z-index: 2;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+
+  .pdf-link:hover,
+  .pdf-link:focus-visible {
+    outline: 1px solid rgb(70 110 255 / 55%);
+    background: rgb(70 110 255 / 8%);
+  }
+
+  .pdf-selecting .pdf-link {
+    pointer-events: none;
+  }
+
   /* ---- Narrowed to the picked parts of the epic ----------------------- */
 
   /* ---- The PDF under a focus: which sheet this is ---------------------

@@ -295,6 +295,17 @@ was read on. It does not record glyphs and it has no columns. So:
   front, and a double press turns to the Source tab. Finer than the line is
   done by reading the page (`src/pdf/words.ts`): the word under the press is
   looked for on the line SyncTeX named, and selected.
+- **Dragging over the PDF selects its text**, as in any PDF reader: pdf.js's
+  text layer lies over each page, so a selection runs across lines, columns
+  and pages and copies. A drag is not a press (`src/pdf/gesture.ts`: the
+  pointer moved, or words are selected). A drag that selected words is a pick:
+  both its ends are asked of SyncTeX like a press, and the stretch of source
+  between them is selected — which is what the canvas is told is pointed at.
+- **Links in the PDF can be followed** (`src/pdf/links.ts`). An `\href` or
+  `\url` is handed to the canvas (`address.open`), for the module there that
+  shows pages; with no host, or a host that declines, it opens in a new tab.
+  Only `http:` and `https:` are links at all. A `\ref` or a line of the
+  contents scrolls the PDF to its place.
 - **Source to PDF is not SyncTeX's answer at all: the passage is looked for in
   the PDF's own text** (`src/pdf/find.ts`). The source is turned into the
   letters it prints (`src/pdf/printed.ts`) — markup dropped, an `\emph{x}` as
