@@ -70,6 +70,15 @@ export interface HeaderState {
    * when none is current; `editing` while the author's own text is being typed.
    */
   suggest?: { stops: number; position: string | null; editing: boolean; busy: boolean; noMore?: boolean }
+  /**
+   * The host draws this page's footer (`footer.ts`), so what is a readout goes
+   * there and not here: the compile time and pages from Compile's result, the
+   * words about suggestions and a failed compile on the pane's options, the
+   * warnings on the log's label, the comparison line, and Previous and Next
+   * suggestion, which walk the "2 of 5" the footer reads out. False or absent
+   * from a host that draws no footer: then all of that stays here, as before.
+   */
+  footed?: boolean
 }
 
 /** The heading the suggestion items stand under in the Run menu. */
@@ -154,6 +163,7 @@ export function resultOf(state: Pick<HeaderState, 'ran' | 'pages'>): string | nu
 export function headerOf(state: HeaderState): HeaderItemInput[] {
   const items: HeaderItemInput[] = []
   const failed = state.ran ? !state.ran.ok : false
+  const footed = state.footed === true
 
   items.push({
     kind: 'switch',
@@ -161,9 +171,9 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
     label: 'Pane',
     value: state.tab,
     options: [
-      { id: 'source', label: state.tab === 'pdf' && state.proposals ? `Source · ${state.proposals} suggested` : 'Source' },
+      { id: 'source', label: !footed && state.tab === 'pdf' && state.proposals ? `Source · ${state.proposals} suggested` : 'Source' },
       /* Choosing it shows the caret's line there: what "Show in PDF" did. */
-      { id: 'pdf', label: failed ? 'PDF · the last compile failed' : 'PDF' },
+      { id: 'pdf', label: !footed && failed ? 'PDF · the last compile failed' : 'PDF' },
     ],
   })
 
@@ -204,7 +214,7 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
   })
   if (state.log) {
     const n = state.log.warnings
-    items.push({ kind: 'toggle', id: 'log', label: n ? `Compile log · ${n} warning${n === 1 ? '' : 's'}` : 'Compile log', checked: state.log.open })
+    items.push({ kind: 'toggle', id: 'log', label: n && !footed ? `Compile log · ${n} warning${n === 1 ? '' : 's'}` : 'Compile log', checked: state.log.open })
   }
 
   const places = placesOf(state.listed, state.jumps)
@@ -218,7 +228,7 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
       icon: 'play',
       agents: true,
       state: state.compiling ? 'busy' : failed ? 'failed' : 'idle',
-      result: resultOf(state),
+      result: footed ? null : resultOf(state),
       disabled: state.engine ? null : 'No LaTeX engine is installed on this machine yet; the PDF pane offers one.',
     })
   }
@@ -274,9 +284,8 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
            Run menu, with their keys. */
         ...(id === 'sg-accept' && q.busy ? { state: 'busy' } : {}),
       }) as HeaderItemInput
+    if (!footed) items.push(move('sg-prev', 'Previous suggestion', 'chevron-left', '⌥['), move('sg-next', 'Next suggestion', 'chevron-right', '⌥]'))
     items.push(
-      move('sg-prev', 'Previous suggestion', 'chevron-left', '⌥['),
-      move('sg-next', 'Next suggestion', 'chevron-right', '⌥]'),
       act('sg-accept', q.editing ? 'Accept my version' : 'Accept suggestion', 'check', '⌥↵'),
       act('sg-reject', 'Reject suggestion', 'x', '⌥⇧↵'),
       act('sg-edit', q.editing ? 'Stop editing suggestion' : 'Edit suggestion', 'pencil', '⌥E'),
@@ -292,7 +301,7 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
       })
     }
   }
-  if (state.baseline) {
+  if (state.baseline && !footed) {
     items.push({
       kind: 'run',
       id: 'sg-baseline',

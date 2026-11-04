@@ -19,6 +19,7 @@ import { SourceColumn, type ColumnRegion } from './editor/source-column.tsx'
 import type { Editor, EditorControl } from './editor/source-editor.tsx'
 import { MAIN_FILE, fileAfterTicks, fileOnOpening, filesShown, heldBy, inProject, narrowed, noPage, pageOfSheet, pagesDrawn, pagesOfSheets, partOf, tabsOf, ticksOf } from './focus.ts'
 import { HeaderFallback } from './header-fallback.tsx'
+import { footerItems } from './footer.ts'
 import { headerOf } from './header.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
@@ -1892,8 +1893,13 @@ export function Workspace({
 
   /* ---- The header: what the host draws in the container's own row --------- */
 
+  /* Whether the host draws this page's footer: then the line over the editor is
+     declared to it instead (`footer.ts`), and the header leaves the readouts to it. */
+  const footed = wire.where === 'hosted' && wire.drawsFooter === true
+
   const chapterOf = chapters.settable(file) ? chapters.partOf(file) : undefined
   const items = headerOf({
+    footed,
     tab,
     proposals: walkable.length,
     suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy, noMore },
@@ -1950,6 +1956,41 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [header, itemsKey])
   useEffect(() => () => header([]), [header])
+
+  /* ---- The footer: what is going on now, in the container's bottom row ---- */
+
+  /* Declared only to a host that draws it, and again only when its JSON
+     differs; to any other host nothing, and the page draws its own line. */
+  const footerKey = footed
+    ? JSON.stringify(
+        footerItems({
+          file,
+          main: awayFromMain ? MAIN_FILE : null,
+          saved: source.state === 'saving' ? 'saving' : source.state === 'dirty' ? 'dirty' : source.state === 'failed' ? 'failed' : 'clean',
+          failure: source.conflict ? null : (source.failure ?? null),
+          engine: build ? build.engine : undefined,
+          compiling: compiling || build?.running === true,
+          ran: ran ? { ok: ran.ok, ms: ran.ms, first: errors[0]?.message ?? null } : null,
+          warnings: warnings.length,
+          pages: build?.pdf?.pages ?? null,
+          stale: Boolean(ran && stale && !compiling),
+          unconfined: ran?.confined === false ? NOT_CONFINED : null,
+          section: shown.section ?? null,
+          page: shown.page,
+          suggest: { stops: stops.length, position: positionOf(stops, currentKey), noMore },
+          baseline: wire.facts.readOnly ?? wire.facts.baseline?.says ?? null,
+          readOnly: wire.facts.readOnly !== null,
+        }),
+      )
+    : null
+  const { footer } = wire
+  useEffect(() => {
+    if (footerKey !== null) footer(JSON.parse(footerKey))
+  }, [footer, footerKey])
+  /* A footer this page declared is taken away with it, and when the host stops drawing one. */
+  useEffect(() => {
+    if (footed) return () => footer([])
+  }, [footer, footed])
 
   /* ---- The host's Inbox: what is waiting for the person ----------------- */
 
@@ -2025,8 +2066,14 @@ export function Workspace({
     [paper.epic],
   )
 
-  const press: PressHandler = ({ item, value }) => {
+  const press: PressHandler = ({ item, value, place }) => {
     const nth = (prefix: string) => (typeof value === 'string' && value.startsWith(prefix) ? Number(value.slice(prefix.length)) : -1)
+    /* The footer's own: back to the file the paper starts from, beside the file it names. Previous and Next keep the header's ids. */
+    if (place === 'footer' && item === 'main') {
+      wandered()
+      openAt(MAIN_FILE)
+      return
+    }
     if (item === 'pane') {
       if (value === 'pdf') showInPdf()
       else setTab('source')
@@ -2190,7 +2237,7 @@ export function Workspace({
           </Button>
         </div>
       )}
-      {source.failure && !source.conflict && (
+      {source.failure && !source.conflict && !footed && (
         <p role="alert" className="shrink-0 border-b px-2 py-1 text-[0.72rem] text-(--gone)">
           {source.failure}
         </p>
@@ -2202,13 +2249,16 @@ export function Workspace({
               saved to, and whether it has been. The only place the open file
               is named, now that no dropdown names it — and the editor changes
               file when a tick in the host's bar does, so it has to be here. */}
+          {/* Drawn by the host in the footer when it draws one (`footer.ts`); then
+              this line is here only for the page's own menu, if the host draws no header. */}
+          {(!footed || fallback) && (
           <div
             /* One line, whatever the width: the file's name gives way first.
                Clipped sideways only — the page's own menu hangs below it. */
             className="flex shrink-0 items-center gap-x-2 overflow-x-clip border-b px-2 py-0.5 text-[0.72rem] leading-snug whitespace-nowrap"
             data-editing={file}
           >
-            {awayFromMain && (
+            {!footed && awayFromMain && (
               <Button
                 variant="outline"
                 size="container"
@@ -2224,6 +2274,8 @@ export function Workspace({
                 ← {MAIN_FILE}
               </Button>
             )}
+            {!footed && (
+            <>
             <span className="min-w-0 shrink truncate" title={file}>
               <span className="text-muted-foreground hidden @min-[300px]:inline">Editing </span>
               <code className="text-foreground font-mono font-medium">{file}</code>
@@ -2250,8 +2302,11 @@ export function Workspace({
               )}
               {shown.page !== null && build?.pdf?.pages ? <span className="shrink-0" data-page-now>{`p. ${shown.page}/${build.pdf.pages}`}</span> : null}
             </span>
-            {fallback && <HeaderFallback items={items} onPress={press} className="relative shrink-0" />}
+            </>
+            )}
+            {fallback && <HeaderFallback items={items} onPress={press} className={cn('relative shrink-0', footed && 'ml-auto')} />}
           </div>
+          )}
           <div ref={editorBox} className="min-h-0 flex-1" data-regions={columned ? regions.length : undefined} data-mounted={columned ? mountedCount : undefined}>
             {!doc && !columned ? (
               <p className="text-muted-foreground p-3 text-xs">Opening {file}…</p>
@@ -2333,7 +2388,7 @@ export function Workspace({
           <div className="relative min-h-0 flex-1">
             {fallback && <HeaderFallback items={items} onPress={press} align="left" className="absolute top-1 left-1 @min-[720px]:hidden" />}
             {/* Laid over the corner of the page it is about, where it takes no row. */}
-            {ran && stale && !compiling && (
+            {ran && stale && !compiling && !footed && (
               <span className="bg-background/90 text-muted-foreground absolute right-1 bottom-1 z-10 rounded border px-1 text-[0.65rem]" data-stale>
                 The PDF is of an earlier save.
               </span>
