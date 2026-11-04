@@ -320,14 +320,17 @@ describe('the rule, and what is read first', () => {
     expect(fileOnOpening(focus, FILES, 'main.tex')).toBe('chapters/method.tex')
   })
 
-  test('this tab’s own record is read before the host’s, and the host’s only for the paper it names', () => {
+  test('the host’s record for this container is read before this tab’s, and only for the paper it names', () => {
     const line = keptPlace(PROJECT, 'a-paper', { file: 'chapters/design.tex', tab: 'pdf' })
     expect(placeWas(PROJECT, 'a-paper', line)).toEqual({ file: 'chapters/design.tex', tab: 'pdf' })
     expect(placeWas(PROJECT, 'another-paper', line)).toBeNull()
     expect(placeWas('/tmp/elsewhere', 'a-paper', line)).toBeNull()
     expect(placeWas(PROJECT, 'a-paper', 'not what this page wrote')).toBeNull()
     rememberPlace(PROJECT, 'a-paper', { file: 'chapters/method.tex', tab: 'source' })
-    expect(placeWas(PROJECT, 'a-paper', line)).toEqual({ file: 'chapters/method.tex', tab: 'source' })
+    /* The tab's record is the last place on ANY kehikko; this container's own wins. */
+    expect(placeWas(PROJECT, 'a-paper', line)).toEqual({ file: 'chapters/design.tex', tab: 'pdf' })
+    expect(placeWas(PROJECT, 'a-paper', null)).toEqual({ file: 'chapters/method.tex', tab: 'source' })
+    expect(placeWas(PROJECT, 'a-paper', keptPlace(PROJECT, 'another-paper', { file: 'main.tex', tab: 'source' }))).toEqual({ file: 'chapters/method.tex', tab: 'source' })
     /* No project, no record: nothing is filed under a slug alone. */
     expect(keptPlace(null, 'a-paper', { file: 'main.tex', tab: 'source' })).toBeNull()
   })
