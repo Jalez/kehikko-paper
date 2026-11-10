@@ -314,7 +314,8 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
     items.push({
       kind: 'run',
       id: 'sg-stale',
-      label: cut(`${state.stale} out of date · cancel ${state.stale === 1 ? 'it' : 'them'}`),
+      /* The count is a readout: the footer's `out-of-date` says it where there is one. */
+      label: footed ? 'Cancel out-of-date suggestions' : cut(`${state.stale} out of date · cancel ${state.stale === 1 ? 'it' : 'them'}`),
       group: SUGGESTIONS,
       confirm: true,
       disabled: state.suggest?.busy ? 'Another change is being answered.' : null,
@@ -345,7 +346,7 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
       kind: 'run',
       id: 'ac-undo',
       label: cut(
-        state.recent.auto
+        state.recent.auto && !footed
           ? `${state.recent.auto} accepted automatically · cancel the last`
           : `Cancel the last accepted change${state.recent.last ? ` · ${state.recent.last}` : ''}`,
       ),
@@ -357,7 +358,8 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
       items.push({
         kind: 'go',
         id: 'accepted',
-        label: cut(`Accepted changes · ${state.recent.count}`),
+        /* The count is a readout: the footer's `accepted` says it where there is one. */
+        label: footed ? 'Accepted changes' : cut(`Accepted changes · ${state.recent.count}`),
         group: SUGGESTIONS,
         options: state.recent.options.map((one) => ({ id: `a${one.n}`, label: cut(one.label) })),
       })

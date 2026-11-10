@@ -6,6 +6,7 @@ import { endsOf, isDrag, type Sheet } from './gesture.ts'
 import { follow, linksOf, placeOf, type PageLink } from './links.ts'
 import { spanOf } from './printed.ts'
 import { wordAt, type Run } from './words.ts'
+import { useFinding } from './finding.ts'
 
 /**
  * The compiled PDF, drawn with pdf.js.
@@ -887,7 +888,6 @@ function PageCanvas({
     if (!near) return
     let stopped = false
     let task: { promise: Promise<void>; cancel(): void } | null = null
-    let layer: TextLayerLike | null = null
     /* A pause before drawing, so dragging a divider does not render the page
        once per pixel of width. */
     const timer = setTimeout(() => {
@@ -909,8 +909,34 @@ function PageCanvas({
           shown.width = off.width
           shown.height = off.height
           shown.getContext('2d')?.drawImage(off, 0, 0)
-          /* The words, as text that selects, laid where they are printed — into a
-             new layer, swapped in once laid out, like the canvas. */
+        } catch {
+          /* Cancelled by the next draw, or a page the PDF cannot give. The
+             sheet stays as it was. */
+        }
+      })()
+    }, 60)
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      task?.cancel()
+    }
+  }, [doc, version, number, scale, near])
+
+  /* The words, as text that selects, laid where they are printed — into a new layer, swapped in once
+     laid out, like the canvas. Near the viewport, like the canvas; and on every page while the host's
+     find bar is open (`finding.ts`), so a search reads the whole paper and can go to any page. A text
+     layer is light: it is the canvas that is kept to the pages near the view. */
+  const finding = useFinding()
+  const laid = near || finding
+  useEffect(() => {
+    if (!laid) return
+    let stopped = false
+    let layer: TextLayerLike | null = null
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const page = await doc.getPage(number)
+          if (stopped) return
           const [lib, content] = await Promise.all([pdfjs(), page.getTextContent()])
           const slot = text.current
           if (stopped || !slot) return
@@ -925,18 +951,16 @@ function PageCanvas({
           fresh.append(end)
           slot.replaceChildren(fresh)
         } catch {
-          /* Cancelled by the next draw, or a page the PDF cannot give. The
-             sheet stays as it was. */
+          /* Cancelled by the next draw, or a page the PDF cannot give. The layer stays as it was. */
         }
       })()
     }, 60)
     return () => {
       stopped = true
       clearTimeout(timer)
-      task?.cancel()
       layer?.cancel()
     }
-  }, [doc, version, number, scale, near])
+  }, [doc, version, number, scale, laid])
 
   /* The page's links, read once per document: they are in points, not pixels. */
   useEffect(() => {

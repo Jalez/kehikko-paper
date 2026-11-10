@@ -1,0 +1,667 @@
+[
+  {
+    "name": "a paper, compiled",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "pane",
+        "label": "Pane",
+        "value": "source",
+        "options": [
+          {
+            "id": "source",
+            "label": "Source"
+          },
+          {
+            "id": "pdf",
+            "label": "PDF"
+          }
+        ]
+      },
+      {
+        "kind": "switch",
+        "id": "file",
+        "label": "File of the picked parts",
+        "icon": "file-text",
+        "value": "t0",
+        "options": [
+          {
+            "id": "t0",
+            "label": "main.tex"
+          },
+          {
+            "id": "t1",
+            "label": "intro.tex"
+          }
+        ]
+      },
+      {
+        "kind": "toggle",
+        "id": "auto",
+        "label": "Auto accept changes",
+        "checked": false
+      },
+      {
+        "kind": "toggle",
+        "id": "jump",
+        "label": "Jump to next change",
+        "checked": true
+      },
+      {
+        "kind": "toggle",
+        "id": "log",
+        "label": "Compile log",
+        "checked": false
+      },
+      {
+        "kind": "go",
+        "id": "section",
+        "label": "Files and sections",
+        "icon": "list-tree",
+        "options": [
+          {
+            "id": "f0",
+            "label": "main.tex"
+          },
+          {
+            "id": "s0",
+            "label": "  Introduction"
+          },
+          {
+            "id": "s1",
+            "label": "  Method"
+          }
+        ]
+      },
+      {
+        "kind": "run",
+        "id": "compile",
+        "label": "Compile",
+        "icon": "play",
+        "agents": true,
+        "state": "idle",
+        "result": null,
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "reveal",
+        "label": "Show this line in the PDF",
+        "icon": "search",
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "commit",
+        "label": "Commit",
+        "icon": "git-commit-horizontal",
+        "confirm": true,
+        "disabled": null
+      }
+    ],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "file",
+        "text": "main.tex",
+        "tooltip": "Editing main.tex"
+      },
+      {
+        "kind": "text",
+        "id": "saved",
+        "text": "Saved",
+        "level": "normal"
+      },
+      {
+        "kind": "text",
+        "id": "build",
+        "text": "2.3 s · 12 pp.",
+        "level": "normal",
+        "align": "end",
+        "tooltip": "Compiled in 2.3 s · 12 pp.."
+      },
+      {
+        "kind": "text",
+        "id": "section",
+        "text": "Introduction",
+        "align": "end",
+        "optional": true,
+        "tooltip": "Introduction"
+      },
+      {
+        "kind": "text",
+        "id": "page",
+        "text": "p. 1/12",
+        "align": "end",
+        "tooltip": "Page 1 of 12"
+      }
+    ]
+  },
+  {
+    "name": "suggestions waiting, three accepted",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "pane",
+        "label": "Pane",
+        "value": "pdf",
+        "options": [
+          {
+            "id": "source",
+            "label": "Source"
+          },
+          {
+            "id": "pdf",
+            "label": "PDF"
+          }
+        ]
+      },
+      {
+        "kind": "switch",
+        "id": "file",
+        "label": "File of the picked parts",
+        "icon": "file-text",
+        "value": "t0",
+        "options": [
+          {
+            "id": "t0",
+            "label": "main.tex"
+          },
+          {
+            "id": "t1",
+            "label": "intro.tex"
+          }
+        ]
+      },
+      {
+        "kind": "toggle",
+        "id": "auto",
+        "label": "Auto accept changes",
+        "checked": false
+      },
+      {
+        "kind": "toggle",
+        "id": "jump",
+        "label": "Jump to next change",
+        "checked": true
+      },
+      {
+        "kind": "toggle",
+        "id": "log",
+        "label": "Compile log",
+        "checked": false
+      },
+      {
+        "kind": "go",
+        "id": "section",
+        "label": "Files and sections",
+        "icon": "list-tree",
+        "options": [
+          {
+            "id": "f0",
+            "label": "main.tex"
+          },
+          {
+            "id": "s0",
+            "label": "  Introduction"
+          },
+          {
+            "id": "s1",
+            "label": "  Method"
+          }
+        ]
+      },
+      {
+        "kind": "run",
+        "id": "compile",
+        "label": "Compile",
+        "icon": "play",
+        "agents": true,
+        "state": "idle",
+        "result": null,
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "reveal",
+        "label": "Show this line in the PDF",
+        "icon": "search",
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "commit",
+        "label": "Commit · 2 still to review, not included",
+        "icon": "git-commit-horizontal",
+        "confirm": true,
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "sg-accept",
+        "label": "Accept suggestion",
+        "icon": "check",
+        "shortcut": "⌥↵",
+        "group": "Suggestions",
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "sg-reject",
+        "label": "Reject suggestion",
+        "icon": "x",
+        "shortcut": "⌥⇧↵",
+        "group": "Suggestions",
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "sg-edit",
+        "label": "Edit suggestion",
+        "icon": "pencil",
+        "shortcut": "⌥E",
+        "group": "Suggestions",
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "sg-all",
+        "label": "Accept all 2 suggestions",
+        "group": "Suggestions",
+        "confirm": true,
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "sg-stale",
+        "label": "Cancel out-of-date suggestions",
+        "group": "Suggestions",
+        "confirm": true,
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "ac-undo",
+        "label": "Cancel the last accepted change · main.tex",
+        "icon": "undo",
+        "group": "Suggestions",
+        "confirm": true
+      },
+      {
+        "kind": "go",
+        "id": "accepted",
+        "label": "Accepted changes",
+        "group": "Suggestions",
+        "options": [
+          {
+            "id": "a1",
+            "label": "main.tex · old words 1 → new words 1"
+          },
+          {
+            "id": "a2",
+            "label": "main.tex · old words 2 → new words 2"
+          },
+          {
+            "id": "a3",
+            "label": "main.tex · old words 3 → new words 3"
+          }
+        ]
+      }
+    ],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "file",
+        "text": "main.tex",
+        "tooltip": "Editing main.tex"
+      },
+      {
+        "kind": "text",
+        "id": "saved",
+        "text": "Saved",
+        "level": "normal"
+      },
+      {
+        "kind": "run",
+        "id": "sg-prev",
+        "label": "Previous suggestion",
+        "icon": "chevron-left",
+        "shortcut": "⌥[",
+        "align": "center"
+      },
+      {
+        "kind": "text",
+        "id": "suggestion",
+        "text": "Suggestion 1 of 2",
+        "align": "center",
+        "tooltip": "Suggestion 1 of 2 waiting on this paper."
+      },
+      {
+        "kind": "run",
+        "id": "sg-next",
+        "label": "Next suggestion",
+        "icon": "chevron-right",
+        "shortcut": "⌥]",
+        "align": "center"
+      },
+      {
+        "kind": "text",
+        "id": "out-of-date",
+        "text": "1 out of date",
+        "level": "warn",
+        "align": "center",
+        "tooltip": "1 suggestion was made on text that has changed since. The header's Cancel out-of-date suggestions clears it."
+      },
+      {
+        "kind": "text",
+        "id": "accepted",
+        "text": "3 accepted",
+        "align": "center",
+        "optional": true,
+        "tooltip": "3 changes accepted. The header's Accepted changes lists them; Cancel the last accepted change undoes one."
+      },
+      {
+        "kind": "text",
+        "id": "build",
+        "text": "2.3 s · 12 pp.",
+        "level": "normal",
+        "align": "end",
+        "tooltip": "Compiled in 2.3 s · 12 pp.."
+      },
+      {
+        "kind": "text",
+        "id": "section",
+        "text": "Introduction",
+        "align": "end",
+        "optional": true,
+        "tooltip": "Introduction"
+      },
+      {
+        "kind": "text",
+        "id": "page",
+        "text": "p. 1/12",
+        "align": "end",
+        "tooltip": "Page 1 of 12"
+      }
+    ]
+  },
+  {
+    "name": "compiling, in a chapter file",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "pane",
+        "label": "Pane",
+        "value": "source",
+        "options": [
+          {
+            "id": "source",
+            "label": "Source"
+          },
+          {
+            "id": "pdf",
+            "label": "PDF"
+          }
+        ]
+      },
+      {
+        "kind": "switch",
+        "id": "file",
+        "label": "File of the picked parts",
+        "icon": "file-text",
+        "value": "t1",
+        "options": [
+          {
+            "id": "t0",
+            "label": "main.tex"
+          },
+          {
+            "id": "t1",
+            "label": "intro.tex"
+          }
+        ]
+      },
+      {
+        "kind": "toggle",
+        "id": "auto",
+        "label": "Auto accept changes",
+        "checked": false
+      },
+      {
+        "kind": "toggle",
+        "id": "jump",
+        "label": "Jump to next change",
+        "checked": true
+      },
+      {
+        "kind": "toggle",
+        "id": "log",
+        "label": "Compile log",
+        "checked": true
+      },
+      {
+        "kind": "go",
+        "id": "section",
+        "label": "Files and sections",
+        "icon": "list-tree",
+        "options": [
+          {
+            "id": "f0",
+            "label": "main.tex"
+          },
+          {
+            "id": "s0",
+            "label": "  Introduction"
+          },
+          {
+            "id": "s1",
+            "label": "  Method"
+          }
+        ]
+      },
+      {
+        "kind": "run",
+        "id": "compile",
+        "label": "Compile",
+        "icon": "play",
+        "agents": true,
+        "state": "busy",
+        "result": null,
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "reveal",
+        "label": "Show this line in the PDF",
+        "icon": "search",
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "commit",
+        "label": "Commit",
+        "icon": "git-commit-horizontal",
+        "confirm": true,
+        "disabled": null
+      }
+    ],
+    "footer": [
+      {
+        "kind": "run",
+        "id": "main",
+        "label": "← main.tex",
+        "tooltip": "Back to main.tex, the file the whole paper starts from"
+      },
+      {
+        "kind": "text",
+        "id": "file",
+        "text": "chapters/intro.tex",
+        "tooltip": "Editing chapters/intro.tex"
+      },
+      {
+        "kind": "text",
+        "id": "saved",
+        "text": "Unsaved",
+        "level": "normal"
+      },
+      {
+        "kind": "text",
+        "id": "build",
+        "text": "Compiling…",
+        "level": "normal",
+        "align": "end",
+        "tooltip": "Compiling with tectonic."
+      },
+      {
+        "kind": "text",
+        "id": "section",
+        "text": "Introduction",
+        "align": "end",
+        "optional": true,
+        "tooltip": "Introduction"
+      },
+      {
+        "kind": "text",
+        "id": "page",
+        "text": "p. 1/12",
+        "align": "end",
+        "tooltip": "Page 1 of 12"
+      }
+    ]
+  },
+  {
+    "name": "the last compile failed",
+    "state": true,
+    "header": [
+      {
+        "kind": "switch",
+        "id": "pane",
+        "label": "Pane",
+        "value": "source",
+        "options": [
+          {
+            "id": "source",
+            "label": "Source"
+          },
+          {
+            "id": "pdf",
+            "label": "PDF"
+          }
+        ]
+      },
+      {
+        "kind": "switch",
+        "id": "file",
+        "label": "File of the picked parts",
+        "icon": "file-text",
+        "value": "t0",
+        "options": [
+          {
+            "id": "t0",
+            "label": "main.tex"
+          },
+          {
+            "id": "t1",
+            "label": "intro.tex"
+          }
+        ]
+      },
+      {
+        "kind": "toggle",
+        "id": "auto",
+        "label": "Auto accept changes",
+        "checked": false
+      },
+      {
+        "kind": "toggle",
+        "id": "jump",
+        "label": "Jump to next change",
+        "checked": true
+      },
+      {
+        "kind": "toggle",
+        "id": "log",
+        "label": "Compile log",
+        "checked": false
+      },
+      {
+        "kind": "go",
+        "id": "section",
+        "label": "Files and sections",
+        "icon": "list-tree",
+        "options": [
+          {
+            "id": "f0",
+            "label": "main.tex"
+          },
+          {
+            "id": "s0",
+            "label": "  Introduction"
+          },
+          {
+            "id": "s1",
+            "label": "  Method"
+          }
+        ]
+      },
+      {
+        "kind": "run",
+        "id": "compile",
+        "label": "Compile",
+        "icon": "play",
+        "agents": true,
+        "state": "failed",
+        "result": null,
+        "disabled": null
+      },
+      {
+        "kind": "run",
+        "id": "reveal",
+        "label": "Show this line in the PDF",
+        "icon": "search",
+        "disabled": "There is no compiled PDF yet to show this in."
+      },
+      {
+        "kind": "run",
+        "id": "commit",
+        "label": "Commit",
+        "icon": "git-commit-horizontal",
+        "confirm": true,
+        "disabled": null
+      }
+    ],
+    "footer": [
+      {
+        "kind": "text",
+        "id": "file",
+        "text": "main.tex",
+        "tooltip": "Editing main.tex"
+      },
+      {
+        "kind": "text",
+        "id": "saved",
+        "text": "Saved",
+        "level": "normal"
+      },
+      {
+        "kind": "text",
+        "id": "build",
+        "text": "Failed: Undefined control sequence",
+        "level": "critical",
+        "align": "end",
+        "tooltip": "The last compile failed: Undefined control sequence"
+      },
+      {
+        "kind": "text",
+        "id": "section",
+        "text": "Introduction",
+        "align": "end",
+        "optional": true,
+        "tooltip": "Introduction"
+      }
+    ]
+  }
+]

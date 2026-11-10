@@ -1982,6 +1982,8 @@ export function Workspace({
           suggest: { stops: stops.length, position: positionOf(stops, currentKey), noMore },
           baseline: wire.facts.readOnly ?? wire.facts.baseline?.says ?? null,
           readOnly: wire.facts.readOnly !== null,
+          outOfDate: outOfDate.length,
+          accepted: { count: wire.facts.accepted.length, auto: wire.facts.accepted.filter((a) => a.by === 'auto').length },
         }),
       )
     : null

@@ -1,6 +1,3 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-
 import './index.css'
 /**
  * Imported for its side effect, and the order on this page is the whole point.
@@ -20,6 +17,7 @@ import './index.css'
  * package's `sideEffects` field names the client files for the same reason.
  */
 import 'kehikot-module-protocol/client'
+import { mountPage } from 'kehikot-module-protocol/client/mount'
 import { App } from './app.tsx'
 
 /*
@@ -30,11 +28,5 @@ import { App } from './app.tsx'
  * element from the greeting on. The class there is still the single answer to
  * "what theme is this".
  */
-const mount = document.getElementById('root')
-if (mount) {
-  createRoot(mount).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  )
-}
+/* StrictMode, and every render that throws said to the host (protocol 2.70.0). After the client, above. */
+mountPage('root', <App />)

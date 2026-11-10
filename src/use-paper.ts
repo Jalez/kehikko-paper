@@ -2,6 +2,7 @@ import { projectKey, sameParts, type EpicPart, type Goto, type Passage } from 'k
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useHost, type KeptCodec } from 'kehikot-module-protocol/client/react'
+import { pdfFind } from './pdf/finding.ts'
 
 /** The kept string as the host keeps it: `remembered.ts` reads and writes its own spelling. */
 const AS_WRITTEN: KeptCodec<string> = { read: (state) => state, write: (state) => state }
@@ -309,14 +310,32 @@ export function usePaper(framed: boolean) {
       onHello: (context) => arrived(context, true),
       onContext: (context) => arrived(context, false),
       onGoto: (message, answer) => goto.current(message, answer),
+      /* The host's find bar: the client's own search, once every sheet of the PDF has its words laid out (`pdf/finding.ts`). */
+      onFind: pdfFind.onFind,
       onPress: (pressing) => {
         rememberHeaderDrawn()
         setPressed(true)
         return press.current(pressing)
       },
     },
-    { gotoBackstop: 900, same: { passage: samePassage }, kept: AS_WRITTEN },
+    {
+      gotoBackstop: 900,
+      same: { passage: samePassage },
+      kept: AS_WRITTEN,
+      /* The kept view (protocol 2.70.0) keeps what this page does not keep itself: the compile log's
+         toggle. The scroll of the source and of the PDF, the pane and the file are kept per paper in
+         `remembered.ts`; the chapter switch moves a file to a part, Jump follows the paper's own
+         setting and Auto accept is kept per project — none of those is pressed back. */
+      keepView: { scroll: false, except: ['pane', 'file', 'chapter', 'auto', 'jump'] },
+    },
   )
+  /* The host's cover stays up until what this page shows is drawn (protocol 2.70.0): the paper, or the
+     words for why there is none. Never held back for visibility — a covered page is a hidden page. */
+  const drawn = sight.at === 'reading' || sight.at === 'no-paper' || sight.at === 'no-project' || sight.at === 'broke' || sight.at === 'no-epic'
+  const { ready } = host
+  useEffect(() => {
+    if (drawn) ready()
+  }, [drawn, ready])
   /* The container's string, which the host store replaces when the person moves to another kehikko. */
   kept.current = host.kept
   const { where, resize, request, point, passage: pointed, header, footer, answers, drawsHeader, drawsFooter, activity } = host

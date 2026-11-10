@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { MESSAGE, PROTOCOL, type EpicPart, type Passage } from 'kehikot-module-protocol'
+import { unwrapKept } from 'kehikot-module-protocol/client'
 import { useFocus } from 'kehikot-module-protocol/client/react'
 import { createHash } from 'node:crypto'
 import { StrictMode } from 'react'
@@ -51,6 +52,8 @@ let lastEditor: EditorProps | null
 let lastPreview: PreviewProps | null
 /** What the host holds for this module: the last string a page asked it to keep. */
 let kept: string | null
+/** The page's own string inside what the host keeps (protocol 2.70.0 wraps it with the kept view). */
+const pageKept = () => unwrapKept(kept).state
 let keeps: number
 const fetchWas = globalThis.fetch
 
@@ -130,6 +133,7 @@ async function load({ epic = 'a-paper', parts = [] as EpicPart[], passage = null
   lastPreview = null
   const source = {
     postMessage: (data: { type?: string; method?: string; params?: { state?: string } }) => {
+      if (data?.type) posted.push(data.type)
       if (data?.type !== MESSAGE.REQUEST || data.method !== 'state.set') return
       kept = data.params?.state ?? null
       keeps += 1
@@ -163,11 +167,15 @@ async function wander() {
   act(() => lastEditor!.onScrolled!(TEXT['chapters/design.tex']!.indexOf('The design'), 7))
   act(() => lastPreview!.onScrolled!(1234.5))
   press('pane', 'pdf')
-  await waitFor(() => expect(JSON.parse(kept ?? '{}')).toEqual({ project: PROJECT, epic: 'a-paper', file: 'chapters/design.tex', tab: 'pdf' }))
+  await waitFor(() => expect(JSON.parse(pageKept() ?? '{}')).toEqual({ project: PROJECT, epic: 'a-paper', file: 'chapters/design.tex', tab: 'pdf' }))
   return at
 }
 
+/** Every message the page posted to the host, by type. */
+const posted: string[] = []
+
 beforeEach(() => {
+  posted.length = 0
   disk = { ...TEXT }
   files = [...FILES]
   kept = null
@@ -183,6 +191,14 @@ afterEach(() => {
   cleanup()
   globalThis.fetch = fetchWas
   standIn(null)
+})
+
+describe('the host\'s cover (protocol 2.70.0)', () => {
+  test('is held at the greeting and lifted once, when the paper is drawn', async () => {
+    await load()
+    expect(posted).toContain(MESSAGE.READY)
+    await waitFor(() => expect(posted.filter((type) => type === MESSAGE.DRAWN)).toHaveLength(1))
+  })
 })
 
 describe('a page that is loaded again', () => {
@@ -278,7 +294,7 @@ describe('a page that is loaded again', () => {
     expect(lastEditor!.jump).toBeNull()
     expect(lastPreview!.from).toBe(0)
     /* The host's one line is now about the other paper; this tab still knows the first. */
-    await waitFor(() => expect(JSON.parse(kept ?? '{}').epic).toBe('another-paper'))
+    await waitFor(() => expect(JSON.parse(pageKept() ?? '{}').epic).toBe('another-paper'))
 
     cleanup()
     await load()
