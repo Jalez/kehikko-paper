@@ -57,14 +57,20 @@ afterEach(() => {
 
 /* A word the document prints more than once, so there is a next and a previous. */
 const all = sheets.flat().join('')
-const WORD = ['the', 'of', 'and'].find((word) => findMatches(all, word, { wholeWord: true }).length > 2)!
+/* Every run is a span of its own, side by side with the next: a whole word may begin or end between two (protocol 2.69.1). */
+const runBreaks = new Set<number>()
+sheets.flat().reduce((at, run) => {
+  runBreaks.add(at)
+  return at + run.length
+}, 0)
+const WORD = ['the', 'of', 'and'].find((word) => findMatches(all, word, { wholeWord: true }, runBreaks).length > 2)!
 const options = { caseSensitive: false, wholeWord: true }
 const marks = (root: Element) => [...root.querySelectorAll(`mark[${FIND_MARK_ATTRIBUTE}]`)]
 
 describe('find in the PDF', () => {
   test('marks and counts every sheet\'s words, and not the source editor\'s', () => {
     const root = paper(`${WORD} ${WORD} ${WORD} in the source`)
-    const expected = findMatches(all, WORD, options).length
+    const expected = findMatches(all, WORD, options, runBreaks).length
     const search = pageFind(() => {}, { root, visible: () => true, highlights: false })
     expect(search.run(WORD, options, 'first')).toEqual({ total: expected, current: 1 })
     expect(marks(root)).toHaveLength(expected)
