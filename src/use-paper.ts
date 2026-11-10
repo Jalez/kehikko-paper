@@ -2,6 +2,7 @@ import { projectKey, sameParts, type EpicPart, type Goto, type Passage } from 'k
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useHost, type KeptCodec } from 'kehikot-module-protocol/client/react'
+import { finding, setFinding, textLaidOut } from './pdf/finding.ts'
 
 /** The kept string as the host keeps it: `remembered.ts` reads and writes its own spelling. */
 const AS_WRITTEN: KeptCodec<string> = { read: (state) => state, write: (state) => state }
@@ -309,6 +310,19 @@ export function usePaper(framed: boolean) {
       onHello: (context) => arrived(context, true),
       onContext: (context) => arrived(context, false),
       onGoto: (message, answer) => goto.current(message, answer),
+      /* The host's find bar (protocol 2.69.0): the client's own search of the page reads it, once
+         every page of the PDF has its words laid out (`pdf/finding.ts`). */
+      onFind: async (_query, ask) => {
+        if (ask.direction === 'close') {
+          setFinding(false)
+          return
+        }
+        if (!finding()) {
+          setFinding(true)
+          await textLaidOut()
+        }
+        return 'default'
+      },
       onPress: (pressing) => {
         rememberHeaderDrawn()
         setPressed(true)

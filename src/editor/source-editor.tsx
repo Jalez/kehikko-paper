@@ -909,6 +909,8 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     <CodeMirror
       ref={ref}
       className={embedded ? 'source-editor source-editor-embedded' : 'source-editor h-full min-h-0'}
+      /* The host's find bar searches the PDF; the source searches itself (its own ⌘F panel). See `pdf/finding.ts`. */
+      data-kehikot-find-skip=""
       {...(embedded ? {} : { height: '100%' })}
       value={value}
       {...(restored ? { initialState: restored } : {})}
