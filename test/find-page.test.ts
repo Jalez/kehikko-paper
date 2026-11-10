@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { FIND_MARK_ATTRIBUTE, findMatches, pageFind } from 'kehikot-module-protocol/client'
 
-import { finding, setFinding, textLaidOut } from '../src/pdf/finding.ts'
+import { pdfFind } from '../src/pdf/finding.ts'
 
 /**
  * Find (protocol 2.69.0). The host's find bar is answered by the protocol client's own search of the
@@ -52,7 +52,7 @@ function paper(source: string, laid = true): HTMLElement {
 
 afterEach(() => {
   document.body.innerHTML = ''
-  setFinding(false)
+  pdfFind.close()
 })
 
 /* A word the document prints more than once, so there is a next and a previous. */
@@ -101,35 +101,21 @@ describe('find in the PDF', () => {
 })
 
 describe('the words of every sheet, while a search is open', () => {
-  test('the search is open, or not, and says so to whoever listens', () => {
-    expect(finding()).toBe(false)
-    setFinding(true)
-    expect(finding()).toBe(true)
-  })
-
-  test('a search waits for every sheet\'s text layer', async () => {
+  test('the shared adapter waits for the sheets pdf-view draws, then leaves the search to the client', async () => {
     const root = paper('', false)
-    let laid = false
-    const waiting = textLaidOut(root, 2000, 5).then(() => {
-      laid = true
-    })
-    await new Promise((settle) => setTimeout(settle, 20))
-    expect(laid).toBe(false)
+    let answered: unknown = null
+    const asking = pdfFind.onFind(WORD, { ...options, direction: 'first' }).then((said) => (answered = said))
+    expect(pdfFind.open()).toBe(true)
+    await new Promise((settle) => setTimeout(settle, 80))
+    expect(answered).toBeNull()
     for (const sheet of root.querySelectorAll('.pdf-page')) {
       const layer = document.createElement('div')
       layer.className = 'textLayer'
       sheet.append(layer)
     }
-    await waiting
-    expect(laid).toBe(true)
-  })
-
-  test('with no PDF it does not wait; with a sheet that never lays out it gives up', async () => {
-    const empty = document.createElement('div')
-    await textLaidOut(empty, 2000, 5)
-    const root = paper('', false)
-    const started = Date.now()
-    await textLaidOut(root, 40, 5)
-    expect(Date.now() - started).toBeGreaterThanOrEqual(35)
+    await asking
+    expect(answered).toBe('default')
+    await pdfFind.onFind(WORD, { ...options, direction: 'close' })
+    expect(pdfFind.open()).toBe(false)
   })
 })

@@ -53,6 +53,10 @@ export interface FooterState {
   /** What the changes are compared with, in words, or why they cannot be answered just now. */
   baseline: string | null
   readOnly: boolean
+  /** The changes accepted on this paper since it was opened, and how many of them automatically. */
+  accepted?: { count: number; auto: number }
+  /** Suggestions whose text has changed under them since they were made. */
+  outOfDate?: number
 }
 
 /** The ids of what can be pressed in the footer. Previous and Next keep the header's ids: they were there. */
@@ -136,6 +140,30 @@ export function footerItems(state: FooterState): FooterItemInput[] {
       /* The first to go: a fact about the comparison, not about the paper. Unless it says why nothing can be answered. */
       optional: !state.readOnly,
       tooltip: tip(state.baseline),
+    })
+  }
+
+  if (state.outOfDate) {
+    const n = state.outOfDate
+    items.push({
+      kind: 'text',
+      id: 'out-of-date',
+      text: `${n} out of date`,
+      level: 'warn',
+      align: 'center',
+      tooltip: tip(`${n} suggestion${n === 1 ? ' was' : 's were'} made on text that has changed since. The header's Cancel out-of-date suggestions clears ${n === 1 ? 'it' : 'them'}.`),
+    })
+  }
+  const accepted = state.accepted
+  if (accepted && accepted.count > 0) {
+    const auto = accepted.auto ? `, ${accepted.auto} automatically` : ''
+    items.push({
+      kind: 'text',
+      id: 'accepted',
+      text: `${accepted.count} accepted`,
+      align: 'center',
+      optional: true,
+      tooltip: tip(`${accepted.count} change${accepted.count === 1 ? '' : 's'} accepted${auto}. The header's Accepted changes lists them; Cancel the last accepted change undoes one.`),
     })
   }
 

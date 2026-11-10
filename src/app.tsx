@@ -111,6 +111,8 @@ export function App({
 
 /** Every state that is not a paper: a heading, a sentence or two, and — for an epic with no paper — the ways to start one. */
 export function Screen({ sight, onStart }: { sight: Sight; onStart?(epic: string, from?: StartFrom): Promise<string | null> }) {
+  /* Opening a paper is the host's cover until it is drawn (protocol 2.70.0), never words of this page's own. */
+  if (sight.at === 'asking') return null
   const [heading, ...lines] = wordsFor(sight)
   const start = sight.at === 'no-paper' && sight.where && onStart ? sight : null
   return (
@@ -139,12 +141,10 @@ export function wordsFor(sight: Sight): string[] {
         'This is where a paper is looked for, and it is the only place: '
           + '<project>/.kehikot/paper/<epic>/main.tex. There is no second layout and nothing to configure.',
       ]
-    case 'asking':
-      return ['Opening…', `Opening the paper for “${sight.epic}”.`]
     case 'broke':
       return ['That paper could not be read', sight.why]
     default:
-      /* Waiting, nobody framing the page, no epic: the shared cover's, never drawn here. */
+      /* Waiting, opening, nobody framing the page, no epic: the shared cover's, never drawn here. */
       return ['']
   }
 }
