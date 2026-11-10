@@ -112,7 +112,7 @@ describe('revise and withdraw', () => {
     expect(decide(a.id, 'accept')?.status).toBe(200)
     expect(decide(b.id, 'reject')?.status).toBe(200)
     expect(tool('revise_edit', { project, id: a.id, token: a.token, replace: 'x' })).toContain('already accepted')
-    expect(tool('withdraw_edit', { project, id: b.id, token: b.token })).toContain('already rejected')
+    expect(tool('withdraw_edit', { project, id: b.id, token: b.token })).toContain('already declined')
     expect(tool('list_proposals', { project, epic: 'a-paper' })).toContain('state: accepted')
   })
 

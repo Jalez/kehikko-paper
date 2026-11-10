@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { doorContext } from 'kehikot-module-protocol'
+import { PLACE_PARAM, PLACE_TOKEN, doorContext } from 'kehikot-module-protocol'
 import { DOOR_PROJECT_SAYS, establishBuild, mintTicket, refuseTicket, resolveDoorProject, type Reply as DoorReply } from 'kehikot-module-protocol/serve'
 import { join, relative } from 'node:path'
 
@@ -30,8 +30,15 @@ import { plainText, spanOf } from './latex/parse.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
 import { vouched } from './stale.ts'
+import { tellDeclined } from './tell.ts'
 import type { Proposal } from './latex/propose.ts'
 import {
+  MAX_DECLINE_REASON,
+  cleanReason,
+  declinedLately,
+  rememberFiler,
+  setDeclinedReason,
+  type Outcome,
   groupOf,
   keep,
   lostBecause,
@@ -728,7 +735,8 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       + 'the text to replace rather than a byte range, and give enough of it to be unique in the file: the exact '
       + 'source, as read_source shows it, including the line break if it wraps. It is source, so LaTeX markup is '
       + 'welcome on both sides — a citation, a label, a table row. Keep one suggestion to one change a person can '
-      + 'judge at a glance; several small ones are answered faster than one large one.',
+      + 'judge at a glance; several small ones are answered faster than one large one. A suggestion the person '
+      + 'declined may carry their reason, shown by list_proposals: read it before proposing the same change again.',
     schema: {
       type: 'object',
       properties: {
@@ -846,6 +854,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
           issued.hash,
         )
         if (revised) {
+          rememberFiler(revised.id, askingPlace)
           /* Others of its own over the same words are what this one supersedes. */
           for (const one of extra) settle(named.project, epic, one.id, 'withdrawn')
           return [
@@ -873,6 +882,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
         ...(group ? { group } : {}),
       })
       if (!filed.ok) return filed.why
+      rememberFiler(filed.proposal.id, askingPlace)
       const lines = [
         `Filed as ${filed.proposal.id}. It is shown in the source where it sits, and nothing is written until the `
           + 'person accepts it. Nothing on this door can accept it for them.',
@@ -1022,8 +1032,9 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       + '(kind disk: somebody edited the .tex directly; kind new or deleted for a whole file). Each line has the '
       + 'id, the file, the change as old -> new, the reason, and kind, order and state in brackets; a state of '
       + '"out of date" says the quoted text changed since it was suggested. A change that is not here was '
-      + 'accepted, rejected, withdrawn or taken in by Auto accept. Suggestions are kept on this machine and '
-      + 'survive a restart of this server.',
+      + 'accepted, declined, withdrawn or taken in by Auto accept; the latest answered ones follow, and a declined '
+      + 'one carries the person\'s reason when they gave one (reason: "…"), which you should read before proposing '
+      + 'that change again. Suggestions are kept on this machine and survive a restart of this server.',
     schema: {
       type: 'object',
       properties: { project: PROJECT_ARG, epic: { type: 'string' } },
@@ -1037,15 +1048,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const all = everything(named.project, epic)
       const gone = all.said
       const held = all.proposals
-      const recent = outcomesFor(named.project, epic).slice(0, 10).map((o) => {
-        const how =
-          o.state === 'accepted' && o.editedByAuthor
-            ? 'accepted, adjusted by the author'
-            : o.state === 'dropped'
-              ? 'dropped, the text it was about changed'
-              : o.state
-        return `${o.id}\t${o.file}\tstate: ${how}`
-      })
+      const recent = outcomesFor(named.project, epic).slice(0, 10).map(outcomeLine)
       const auto = (all.review?.accepted ?? [])
         .filter((a) => a.by === 'auto')
         .slice(0, 5)
@@ -1229,7 +1232,7 @@ export function proposalsAnswer(project: string | null, epic: string): Record<st
      while somebody was deciding about it reads as the page losing it. Then
      the files are compared with their baseline: see `review.ts`. */
   const all = everything(project, epic)
-  return { ok: true, proposals: all.proposals, ...reviewFacts(all.review), said: all.said }
+  return { ok: true, proposals: all.proposals, ...reviewFacts(all.review, project, epic), said: all.said }
 }
 
 /** What `/api/uncommitted` answers: git's standing and the disk's hashes. No project, or no paper, is `nogit`. */
@@ -1285,8 +1288,19 @@ export function changesOf(project: string | null, epic: string): { body: Record<
 }
 
 /** What goes beside the list in every answer: the setting, the baseline in words, what was accepted lately. */
-function reviewFacts(review: Review | null): Record<string, unknown> {
+function reviewFacts(review: Review | null, project: string, epic: string): Record<string, unknown> {
   return {
+    /* Declined lately, still listed so the person can give or change a reason. Text only. */
+    declined: declinedLately(project, epic).map((o) => ({
+      id: o.id,
+      file: o.file,
+      old: o.was_text.slice(0, 200),
+      new: o.replace.slice(0, 200),
+      why: o.why,
+      at: o.declinedAt ?? o.at,
+      reason: o.declinedReason ?? '',
+      count: o.group ? outcomesFor(project, epic).filter((x) => x.group === o.group && x.state === 'rejected').length : 1,
+    })),
     auto: review?.auto ?? false,
     jump: review?.jump ?? true,
     readOnly: review?.readOnly ?? null,
@@ -1344,7 +1358,7 @@ function mcp(rpc: Rpc): Reply {
         'rather than filing a replacement — they touch only your own pending suggestion and cannot accept it. ' +
         'Suggestions survive a restart; one whose quoted text changed shows as out of date. A move is an ' +
         'insertion and a deletion filed with the same group. list_proposals lists everything waiting, staged or ' +
-        'on disk. No tool here accepts or cancels a change or toggles Auto accept: those are the person\'s. It ' +
+        'on disk; a suggestion the person declined may carry their reason there. No tool here accepts or cancels a change or toggles Auto accept: those are the person\'s. It ' +
         'reads no tracker and holds no credential, so nothing here can tell you whether the work a paper cites ' +
         'has landed.',
     })
@@ -1393,12 +1407,34 @@ function mcp(rpc: Rpc): Reply {
 }
 
 /**
+ * One answered suggestion as `list_proposals` says it. A declined one carries
+ * the person's reason, quoted as data (`JSON.stringify`), and who and when.
+ */
+function outcomeLine(o: Outcome): string {
+  const how =
+    o.state === 'accepted' && o.editedByAuthor
+      ? 'accepted, adjusted by the author'
+      : o.state === 'dropped'
+        ? 'dropped, the text it was about changed'
+        : o.state === 'rejected'
+          ? 'declined by the author'
+          : o.state
+  if (o.state !== 'rejected') return `${o.id}\t${o.file}\tstate: ${how}`
+  const when = new Date(o.declinedAt ?? o.at).toISOString()
+  const reason = o.declinedReason ? `reason: ${JSON.stringify(o.declinedReason)}` : 'no reason given'
+  return `${o.id}\t${o.file}\t${o.was_text.replace(/\s+/g, ' ').slice(0, 80)} -> ${o.replace.replace(/\s+/g, ' ').slice(0, 80)}\tstate: ${how} at ${when}\t${reason}`
+}
+
+/**
  * Every door but the page, as one function.
  *
  * `null` means "this path is not ours", and the caller passes it on to Vite —
  * which is how the page, the client module and Vite's own hot-reload socket
  * keep working without being enumerated here.
  */
+/** The place token of the MCP call being answered, or null. See `answerAt`'s `/mcp`. */
+let askingPlace: string | null = null
+
 export function answerAt(
   method: string,
   path: string,
@@ -1413,7 +1449,16 @@ export function answerAt(
     if (!body || typeof body.method !== 'string') {
       return { status: 400, body: { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'not a request' } } }
     }
-    return mcp(body as Rpc)
+    /* The calling session's place token, when its door URL carries one: kept
+       beside a suggestion it files, so the session can be told when the person
+       declines it (`tell.ts`). Only while this one call is answered. */
+    const place = query.get(PLACE_PARAM)
+    askingPlace = place && PLACE_TOKEN.test(place) ? place : null
+    try {
+      return mcp(body as Rpc)
+    } finally {
+      askingPlace = null
+    }
   }
 
   if (path === '/api/papers' && method === 'GET') {
@@ -1583,7 +1628,7 @@ export function answerAt(
        whose chapters this module does not keep. */
     const published = republish(project, epic)
     const after = everything(project, epic)
-    return ok({ ok: true, hash: written.hash, paper: readPaper(epic, project), proposals: after.proposals, ...reviewFacts(after.review), said, published })
+    return ok({ ok: true, hash: written.hash, paper: readPaper(epic, project), proposals: after.proposals, ...reviewFacts(after.review, project, epic), said, published })
   }
 
   /*
@@ -1690,6 +1735,21 @@ export function answerAt(
 
     const decision = str(body?.decision, 20)
     const id = str(body?.id, 80)
+    /* The person's reason for declining, optional: plain text, kept with the
+       decision and told to the filer. Refused rather than clipped when long. */
+    const reason = decision === 'reject' ? cleanReason(body?.reason) : ''
+    if (reason === null) return bad(`A reason for declining is plain text of at most ${MAX_DECLINE_REASON} characters.`)
+    /* Every suggestion this answer declines, so the filers can be told once. */
+    const declined: string[] = []
+    const decline = (one: string) => {
+      settle(project, epic, one, 'rejected', reason ? { declinedReason: reason } : {})
+      declined.push(one)
+    }
+    const told = () => {
+      if (!declined.length) return
+      const now = outcomesFor(project, epic).filter((o) => declined.includes(o.id))
+      tellDeclined(project, now)
+    }
 
     /* The other versions of this passage, if it has any: answering one answers
        the item. Read before anything changes the files. */
@@ -1712,7 +1772,7 @@ export function answerAt(
         } else {
           /* A suggestion goes with the whole group it is in. */
           const one = proposalById(project, epic, mate.id)
-          if (one) for (const member of groupOf(project, epic, one)) settle(project, epic, member.id, 'rejected')
+          if (one) for (const member of groupOf(project, epic, one)) decline(member.id)
         }
       }
     }
@@ -1727,6 +1787,7 @@ export function answerAt(
         if (decision !== 'accept' && decision !== 'reject') return bad('A change is accepted or cancelled, and this said neither.')
         const done = decision === 'accept' ? acceptChange(ctx, id) : cancelChange(ctx, id, body?.confirm === true)
         if (done.ok) answerMates(decision === 'accept' ? 'accept' : 'reject')
+        told()
         const all = everything(project, epic)
         if (!done.ok) {
           return {
@@ -1737,7 +1798,7 @@ export function answerAt(
               ...('needsConfirm' in done && done.needsConfirm ? { needsConfirm: true } : {}),
               paper: readPaper(epic, project),
               proposals: all.proposals,
-              ...reviewFacts(all.review),
+              ...reviewFacts(all.review, project, epic),
             },
           }
         }
@@ -1745,7 +1806,7 @@ export function answerAt(
           ok: true,
           paper: readPaper(epic, project),
           proposals: all.proposals,
-          ...reviewFacts(all.review),
+          ...reviewFacts(all.review, project, epic),
           said: decision === 'accept'
             ? `Accepted${done.count > 1 ? ` ${done.count} changes` : ''}${all.review?.mode === 'git' ? ' and staged in git' : ''}.`
             : `Cancelled${done.count > 1 ? ` ${done.count} changes` : ''}: the earlier text is back.`,
@@ -1760,10 +1821,11 @@ export function answerAt(
       const one = proposalById(project, epic, id)
       if (!one) return bad('There is no suggestion by that name waiting here.', 404)
       /* A group is answered as one: half a move is not a change anybody asked for. */
-      for (const member of groupOf(project, epic, one)) settle(project, epic, member.id, 'rejected')
+      for (const member of groupOf(project, epic, one)) decline(member.id)
       answerMates('reject')
+      told()
       const after = everything(project, epic)
-      return ok({ ok: true, proposals: after.proposals, ...reviewFacts(after.review) })
+      return ok({ ok: true, proposals: after.proposals, ...reviewFacts(after.review, project, epic) })
     }
 
     if (decision !== 'accept') return bad('A suggestion is accepted or rejected, and this said neither.')
@@ -1974,6 +2036,15 @@ export function answerAt(
       } else if (!setReason(ctx, id, why)) {
         return bad('There is no change by that name waiting here.', 404)
       }
+    } else if (action === 'decline-reason') {
+      /* Give, change or clear the reason on a suggestion the person declined. */
+      const id = str(body?.id, 80)
+      const reason = cleanReason(body?.reason)
+      if (reason === null) return bad(`A reason for declining is plain text of at most ${MAX_DECLINE_REASON} characters.`)
+      const done = setDeclinedReason(project, epic, id, reason)
+      if (!done.ok) return bad(done.why, 404)
+      if (reason) tellDeclined(project, done.changed, true)
+      said = reason ? 'The reason is kept with the decision.' : 'The reason is cleared.'
     } else if (action === 'uncommit') {
       const n = typeof body?.n === 'number' ? body.n : Number(body?.n)
       const done = cancelAccepted(ctx, n)
@@ -1981,7 +2052,7 @@ export function answerAt(
       said = 'That change is cancelled: the earlier words are back.'
     } else return bad('That is not something this door does.')
     const all = everything(project, epic)
-    return ok({ ok: true, paper: readPaper(epic, project), proposals: all.proposals, ...reviewFacts(all.review), said })
+    return ok({ ok: true, paper: readPaper(epic, project), proposals: all.proposals, ...reviewFacts(all.review, project, epic), said })
   }
 
   /*

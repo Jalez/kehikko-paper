@@ -196,6 +196,33 @@ export interface Outcome {
   final?: string
   /** How many times the filer revised it before it was answered. */
   revisions?: number
+  /** The group it was filed in, so a reason given later reaches every member. */
+  group?: string
+  /**
+   * A declined (`rejected`) suggestion only: the person's reason, plain text of
+   * at most `MAX_DECLINE_REASON` characters, who gave the decision and when.
+   * The reason may be added or changed after the decision; `reasonAt` says when.
+   */
+  declinedReason?: string
+  declinedBy?: 'author'
+  declinedAt?: number
+  reasonAt?: number
+}
+
+/** How long a reason for declining may be. */
+export const MAX_DECLINE_REASON = 1000
+
+/**
+ * A reason as it is kept: plain text, line breaks kept, other control
+ * characters dropped, trimmed. Null when it is too long or not text; '' is no
+ * reason.
+ */
+export function cleanReason(value: unknown): string | null {
+  if (value === undefined || value === null) return ''
+  if (typeof value !== 'string') return null
+  // eslint-disable-next-line no-control-regex
+  const text = value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim()
+  return text.length > MAX_DECLINE_REASON ? null : text
 }
 
 /** Recent outcomes per paper, newest last, bounded: the agent's "what became of mine". */
@@ -224,6 +251,8 @@ function note(project: string, epic: string, one: Proposal, state: Settled, extr
     was_text: one.was_text,
     replace: one.asked?.replace ?? one.text,
     ...(one.revisions ? { revisions: one.revisions } : {}),
+    ...(one.group ? { group: one.group } : {}),
+    ...(state === 'rejected' ? { declinedBy: 'author' as const, declinedAt: Date.now() } : {}),
     ...extra,
   })
   outcomes.set(at, list.slice(-MAX_OUTCOMES))
@@ -232,6 +261,74 @@ function note(project: string, epic: string, one: Proposal, state: Settled, extr
 /** Recent outcomes of one paper, newest first. */
 export function outcomesFor(project: string, epic: string): Outcome[] {
   return [...(outcomes.get(key(project, epic)) ?? [])].reverse()
+}
+
+/**
+ * Give, change or clear (`''`) the person's reason on a suggestion they
+ * declined, and on every suggestion declined with it in its group. Answers the
+ * outcomes changed, or why not.
+ */
+export function setDeclinedReason(
+  project: string,
+  epic: string,
+  id: string,
+  reason: string,
+): { ok: true; changed: Outcome[] } | { ok: false; why: string } {
+  const at = key(project, epic)
+  const list = outcomes.get(at) ?? []
+  const one = list.find((o) => o.id === id)
+  if (!one) return { ok: false, why: 'There is no answered suggestion by that name on this paper any more.' }
+  if (one.state !== 'rejected') return { ok: false, why: 'Only a declined suggestion carries a reason for declining.' }
+  const now = Date.now()
+  const changed: Outcome[] = []
+  const next = list.map((o) => {
+    const mate = o.id === id || (one.group !== undefined && o.group === one.group && o.state === 'rejected')
+    if (!mate) return o
+    const { declinedReason: _was, ...rest } = o
+    const kept: Outcome = { ...rest, ...(reason ? { declinedReason: reason } : {}), reasonAt: now }
+    changed.push(kept)
+    return kept
+  })
+  outcomes.set(at, next)
+  return { ok: true, changed }
+}
+
+/** How long a declined suggestion stays listed in the page, where its reason can still be written. */
+export const DECLINED_LISTED_MS = 60 * 60 * 1000
+
+/** The suggestions the person declined lately on one paper, newest first: the page lists them so a reason can be added. */
+export function declinedLately(project: string, epic: string, now: number = Date.now()): Outcome[] {
+  const seen = new Set<string>()
+  return outcomesFor(project, epic).filter((o) => {
+    if (o.state !== 'rejected' || now - (o.declinedAt ?? o.at) > DECLINED_LISTED_MS) return false
+    /* A group is one decision: listed once, by its first member. */
+    if (o.group) {
+      if (seen.has(o.group)) return false
+      seen.add(o.group)
+    }
+    return true
+  }).slice(0, 5)
+}
+
+/**
+ * The place token of the session that filed a suggestion, when its call came
+ * with one: who to tell when the person answers. Held in this process's memory
+ * only and never written — a token speaks for a running session, and a
+ * restart forgets it, which costs a courtesy notice, never a decision.
+ */
+const filers = new Map<string, string>()
+const MAX_FILERS = 500
+
+export function rememberFiler(id: string, token: string | null): void {
+  if (!token) return
+  filers.delete(id)
+  filers.set(id, token)
+  while (filers.size > MAX_FILERS) filers.delete(filers.keys().next().value!)
+}
+
+/** The filing session's place token, or null. Server-side only; never put it in a response. */
+export function filerOf(id: string): string | null {
+  return filers.get(id) ?? null
 }
 
 /** One outcome by id across a whole project (any epic), or null. */
@@ -402,7 +499,7 @@ export function ownership(
         done.state === 'accepted'
           ? 'already accepted by the author'
           : done.state === 'rejected'
-            ? 'already rejected by the author'
+            ? `already declined by the author${done.declinedReason ? `, who said: ${JSON.stringify(done.declinedReason)}` : ''}`
             : done.state === 'withdrawn'
               ? 'already withdrawn'
               : 'dropped because the text it was about changed'
@@ -628,6 +725,7 @@ export function forgetAllProposals(): void {
   memory.clear()
   memoryOutcomes.clear()
   loaded.clear()
+  filers.clear()
 }
 
 /**
@@ -638,4 +736,5 @@ export function restartProposals(): void {
   memory.clear()
   memoryOutcomes.clear()
   loaded.clear()
+  filers.clear()
 }

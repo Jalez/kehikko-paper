@@ -56,7 +56,7 @@ describe('what this app claims about itself', () => {
        list; `content:report` says that what this module holds for the parts
        changed, so the host reads it again. `address:open` hands a link the
        reader pressed in the PDF to the canvas, for the module that shows pages. */
-    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open'])
+    expect(MANIFEST.declares.uses).toEqual(['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open', 'agents:message'])
     expect(MANIFEST.declares.prompt).toBe(false)
   })
 

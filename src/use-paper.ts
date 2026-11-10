@@ -90,9 +90,24 @@ export interface ReviewFacts {
   accepted: { n: number; file: string; old: string; new: string; why: string; at: number; by: 'author' | 'auto'; kind: string }[]
   /** Files left out of the comparison, and why. */
   untracked: { file: string; why: string }[]
+  /** Suggestions the person declined lately, newest first, with the reason they gave ('' for none). */
+  declined: Declined[]
 }
 
-const NO_FACTS: ReviewFacts = { auto: false, jump: true, readOnly: null, baseline: null, accepted: [], untracked: [] }
+/** One suggestion the person declined, as the page lists it while a reason can still be given. */
+export interface Declined {
+  id: string
+  file: string
+  old: string
+  new: string
+  why: string
+  at: number
+  reason: string
+  /** How many were declined with it, as one group. */
+  count: number
+}
+
+const NO_FACTS: ReviewFacts = { auto: false, jump: true, readOnly: null, baseline: null, accepted: [], untracked: [], declined: [] }
 
 function factsOf(body: Record<string, unknown>): ReviewFacts | null {
   if (typeof body.auto !== 'boolean') return null
@@ -103,6 +118,7 @@ function factsOf(body: Record<string, unknown>): ReviewFacts | null {
     baseline: (body.baseline as ReviewFacts['baseline']) ?? null,
     accepted: Array.isArray(body.accepted) ? (body.accepted as ReviewFacts['accepted']) : [],
     untracked: Array.isArray(body.untracked) ? (body.untracked as ReviewFacts['untracked']) : [],
+    declined: Array.isArray(body.declined) ? (body.declined as Declined[]) : [],
   }
 }
 
@@ -379,7 +395,7 @@ export function usePaper(framed: boolean) {
     async (
       id: string,
       decision: 'accept' | 'reject',
-      options: { replaces?: Record<string, string>; confirm?: boolean } = {},
+      options: { replaces?: Record<string, string>; confirm?: boolean; reason?: string } = {},
     ): Promise<Proposal[] | null> => {
       const paper = showing.current
       if (!paper || deciding.current) return null
@@ -398,6 +414,7 @@ export function usePaper(framed: boolean) {
             decision,
             ...(options.replaces && Object.keys(options.replaces).length ? { replaces: options.replaces } : {}),
             ...(options.confirm ? { confirm: true } : {}),
+            ...(decision === 'reject' && options.reason ? { reason: options.reason } : {}),
           },
         )
         const left = Array.isArray(body.proposals) ? (body.proposals as Proposal[]) : null

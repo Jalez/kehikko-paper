@@ -23,6 +23,7 @@ import { footerItems } from './footer.ts'
 import { headerOf } from './header.ts'
 import { byteAt, indexAt, lineAt, startOfLine, textOfLine, toDisk } from './lib/offsets.ts'
 import { jumpsOf, sectionAt, sectionsOf } from './lib/sections.ts'
+import { DeclinedList } from './declined.tsx'
 import { pdfIsOf } from './pdf/of.ts'
 import type { PdfMark, Preview } from './pdf/pdf-view.tsx'
 import { endOfPick, placeWord, wholeWords } from './pdf/words.ts'
@@ -1715,7 +1716,7 @@ export function Workspace({
   /* Answer a stop: the current one (header, keys) or the one whose tag was
      pressed. One path; `onKey` only says which stop it is. */
   const answerCurrent = useCallback(
-    async (decision: 'accept' | 'reject', onKey?: string, confirm?: boolean) => {
+    async (decision: 'accept' | 'reject', onKey?: string, confirm?: boolean, reason?: string) => {
       const header = onKey === undefined
       const wasArmed = armedNow.current !== null
       const stop = header ? currentStop : stopsNow.current.find((one) => one.key === onKey)
@@ -1751,6 +1752,7 @@ export function Workspace({
       left ??= await answerOne(asked, decision, {
         ...(decision === 'accept' && Object.keys(replaces).length ? { replaces } : {}),
         ...(confirm ? { confirm } : {}),
+        ...(decision === 'reject' && reason ? { reason } : {}),
       })
       if (!left) return
       for (const m of stop.members) drafts.current.delete(m.id)
@@ -2206,7 +2208,7 @@ export function Workspace({
         suggestions={inlineBy.get(name) ?? NO_SUGGESTIONS}
         drafts={drafts.current}
         onToggleSuggestion={toggleProposed}
-        onAnswerSuggestion={(key, decision, confirm) => void answerCurrent(decision, key, confirm)}
+        onAnswerSuggestion={(key, decision, confirm, reason) => void answerCurrent(decision, key, confirm, reason)}
         onWhy={(id, why) => void wire.review({ action: 'why', id, why })}
         onVersion={nextVersion}
         onPickSuggestion={armOn}
@@ -2307,6 +2309,7 @@ export function Workspace({
             {fallback && <HeaderFallback items={items} onPress={press} className={cn('relative shrink-0', footed && 'ml-auto')} />}
           </div>
           )}
+          <DeclinedList list={wire.facts.declined} onReason={(id, reason) => wire.review({ action: 'decline-reason', id, reason })} />
           <div ref={editorBox} className="min-h-0 flex-1" data-regions={columned ? regions.length : undefined} data-mounted={columned ? mountedCount : undefined}>
             {!doc && !columned ? (
               <p className="text-muted-foreground p-3 text-xs">Opening {file}…</p>
