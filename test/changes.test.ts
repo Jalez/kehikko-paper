@@ -197,6 +197,10 @@ describe('/api/watch', () => {
 
   test('a git add from a terminal is a change; a commit after it too', async () => {
     git('init', '-q', '-b', 'main')
+    /* The repository's own identity: what is waiting to be saved is read as "refused" with none
+       configured, and a machine with no global git identity (a CI runner) has none to fall back on. */
+    git('config', 'user.name', 't')
+    git('config', 'user.email', 't@example.invalid')
     git('add', '-A')
     git('commit', '-q', '-m', 'first')
     const stream = (await open()) as Opened
