@@ -1,5 +1,52 @@
 import { MANIFEST_KIND, PROTOCOL, manifestSchema, type Manifest } from 'kehikot-module-protocol'
 import pkg from './package.json'
+/* This module's introduction (protocol 2.57.0): slides the host shows in its introduction dialog. Also
+   read as a file from the repository, so a person can watch it before the module runs or is installed. */
+import intro from './intro.json'
+
+/** "How to use" (protocol 2.52.0). Each string one line of plain text. */
+export const HELP = {
+  summary: 'The paper the open epic is aimed at: its LaTeX source in an editor, and the PDF it compiles to beside it, with every change to it waiting for your review.',
+  sections: [
+    {
+      title: 'What it shows',
+      points: [
+        'The paper for the epic the kehikko is on, and nothing else: the source on one side, the compiled PDF on the other, or one of them where there is room for one.',
+        'The line over the editor names the file, whether it is saved, and the section and page you are on.',
+        'A compile that fails shows the error with its file and line, and the last PDF that compiled stays on screen.',
+        'Changes waiting for review, marked in the source where they sit with their reason and the count. With parts picked in the bar, only those parts’ chapters.',
+      ],
+    },
+    {
+      title: 'How to use it',
+      points: [
+        'Type in the source. A pause, or Command-S, saves the file and the PDF follows.',
+        'Select some source and choose PDF, or Show this line in the PDF, to see where it came out; press the PDF to go to the line it came from.',
+        'For each change: Show new or Show old, then Accept change or Cancel change. Enter and Esc answer the one in front; Next and Previous go across files.',
+        'View holds Source or PDF, the chapter to open, Auto accept changes, Jump to next change, and the compile log. Go lists every file and its sections. Run holds Compile and Commit.',
+        'With no paper yet, start one from a template (Article, IEEE conference, Report or thesis) or copy a folder on this computer.',
+        'Commit commits what you accepted, with the reasons, and leaves out what still waits for review. It never pushes.',
+      ],
+    },
+    {
+      title: 'What agents can do',
+      points: [
+        'Read the paper: list_papers, list_sections, read_paper and read_source.',
+        'Suggest a change with propose_edit, saying why; revise or withdraw it with revise_edit and withdraw_edit, and give the reason for a change made in the files with explain_change.',
+        'Press Compile. An agent cannot accept or cancel a change, turn on Auto accept, or commit.',
+      ],
+    },
+    {
+      title: 'Rules',
+      points: [
+        'A paper is a folder with a main.tex in it, under the project’s .kehikot/paper folder, named for its epic.',
+        'Any change to a file Paper shows is a change to review, whoever made it. Nothing an agent suggests is in the file until you accept it.',
+        'If the file changed on disk while you typed, nothing is written over it: you choose Take the disk’s or Keep mine.',
+        'Compiling needs a LaTeX engine; without one the PDF side offers to install one.',
+      ],
+    },
+  ],
+}
 
 export const ID = 'kehikot.paper'
 /** The module's version: package.json's, the one place it is written. A release is tagged with it. */
@@ -255,6 +302,9 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     'Accepting one commits it to the paper\'s own repository. For a new file or a restructuring, edit the ' +
     '.tex on disk with the tools you already have. Never restate here what the paper already says, ' +
     'because two copies of an argument drift.',
+  /* "How to use" (protocol 2.52.0), and the introduction (protocol 2.57.0). */
+  help: HELP,
+  intro,
   entry: '/app',
   /* What its content belongs to (protocol 2.29.0): one mode per scope, the default first. */
   modes: [
