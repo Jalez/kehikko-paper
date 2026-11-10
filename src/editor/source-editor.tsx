@@ -79,7 +79,7 @@ export interface EditorProps {
   /** Switch a suggestion (by stop key) between the current and the proposed reading. */
   onToggleSuggestion?(key: string): void
   /** Accept change / Cancel change on a tag: answers THAT suggestion (its group, by stop key), not the current one. `confirm` is said by the second press that deletes a new file. */
-  onAnswerSuggestion?(key: string, decision: 'accept' | 'reject', confirm?: boolean): void
+  onAnswerSuggestion?(key: string, decision: 'accept' | 'reject', confirm?: boolean, reason?: string): void
   /** Show the next version of a passage that has several (two filers, or a suggestion and a change in the file). */
   onVersion?(key: string): void
   /** The author wrote (or changed) the reason on a tag: saved beside the change, by its id. */
@@ -176,7 +176,9 @@ type Suggesting = {
   list: readonly InlineSuggestion[]
   drafts: Map<string, string>
   toggle(key: string): void
-  answer(key: string, decision: 'accept' | 'reject', confirm?: boolean): void
+  answer(key: string, decision: 'accept' | 'reject', confirm?: boolean, reason?: string): void
+  /** Tags whose "Decline with reason…" field is open, by suggestion id, with what is typed in it. */
+  declining?: Map<string, string>
   draft(id: string, text: string): void
   why(id: string, text: string): void
   version(key: string): void
@@ -185,6 +187,16 @@ type Suggesting = {
   pick(id: string, withCaret: boolean): void
 }
 const setSuggestions = StateEffect.define<Suggesting>()
+
+/** How long a reason for declining may be, as the server keeps it (`MAX_DECLINE_REASON`). */
+export const DECLINE_REASON_MAX = 1000
+
+/**
+ * The open "Decline with reason…" fields, by suggestion id, with what is typed:
+ * outside any one editor, so a tag drawn again (or an editor mounted again)
+ * keeps the field open and its words.
+ */
+const decliningNow = new Map<string, string>()
 
 class ProposedWidget extends WidgetType {
   constructor(
@@ -392,6 +404,83 @@ export class TagWidget extends WidgetType {
     }
     answer('accept', 'cm-sugg-accept', '\u2713', 'Accept change')
     answer('reject', 'cm-sugg-cancel', '\u2715', 'Cancel change')
+    /* Declining with a reason: a second, separate control, so Cancel change
+       stays one press. It opens a field under the tag; Enter (or Decline)
+       declines with what is written, an empty field declining without one;
+       Escape (or Cancel) closes it and declines nothing. Text only. */
+    let declineForm: HTMLElement | null = null
+    if (one.kind === 'staged') {
+      const open = on.declining ?? decliningNow
+      const ask = document.createElement('button')
+      ask.type = 'button'
+      ask.className = 'cm-sugg-toggle cm-sugg-reason'
+      ask.setAttribute('data-sugg-decline-reason', '')
+      ask.textContent = 'Decline with reason\u2026'
+      ask.title = 'Decline this change and say why: the agent that suggested it can read the reason'
+      ask.setAttribute('aria-label', `Decline with reason: ${about}`)
+      ask.setAttribute('aria-expanded', String(open.has(one.id)))
+      controls.append(ask)
+      const form = document.createElement('span')
+      form.className = 'cm-sugg-decline'
+      form.setAttribute('data-sugg-decline', one.id)
+      form.hidden = !open.has(one.id)
+      const field = document.createElement('input')
+      field.type = 'text'
+      field.className = 'cm-sugg-why cm-sugg-decline-why'
+      field.placeholder = 'Why? (optional)'
+      field.maxLength = DECLINE_REASON_MAX
+      field.value = open.get(one.id) ?? ''
+      field.setAttribute('aria-label', 'Why decline this change? (optional)')
+      field.setAttribute('data-sugg-decline-why', one.id)
+      const submit = document.createElement('button')
+      submit.type = 'button'
+      submit.className = 'cm-sugg-toggle cm-sugg-answer cm-sugg-cancel'
+      submit.setAttribute('data-sugg-decline-submit', '')
+      submit.textContent = 'Decline'
+      const back = document.createElement('button')
+      back.type = 'button'
+      back.className = 'cm-sugg-toggle'
+      back.setAttribute('data-sugg-decline-cancel', '')
+      back.textContent = 'Cancel'
+      const show = (yes: boolean) => {
+        form.hidden = !yes
+        ask.setAttribute('aria-expanded', String(yes))
+        if (yes) {
+          if (!open.has(one.id)) open.set(one.id, field.value)
+          queueMicrotask(() => field.isConnected && field.focus())
+        } else open.delete(one.id)
+      }
+      const decline = () => {
+        const reason = field.value.trim().slice(0, DECLINE_REASON_MAX)
+        open.delete(one.id)
+        on.answer(one.key, 'reject', undefined, reason || undefined)
+      }
+      ask.addEventListener('mousedown', (event) => event.preventDefault())
+      ask.addEventListener('click', () => show(form.hidden))
+      submit.addEventListener('mousedown', (event) => event.preventDefault())
+      submit.addEventListener('click', decline)
+      back.addEventListener('mousedown', (event) => event.preventDefault())
+      back.addEventListener('click', () => {
+        show(false)
+        ask.focus()
+      })
+      field.addEventListener('input', () => open.set(one.id, field.value))
+      field.addEventListener('mousedown', (event) => event.stopPropagation())
+      field.addEventListener('keydown', (event) => {
+        event.stopPropagation()
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+          event.preventDefault()
+          decline()
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          show(false)
+          ask.focus()
+        }
+      })
+      form.append(field, submit, back)
+      declineForm = form
+      if (!form.hidden) queueMicrotask(() => field.isConnected && document.activeElement !== field && field.focus())
+    }
     const note = (cls: string, text: string, hidden = false) => {
       const el = document.createElement('span')
       el.className = `cm-sugg-note ${cls}`
@@ -456,6 +545,8 @@ export class TagWidget extends WidgetType {
       why.textContent = one.why
       tag.append(why)
     }
+    /* Under everything else on the tag: a line of its own. */
+    if (declineForm) tag.append(declineForm)
     return tag
   }
   ignoreEvent(): boolean {
@@ -789,7 +880,7 @@ export function SourceEditor({ value, onChange, onSelect, onSave, jump, onScroll
     list,
     drafts: draftsNow,
     toggle: (key) => toggled.current?.(key),
-    answer: (key, decision, confirm) => answered.current?.(key, decision, confirm),
+    answer: (key, decision, confirm, reason) => answered.current?.(key, decision, confirm, reason),
     draft: () => {},
     why: (id, text) => whyNow.current?.(id, text),
     version: (key) => versionNow.current?.(key),

@@ -890,6 +890,17 @@ How a person reaches each action:
   passage (*N changes*) and the buttons act on the whole group. With the edit
   box open, *Accept change* applies the edited text (the *adjusted* mark says
   so) and *Cancel change* rejects. One press.
+- **Declining with a reason**: on an agent's suggestion (staged, not a change
+  found in the files) the tag also has *Decline with reason…*, which opens a
+  field under it ("Why? (optional)") with *Decline* and *Cancel*. `Enter`
+  declines with what is written (an empty field declines without a reason);
+  `Esc` closes it and declines nothing. *Cancel change* stays the one-press
+  decline. The reason (plain text, at most 1000 characters) is kept with the
+  outcome (`declinedReason`, `declinedBy`, `declinedAt`), returned by
+  `list_proposals`, and told to the filing session through `messages.notify`
+  when its `propose_edit` call carried a place token. Declined suggestions are
+  listed over the source for an hour (*Declined lately*), where a reason can
+  be added, changed or cleared (`POST /api/review`, `action: 'decline-reason'`).
 - **In the header**, only the walk is pinned: `sg-prev`, `sg-next`. Accept,
   Reject and Edit are in the Run menu (under *Suggestions*), with their keys,
   and run the same functions as the tag's buttons: Run menu, then the item

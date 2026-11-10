@@ -23,6 +23,7 @@ export const HELP = {
         'Type in the source. A pause, or Command-S, saves the file and the PDF follows.',
         'Select some source and choose PDF, or Show this line in the PDF, to see where it came out; press the PDF to go to the line it came from.',
         'For each change: Show new or Show old, then Accept change or Cancel change. Enter and Esc answer the one in front; Next and Previous go across files.',
+        'To say why you decline an agent’s suggestion, press Decline with reason… on its tag, write a line and press Enter. Declined changes stay listed over the source for an hour, where a reason can be added or changed.',
         'View holds Source or PDF, the chapter to open, Auto accept changes, Jump to next change, and the compile log. Go lists every file and its sections. Run holds Compile and Commit.',
         'With no paper yet, start one from a template (Article, IEEE conference, Report or thesis) or copy a folder on this computer.',
         'Commit commits what you accepted, with the reasons, and leaves out what still waits for review. It never pushes.',
@@ -33,6 +34,7 @@ export const HELP = {
       points: [
         'Read the paper: list_papers, list_sections, read_paper and read_source.',
         'Suggest a change with propose_edit, saying why; revise or withdraw it with revise_edit and withdraw_edit, and give the reason for a change made in the files with explain_change.',
+        'Read what became of a suggestion with list_proposals, including the reason you gave for declining it; the agent that suggested it is also told when its session can be reached.',
         'Press Compile. An agent cannot accept or cancel a change, turn on Auto accept, or commit.',
       ],
     },
@@ -365,8 +367,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
        `address:open` (2.10.0) is a link in the PDF — an `\href`, a `\url` —
        pressed by the reader: the address is handed to the canvas, for the module
        there that shows pages, under the host's rules. Only on a press, never by
-       itself; without a host, or when the host declines, it opens in a new tab. */
-    uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open'],
+       itself; without a host, or when the host declines, it opens in a new tab.
+
+       `agents:message` is `messages.notify` alone, from the server: when the
+       person declines a suggestion, the agent session that filed it is told,
+       with the person's reason when they gave one (`tell.ts`). */
+    uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open', 'agents:message'],
     /* What this module publishes for the others (protocol 2.21.0): documents for the parts of an
        epic, the chapter files each part has, in its `parts.json` (`chapters.ts`). A skill that needs
        "a module that keeps documents for an epic's parts" — Flows' `/flow-design` — finds it by this
