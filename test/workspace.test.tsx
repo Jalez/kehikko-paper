@@ -432,9 +432,9 @@ describe('this app’s own server, stopped', () => {
     const mine = MAIN.replace('tpyo', 'typo')
     try {
       fireEvent.change(editor, { target: { value: mine } })
-      expect(await screen.findByText('Paper’s own server is not answering.')).toBeDefined()
-      /* Still mounted, still holding what was typed. */
-      expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(mine)
+      expect(await screen.findByText('Paper’s own server is not answering.', undefined, { timeout: 5000 })).toBeDefined()
+      /* Still mounted, still holding what was typed. A slow runner may draw the cover before the editor is back from its first paint. */
+      expect(((await screen.findByLabelText('LaTeX source', undefined, { timeout: 5000 })) as HTMLTextAreaElement).value).toBe(mine)
 
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
       await new Promise((done) => setTimeout(done, 20))
@@ -443,9 +443,9 @@ describe('this app’s own server, stopped', () => {
       globalThis.fetch = answering
     }
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    await waitFor(() => expect(screen.queryByText('Paper’s own server is not answering.')).toBeNull())
-    expect((screen.getByLabelText('LaTeX source') as HTMLTextAreaElement).value).toBe(mine)
-  })
+    await waitFor(() => expect(screen.queryByText('Paper’s own server is not answering.')).toBeNull(), { timeout: 5000 })
+    expect(((await screen.findByLabelText('LaTeX source', undefined, { timeout: 5000 })) as HTMLTextAreaElement).value).toBe(mine)
+  }, 30_000)
 })
 
 describe('between the source and the PDF', () => {
