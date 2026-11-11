@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
+import { filesOf } from './lib/files.ts'
 import { held } from 'kehikot-module-protocol/client'
 
 import { hunksOf } from '../latex/hunks.ts'
@@ -179,9 +180,9 @@ export function useSource({
 
   /* A file the paper stopped naming — its `\input` was deleted — cannot stay
      open: the write door refuses a file the paper does not name. */
-  const files = paper?.files
+  const files = paper ? filesOf(paper).join('\n') : null
   useEffect(() => {
-    if (files && !files.includes(file)) setFile(MAIN)
+    if (files !== null && !files.split('\n').includes(file)) setFile(MAIN)
   }, [files, file])
 
   const read = useCallback(

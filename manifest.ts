@@ -23,7 +23,7 @@ export const HELP = {
         'Type in the source. A pause, or Command-S, saves the file and the PDF follows.',
         'Select some source and choose PDF, or Show this line in the PDF, to see where it came out; press the PDF to go to the line it came from.',
         'For each change: Show new or Show old, then Accept change or Cancel change. Enter and Esc answer the one in front; Next and Previous go across files.',
-        'To say why you decline an agent’s suggestion, press Decline with reason… on its tag, write a line and press Enter. Declined changes stay listed over the source for an hour, where a reason can be added or changed.',
+        'Decline on an agent’s suggestion asks why, right there on its tag: write a line and press Enter, or press Enter or Decline again to decline without one. What was declined, set aside or withdrawn stays listed over the source for an hour, with Show to go back to it.',
         'View holds Source or PDF, the chapter to open, Auto accept changes, Jump to next change, and the compile log. Go lists every file and its sections. Run holds Compile and Commit.',
         'With no paper yet, start one from a template (Article, IEEE conference, Report or thesis) or copy a folder on this computer.',
         'Commit commits what you accepted, with the reasons, and leaves out what still waits for review. It never pushes.',

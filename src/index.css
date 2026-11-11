@@ -603,7 +603,7 @@
   outline: none;
   border-bottom-color: currentColor;
 }
-/* "Decline with reason…": a line of its own under the tag, the field taking the room. */
+/* Decline's reason field: a line of its own under the tag, the field taking the room. */
 .cm-sugg-decline:not([hidden]) {
   display: flex;
   flex-basis: 100%;

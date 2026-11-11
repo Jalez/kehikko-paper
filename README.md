@@ -866,6 +866,17 @@ per overlapping suggestion, and a line for the group. A quote or replacement
 over 200,000 characters is refused in words that point at editing the file
 directly, which Paper then shows for review.
 
+- **Which files** (2.19.0, #71): every file of the paper — what `main.tex`
+  reaches with `\input` and `\include`, and the files of the paper's other
+  builds. Any `.tex` file in the paper's folder that starts a document
+  (`\documentclass` on a line that is not a comment), such as a submission's
+  `main_tuni.tex`, is a root, and every `.tex` file of the folder it names in
+  braces (`\input{f}`, `\include{f}`, a template's `\abstract{abstract_en}`) is
+  one of its files, to the same depth. They are not in the reading view; they
+  are in `Paper.others` and `hashes`, the editor opens them, the walk and the
+  Go menu list them after `main.tex`'s files, review compares them, and
+  `read_source` reads them. A file no root names, or a path outside the folder
+  (a symbolic link is not followed), is refused.
 - **Revise or withdraw.** The token is the proof that the same agent is
   asking. `revise_edit { project, id, token, replace?, why? }` changes the
   replacement and/or the reason of a still pending suggestion, keeping its id
@@ -890,21 +901,32 @@ How a person reaches each action:
   passage (*N changes*) and the buttons act on the whole group. With the edit
   box open, *Accept change* applies the edited text (the *adjusted* mark says
   so) and *Cancel change* rejects. One press.
-- **Declining with a reason**: on an agent's suggestion (staged, not a change
-  found in the files) the tag also has *Decline with reason…*, which opens a
-  field under it ("Why? (optional)") with *Decline* and *Cancel*. `Enter`
-  declines with what is written (an empty field declines without a reason);
-  `Esc` closes it and declines nothing. *Cancel change* stays the one-press
-  decline. The reason (plain text, at most 1000 characters) is kept with the
+- **Declining with a reason** (2.19.0, #72): on an agent's suggestion (staged,
+  not a change found in the files) the red button is *Decline*, and its first
+  press opens a field under the tag, beside the diff ("Why? (optional)"), with
+  the caret in it and *Decline* / *Decline with reason* and *Back*. `Enter` or
+  *Decline* pressed again declines (an empty field declines without a reason);
+  `Esc` or *Back* closes it and declines nothing. The keys (`Esc` on an armed
+  suggestion, `⌥⇧↵`) and the header's Reject still decline at once, without a
+  reason. A change found in the files keeps its one-press *Cancel change*. The reason (plain text, at most 1000 characters) is kept with the
   outcome (`declinedReason`, `declinedBy`, `declinedAt`), returned by
   `list_proposals`, and said to the filing session (when its `propose_edit`
   call carried a place token) in ONE summary through `messages.notify`: once
   the person has answered every suggestion that session has open on the file
   and decided nothing more for 30 s, the session hears how many were accepted
   and declined, with the reasons — the protocol's follow-up digest
-  (`proposalDigester`, `tell.ts`), never a message per decision. Declined suggestions are
-  listed over the source for an hour (*Declined lately*), where a reason can
-  be added, changed or cleared (`POST /api/review`, `action: 'decline-reason'`).
+  (`proposalDigester`, `tell.ts`), never a message per decision. What went without being
+  accepted is listed over the source for an hour, each saying which it was —
+  *Declined by you*, *Set aside: it overlapped a change you accepted* (#70), or
+  *Withdrawn by the agent* — with its file and section, the passage as quoted
+  and as proposed, and *Show*, which goes back to it. On one you declined a
+  reason can be added, changed or cleared (`POST /api/review`, `action:
+  'decline-reason'`).
+- **Accepting one version of a passage** sets aside only the versions about the
+  same words as it (#70): they are kept as `dropped` with `supersededBy`, never
+  as declined by the author, and `list_proposals` says *superseded*. Other
+  suggestions tied to the item only through those stay pending, moved onto the
+  file as it now is. *Cancel change* on the item still declines every version.
 - **In the header**, only the walk is pinned: `sg-prev`, `sg-next`. Accept,
   Reject and Edit are in the Run menu (under *Suggestions*), with their keys,
   and run the same functions as the tag's buttons: Run menu, then the item
