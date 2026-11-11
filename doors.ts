@@ -30,7 +30,7 @@ import { plainText, spanOf } from './latex/parse.ts'
 import { propose, droppedBecause } from './latex/propose.ts'
 import { ID, MANIFEST, VERSION } from './manifest.ts'
 import { vouched } from './stale.ts'
-import { tellDeclined } from './tell.ts'
+import { digestReasons } from './tell.ts'
 import type { Proposal } from './latex/propose.ts'
 import {
   MAX_DECLINE_REASON,
@@ -736,7 +736,9 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       + 'source, as read_source shows it, including the line break if it wraps. It is source, so LaTeX markup is '
       + 'welcome on both sides — a citation, a label, a table row. Keep one suggestion to one change a person can '
       + 'judge at a glance; several small ones are answered faster than one large one. A suggestion the person '
-      + 'declined may carry their reason, shown by list_proposals: read it before proposing the same change again.',
+      + 'declined may carry their reason, shown by list_proposals: read it before proposing the same change again. '
+      + 'When the person has answered all your suggestions on a file, your session is sent one summary of what '
+      + 'they decided, with their reasons, rather than a message per decision.',
     schema: {
       type: 'object',
       properties: {
@@ -1450,8 +1452,8 @@ export function answerAt(
       return { status: 400, body: { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'not a request' } } }
     }
     /* The calling session's place token, when its door URL carries one: kept
-       beside a suggestion it files, so the session can be told when the person
-       declines it (`tell.ts`). Only while this one call is answered. */
+       beside a suggestion it files, so the session can be told once what the
+       person decided, when it has answered them all (`tell.ts`). Only while this one call is answered. */
     const place = query.get(PLACE_PARAM)
     askingPlace = place && PLACE_TOKEN.test(place) ? place : null
     try {
@@ -1736,19 +1738,12 @@ export function answerAt(
     const decision = str(body?.decision, 20)
     const id = str(body?.id, 80)
     /* The person's reason for declining, optional: plain text, kept with the
-       decision and told to the filer. Refused rather than clipped when long. */
+       decision and said in the filer's digest (`tell.ts`). Refused rather than clipped when long. */
     const reason = decision === 'reject' ? cleanReason(body?.reason) : ''
     if (reason === null) return bad(`A reason for declining is plain text of at most ${MAX_DECLINE_REASON} characters.`)
-    /* Every suggestion this answer declines, so the filers can be told once. */
-    const declined: string[] = []
+    /* The filer hears of it once, in a digest when it has nothing open here (`tell.ts`, via `settle`). */
     const decline = (one: string) => {
       settle(project, epic, one, 'rejected', reason ? { declinedReason: reason } : {})
-      declined.push(one)
-    }
-    const told = () => {
-      if (!declined.length) return
-      const now = outcomesFor(project, epic).filter((o) => declined.includes(o.id))
-      tellDeclined(project, now)
     }
 
     /* The other versions of this passage, if it has any: answering one answers
@@ -1787,7 +1782,6 @@ export function answerAt(
         if (decision !== 'accept' && decision !== 'reject') return bad('A change is accepted or cancelled, and this said neither.')
         const done = decision === 'accept' ? acceptChange(ctx, id) : cancelChange(ctx, id, body?.confirm === true)
         if (done.ok) answerMates(decision === 'accept' ? 'accept' : 'reject')
-        told()
         const all = everything(project, epic)
         if (!done.ok) {
           return {
@@ -1823,7 +1817,6 @@ export function answerAt(
       /* A group is answered as one: half a move is not a change anybody asked for. */
       for (const member of groupOf(project, epic, one)) decline(member.id)
       answerMates('reject')
-      told()
       const after = everything(project, epic)
       return ok({ ok: true, proposals: after.proposals, ...reviewFacts(after.review, project, epic) })
     }
@@ -2043,7 +2036,7 @@ export function answerAt(
       if (reason === null) return bad(`A reason for declining is plain text of at most ${MAX_DECLINE_REASON} characters.`)
       const done = setDeclinedReason(project, epic, id, reason)
       if (!done.ok) return bad(done.why, 404)
-      if (reason) tellDeclined(project, done.changed, true)
+      if (reason) digestReasons(project, epic, done.changed)
       said = reason ? 'The reason is kept with the decision.' : 'The reason is cleared.'
     } else if (action === 'uncommit') {
       const n = typeof body?.n === 'number' ? body.n : Number(body?.n)

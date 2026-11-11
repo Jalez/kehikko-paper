@@ -5,6 +5,7 @@ import { toolchainStream } from './compile/install.ts'
 import { answer, BUILD, MANIFEST, MAX_BODY_BYTES, TICKET } from './doors.ts'
 import { ID, PREFERRED_PORT } from './manifest.ts'
 import { SAYS } from './says.ts'
+import { stopDigester } from './tell.ts'
 import { watchDoor } from './watch.ts'
 
 /**
@@ -32,4 +33,6 @@ await run({
   stream: toolchainStream,
   /* `/api/watch`, the stream that tells the page a paper moved (`watch.ts`); the same door Vite mounts. */
   before: watchDoor,
+  /* A digest still waiting for its quiet while is dropped; `list_proposals` keeps every decision. */
+  onStop: stopDigester,
 })
