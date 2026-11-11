@@ -1,4 +1,4 @@
-import { MANIFEST_KIND, PROTOCOL, manifestSchema, type Manifest } from 'kehikot-module-protocol'
+import { DOCUMENT_PROPOSALS, KEHIKOT_DIR, MANIFEST_KIND, PROTOCOL, SERVICE_EPIC, manifestSchema, moduleFolder, type Manifest } from 'kehikot-module-protocol'
 import pkg from './package.json'
 /* This module's introduction (protocol 2.57.0): slides the host shows in its introduction dialog. Also
    read as a file from the repository, so a person can watch it before the module runs or is installed. */
@@ -381,6 +381,18 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     provides: ['documents'],
     storage: true,
     prompt: false,
+  },
+  /* The service other modules use this one through (protocol 2.83.0), so none of them names it: an
+     epic's paper as a document that takes edits only as proposals. Its folder, its main file and the
+     tools on this module's door are said here and nowhere else; `test/services.test.ts` holds them to
+     the tools the door has. */
+  services: {
+    [DOCUMENT_PROPOSALS]: {
+      name: 'Paper',
+      root: `${KEHIKOT_DIR}/${moduleFolder(ID)}/${SERVICE_EPIC}`,
+      main: 'main.tex',
+      tools: { sections: 'list_sections', source: 'read_source', propose: 'propose_edit', proposals: 'list_proposals' },
+    },
   },
   health: '/healthz',
 })
