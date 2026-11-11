@@ -104,9 +104,9 @@ function says(): Plugin {
  * nothing answers. `curl` cannot see it, being unsubject to CORS; only the
  * browser console can. That has cost this codebase days.
  *
- * This module cannot go that way, for the reason Journeys found: it serves its
+ * This module cannot go that way, for the reason a sibling module found: it serves its
  * own `/api`. A permissive `Access-Control-Allow-Origin` means any page in any
- * tab can read this origin, and Journeys demonstrated the consequence rather
+ * tab can read this origin, and that module demonstrated the consequence rather
  * than arguing it:
  *
  *     $ curl -H 'Origin: https://evil.example' http://127.0.0.1:7840/app
@@ -117,9 +117,9 @@ function says(): Plugin {
  * would have been the smaller one. That has stopped being true: a reader can
  * correct a sentence in place now, `doors.ts` mints a `TICKET`, and
  * `doors()` prints it into the document — which is exactly the string
- * the `curl` above pulled out of Journeys. So the argument for this line's
+ * the `curl` above pulled out of that module. So the argument for this line's
  * absence is no longer "the leak would be small"; it is the same argument
- * Journeys makes, with the same thing at stake.
+ * that module makes, with the same thing at stake.
  *
  * The second reason stands unchanged and is the older one. The program this was
  * extracted from ran `app.use(cors())` with no options in front of a

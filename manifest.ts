@@ -1,4 +1,4 @@
-import { DOCUMENT_PROPOSALS, KEHIKOT_DIR, MANIFEST_KIND, PROTOCOL, SERVICE_EPIC, manifestSchema, moduleFolder, type Manifest } from 'kehikot-module-protocol'
+import { DOCUMENT_PROPOSALS, KEHIKOT_DIR, MANIFEST_KIND, MODULE_FOLDERS, PROTOCOL, SERVICE_EPIC, manifestSchema, moduleFolder, type Manifest } from 'kehikot-module-protocol'
 import pkg from './package.json'
 /* This module's introduction (protocol 2.57.0): slides the host shows in its introduction dialog. Also
    read as a file from the repository, so a person can watch it before the module runs or is installed. */
@@ -173,12 +173,12 @@ export const PREFERRED_PORT = 7870
  *   container beside this one then narrows by a chapter set here.
  * - **`steps:read` — not declared.** A paper is prose. It argues for an
  *   arrangement; it does not track work, and a reader that drew a step rail
- *   beside the argument would be a second, worse Journeys.
+ *   beside the argument would be a second, worse step tracker.
  * - **`live:read` — not declared.** The papers here write `\gh{41}` and `!1801`
  *   inline, and the temptation to colour those with what a tracker last said is
  *   real. It is refused on purpose: a paper is a document that has to read the
  *   same in the browser and in the compiled PDF, and a reference that is grey
- *   in one and green in the other is two documents. Journeys is where a
+ *   in one and green in the other is two documents. A module that tracks the work is where a
  *   reference gets a state; here it is a citation.
  * - **`stage:report` — not declared.** Nothing here does work, so nothing here
  *   has a stage to report.
@@ -234,7 +234,7 @@ export const PREFERRED_PORT = 7870
  *
  * ## Storage, and why THIS module asks for it
  *
- * The argument is Journeys', unchanged, and it used to be worth restating
+ * The argument is a sibling module's, unchanged, and it used to be worth restating
  * because the conclusion looked wrong from the outside: this module is
  * read-only, so surely it needs no origin? It is not read-only any more, which
  * removes the paradox and raises the stakes — see the end of this section.
@@ -392,6 +392,12 @@ export const MANIFEST: Manifest = manifestSchema.parse({
       root: `${KEHIKOT_DIR}/${moduleFolder(ID)}/${SERVICE_EPIC}`,
       main: 'main.tex',
       tools: { sections: 'list_sections', source: 'read_source', propose: 'propose_edit', proposals: 'list_proposals' },
+    },
+    /* The folder under `.kehikot/` this module is the only writer of (protocol 2.85.0), so a module
+       that shows the project's files can say whose a file is without naming this one. */
+    [MODULE_FOLDERS]: {
+      name: 'Paper',
+      folders: [{ folder: moduleFolder(ID), says: 'Each epic\'s paper: its LaTeX sources, chapters and figures.', derived: false }],
     },
   },
   health: '/healthz',

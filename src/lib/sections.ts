@@ -8,7 +8,7 @@ import type { Paper } from '../../store.ts'
  * reshapes that for a page that thinks in files and offsets rather than in
  * blocks. The title is `plainText` of the heading — the same string
  * `list_sections` hands an agent and the same one `passage.section.title`
- * carries — because Slides follows a paper by comparing that title for
+ * carries — because a module that shows slides follows a paper by comparing that title for
  * equality, and a second spelling of it here would be a slide that stops
  * following.
  */

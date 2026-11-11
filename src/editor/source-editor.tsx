@@ -22,8 +22,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentTy
  *    four megabytes with its workers, has no LaTeX grammar of its own, and was
  *    built for a window rather than a panel.
  *  - **CodeMirror 6** is around 150 kB gzipped with everything used here, is
- *    made of extensions so nothing unused ships, and is what the Slides module
- *    beside this one already edits its decks in — through the same
+ *    made of extensions so nothing unused ships, and is what the module that shows
+ *    slides already edits its decks in — through the same
  *    `@uiw/react-codemirror` wrapper — so a person moving between the two
  *    panels meets one editor with one set of keys.
  *

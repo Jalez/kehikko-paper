@@ -9,12 +9,12 @@ import type { Paper } from '../store.ts'
  * ## The open question in `use-selection.ts`, answered
  *
  * That file ends with a paragraph saying the selection is observable inside
- * this module and published nowhere, because "the Notes module has not been
+ * this module and published nowhere, because "the module that keeps notes has not been
  * written, and a protocol extension designed against an imaginary consumer is a
  * protocol extension that gets designed twice." It was right to wait, and it
  * was also right about which route not to take: the canvas `selection` carries
- * TRACKER REFS, and a byte range posted into it would be handed to Journeys and
- * to References as though it were an issue.
+ * TRACKER REFS, and a byte range posted into it would be handed to the modules that read
+ * tracker refs as though it were an issue.
  *
  * Protocol 0.9 answered it, and answered it better than the extension that file
  * imagined. `context.passage` is a first-class field with three rungs and one
@@ -66,8 +66,8 @@ import type { Paper } from '../store.ts'
  * verifies an anchor by comparing the quote against the bytes of the file with
  * only whitespace collapsed, so a rendered quote across `\emph{…}` or a
  * citation never matched and the note read as adrift from the day it was
- * written; a source quote matches exactly. Learning and Slides already store
- * source. Nothing about the SHAPE moved: a path, a page, two byte offsets, a
+ * written; a source quote matches exactly. The modules that ask questions and show slides
+ * already store source. Nothing about the SHAPE moved: a path, a page, two byte offsets, a
  * string, a section.
  */
 export interface Highlighted {

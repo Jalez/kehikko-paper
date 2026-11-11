@@ -642,7 +642,7 @@ export function usePaper(framed: boolean) {
 /**
  * Two passages, by value — the section included.
  *
- * It used not to be, and that was a quiet bug: Slides points at a section with
+ * It used not to be, and that was a quiet bug: a module that shows slides points at a section with
  * no range and no page, so two different sections of one file compared equal
  * and the second never reached this page.
  */
