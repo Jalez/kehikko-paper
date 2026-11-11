@@ -376,7 +376,7 @@ export const MANIFEST: Manifest = manifestSchema.parse({
     uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open', 'agents:message'],
     /* What this module publishes for the others (protocol 2.21.0): documents for the parts of an
        epic, the chapter files each part has, in its `parts.json` (`chapters.ts`). A skill that needs
-       "a module that keeps documents for an epic's parts" — Flows' `/flow-design` — finds it by this
+       "a module that keeps documents for an epic's parts" — a flow-design skill, say — finds it by this
        word, not by this module's id. */
     provides: ['documents'],
     storage: true,
