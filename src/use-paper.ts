@@ -132,6 +132,9 @@ function factsOf(body: Record<string, unknown>): ReviewFacts | null {
 
 const ID = 'kehikot.paper'
 
+/** What the host's cover says while this page opens a paper (protocol 2.84.0): on the first load and after a switch. */
+export const LOADING_PAPER = 'Loading the paper…'
+
 /** One empty list, so that "no parts" is the same value every time it is said. */
 const NO_PARTS: readonly EpicPart[] = []
 
@@ -339,10 +342,12 @@ export function usePaper(framed: boolean) {
   /* The host's cover stays up until what this page shows is drawn (protocol 2.70.0): the paper, or the
      words for why there is none. Never held back for visibility — a covered page is a hidden page. */
   const drawn = sight.at === 'reading' || sight.at === 'no-paper' || sight.at === 'no-project' || sight.at === 'broke' || sight.at === 'no-epic'
-  const { ready } = host
+  const { ready, loading } = host
+  /* While another epic's paper is opened, the host's cover again, in this module's words (protocol 2.84.0). */
   useEffect(() => {
     if (drawn) ready()
-  }, [drawn, ready])
+    else loading(LOADING_PAPER)
+  }, [drawn, ready, loading])
   /* The container's string, which the host store replaces when the person moves to another kehikko. */
   kept.current = host.kept
   const { where, resize, request, point, passage: pointed, header, footer, answers, drawsHeader, drawsFooter, activity } = host
