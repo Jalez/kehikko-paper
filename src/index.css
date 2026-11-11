@@ -737,3 +737,13 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/*
+ * The container's background off (Settings › Appearance; protocol 2.82.0, `data-kehikot-background`
+ * on <html>, put there by the protocol's client): the source editor and the grey behind the PDF's
+ * sheets paint nothing, so the host's canvas shows through. The sheets themselves stay paper.
+ */
+html[data-kehikot-background='none'] .pdf-scroller,
+html[data-kehikot-background='none'] .source-editor .cm-editor {
+  background: transparent;
+}
