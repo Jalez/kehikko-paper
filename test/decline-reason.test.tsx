@@ -228,6 +228,27 @@ describe('the agent that suggested it is told once, when the person has answered
     )
   })
 
+  test('a group beside a lone suggestion: two decisions, each reason once', () => {
+    const a = idOf(suggest('tpyo', 'typo', { group: 'g1' }, TOKEN))
+    suggest('mistkae', 'mistake', { group: 'g1' }, TOKEN)
+    const b = idOf(suggest('The claim', 'A claim', {}, TOKEN))
+    decline(a, 'Both are deliberate.')
+    decline(b, 'Keep the article.')
+    clock.advance(DIGEST_QUIET_MS)
+    expect(told.map((one) => one.body)).toEqual([
+      'Your 2 proposed changes to main.tex were answered: 2 declined: "Both are deliberate."; "Keep the article.". list_proposals shows each one.',
+    ])
+  })
+
+  test('a reason given later to a declined group is still said once', () => {
+    const a = idOf(suggest('tpyo', 'typo', { group: 'g1' }, TOKEN))
+    suggest('mistkae', 'mistake', { group: 'g1' }, TOKEN)
+    decline(a)
+    giveReason(a, 'Deliberate.')
+    clock.advance(DIGEST_QUIET_MS)
+    expect(told.map((one) => one.body)).toEqual(['Your proposed change to main.tex was answered: 1 declined: "Deliberate.". list_proposals shows each one.'])
+  })
+
   test('declined without a reason, then one added in the quiet while: the digest says the reason', () => {
     const id = idOf(suggest('tpyo', 'typo', {}, TOKEN))
     decline(id)
@@ -238,13 +259,13 @@ describe('the agent that suggested it is told once, when the person has answered
     ])
   })
 
-  test('a group is one digest; a call with no place token is told nothing', () => {
+  test('a group is one digest, counted as one decision with its reason once; a call with no place token is told nothing', () => {
     const a = idOf(suggest('tpyo', 'typo', { group: 'g1' }, TOKEN))
     suggest('mistkae', 'mistake', { group: 'g1' }, TOKEN)
     decline(a, 'No.')
     clock.advance(DIGEST_QUIET_MS)
     expect(told).toHaveLength(1)
-    expect(told[0]!.body).toStartWith('Your 2 proposed changes to main.tex were answered: 2 declined: "No."; "No."')
+    expect(told[0]!.body).toBe('Your proposed change to main.tex was answered: 1 declined: "No.". list_proposals shows each one.')
     told = []
     const b = idOf(suggest('tpyo', 'typos'))
     decline(b, 'No.')

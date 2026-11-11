@@ -83,16 +83,25 @@ function shared(
   }
 }
 
+/**
+ * The id a suggestion goes by in the digest. A group is answered as ONE
+ * decision (`groupOf`), so its members share one id per answer: the digest,
+ * which keeps one proposal per id, counts the group once and quotes its reason
+ * once, instead of once per member. Per answer, so a group whose members were
+ * answered differently still says each answer.
+ */
+const digestIdOf = (outcome: Outcome, status: ProposalStatus): string => (outcome.group ? `g:${outcome.group}:${status}` : outcome.id)
+
 function sharedOutcome(outcome: Outcome, token: string): Shared {
   if (outcome.state === 'accepted') {
-    return shared(outcome, 'accepted', token, { acceptedAs: outcome.editedByAuthor ? 'edited' : 'as-proposed' })
+    return shared(outcome, 'accepted', token, { id: digestIdOf(outcome, 'accepted'), acceptedAs: outcome.editedByAuthor ? 'edited' : 'as-proposed' })
   }
   if (outcome.state === 'rejected') {
-    return shared(outcome, 'declined', token, outcome.declinedReason ? { declinedReason: outcome.declinedReason } : {})
+    return shared(outcome, 'declined', token, { id: digestIdOf(outcome, 'declined'), ...(outcome.declinedReason ? { declinedReason: outcome.declinedReason } : {}) })
   }
   /* Withdrawn by the filer, or dropped with the passage it was about: not the person's answer, so the
      digest leaves it out — but it is no longer open, so a digest waiting on it may go. */
-  return shared(outcome, 'withdrawn', token)
+  return shared(outcome, 'withdrawn', token, { id: digestIdOf(outcome, 'withdrawn') })
 }
 
 type Timers = Pick<ProposalDigesterOptions, 'setTimer' | 'clearTimer' | 'quietMs'>
