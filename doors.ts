@@ -1515,7 +1515,7 @@ export function answerAt(
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
     /* 409 rather than 404: there is no answer to "is there a paper for this
        epic" until there is a project to have one in. A 404 would be a claim
-       about a directory this app has not been shown. Journeys says the same
+       about a directory this app has not been shown. Another module says the same
        thing at the same door, in the same words, for the same reason. */
     if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
     const paper = readPaper(epic, project)
