@@ -89,7 +89,7 @@ set of files from another.
 ## The editor
 
 CodeMirror 6, through `@uiw/react-codemirror` — the same editor, wrapper and
-keys as the Slides module beside this one. It was chosen over a `<textarea>`
+keys as the module that shows slides. It was chosen over a `<textarea>`
 (no highlighting, and no way to mark a range that is not the selection) and
 over Monaco (megabytes, no LaTeX grammar of its own, built for a window rather
 than a panel 280 pixels wide). LaTeX highlighting is CodeMirror's `stex` mode:
@@ -660,13 +660,13 @@ files are on screen, `showing.set` (below).
   as `list_sections` spells it. With nothing selected, `from`, `to` are null
   and `quoted` is empty.
 - **`quoted` is now the selected SOURCE**, not rendered prose. It is the bytes
-  of the file between `from` and `to`. Notes verifies an anchor by comparing
+  of the file between `from` and `to`. A module that keeps notes verifies an anchor by comparing
   the quote with the file's bytes, so a source quote verifies exactly where a
   rendered one across markup never did.
 - **`page` is now a page of the compiled PDF**, or null when nothing has
   compiled. It was a page of this module's own estimated pagination. A note
   stored with an old estimated page number is filtered by a number that may no
-  longer match under Notes' page scope; it still shows under its document and
+  longer match under a notes module's page scope; it still shows under its document and
   passage scopes.
 
 `showing.set` says which FILES are on screen, since a passage names only the

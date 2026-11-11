@@ -42,3 +42,44 @@ describe('no module names another', () => {
     }
   })
 })
+
+/* No other module's id, data folder or tool name anywhere in the code this module runs. Its own
+   id and folder are fine; so is everything a protocol service descriptor hands it at run time. */
+describe('no other module is spelled in the code', () => {
+  const SELF = 'paper'
+  const MODULES = [
+    'paper', 'review', 'checklist', 'factory', 'flows', 'screenplay', 'journeys', 'references', 'atlas', 'citations',
+    'notes', 'learning', 'source', 'diff', 'explorer', 'terminal', 'claude', 'codex', 'vibe', 'opencode', 'antigravity',
+    'tests', 'history', 'orchestrator', 'notifications', 'queue', 'browser', 'slides', 'diagrams', 'editor', 'kanban', 'monitor', 'worktrees',
+  ].filter((one) => one !== SELF)
+  /* Tools other modules have on their doors. */
+  const TOOLS = ['show_flow', 'read_flow', 'list_flows', 'write_screenplay', 'read_screenplay', 'show_question', 'list_quizzes', 'check_item', 'list_checklists', 'read_notes', 'list_slides', 'show_slide']
+  const NAMES = ['Journeys', 'Slides', 'Learning', 'Screenplay', 'Flows', 'Browser', 'Checklist', 'Citations', 'Explorer', 'Orchestrator', 'Factory', 'Kanban', 'Codex', 'Antigravity', 'OpenCode', 'Vibe']
+  const BANNED: { what: string; pattern: RegExp }[] = [
+    ...MODULES.map((one) => ({ what: `kehikot.${one}`, pattern: new RegExp(`\\b(?:kehikot|roadmap)\\.${one}\\b`) })),
+    ...MODULES.map((one) => ({ what: `.kehikot/${one}`, pattern: new RegExp(`\\.kehikot/${one}\\b`) })),
+    ...TOOLS.map((one) => ({ what: one, pattern: new RegExp(`\\b${one}\\b`) })),
+    /* Other modules' names that are never an everyday word here, in comments as well. */
+    ...NAMES.map((one) => ({ what: one, pattern: new RegExp(`\\b${one}\\b`) })),
+  ]
+  const SKIP = new Set(['node_modules', 'dist', 'test', 'notes', 'docs', '.git', 'latex', 'compile'])
+  const CODE = /\.(ts|tsx|js|mjs|json|html|sh)$/
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((one) => {
+      if (SKIP.has(one.name) || one.name.startsWith('.')) return []
+      const path = join(dir, one.name)
+      if (one.isDirectory()) return walk(path)
+      return CODE.test(one.name) && one.name !== 'bun.lock' ? [path] : []
+    })
+
+  test('code, manifest and skills', () => {
+    const skills = existsSync(join(ROOT, 'plugin', 'skills')) ? readdirSync(join(ROOT, 'plugin', 'skills')).map((one) => join(ROOT, 'plugin', 'skills', one, 'SKILL.md')).filter(existsSync) : []
+    const hits: string[] = []
+    for (const file of [...walk(ROOT), ...skills]) {
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        for (const { what, pattern } of BANNED) if (pattern.test(line)) hits.push(`${file.slice(ROOT.length + 1)}:${i + 1} names ${what}`)
+      })
+    }
+    expect(hits).toEqual([])
+  })
+})

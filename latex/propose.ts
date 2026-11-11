@@ -359,7 +359,7 @@ export function propose(source: string, find: string, replace: string): Proposed
  * another's records. A pending proposal is this process's own, held in memory
  * for the length of one conversation, and there is exactly one writer.
  *
- * What is worth noticing is that the arithmetic a Notes module would need is
+ * What is worth noticing is that the arithmetic a module that keeps notes would need is
  * now written down, pure and tested, in a place it could be lifted from.
  *
  * `null` means the proposal did not survive.

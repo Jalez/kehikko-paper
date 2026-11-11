@@ -27,9 +27,9 @@ import { templateById, titleFor, type TemplateFile } from './templates.ts'
 /**
  * The papers on this machine, and the one rule about where they may come from.
  *
- * ## This app owns no data, and that is a deliberate difference from Journeys
+ * ## This app owns no data, and that is a deliberate difference from a module that holds its data
  *
- * Journeys HOLDS its journeys: they live in its own directory, it writes them,
+ * A module that HOLDS its data keeps it in its own directory, writes it,
  * and the extraction is only real because that stayed true. This module is the
  * other shape. A paper is a `.tex` file somebody is writing in an editor, in a
  * repository with its own history, and the worst thing this app could do is

@@ -48,7 +48,7 @@ import { useTheme } from './use-theme.ts'
  * lines between them: a save reaches the disk and the PDF follows; a selection
  * in the source shows where it came out; a press on the PDF goes to the line
  * it came from; an engine's complaint is a line to press. It is the shape
- * Overleaf has and the shape the Slides module beside this one has, and for
+ * Overleaf has and the shape the module that shows slides has, and for
  * the same reason — what you edit is the document, and what you look at is
  * the result, and nothing stands in for either.
  *

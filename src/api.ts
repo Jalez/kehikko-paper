@@ -48,7 +48,7 @@ export function standingIn(): string | null {
  * Move this page to a project, or to none.
  *
  * Called from one place, before anything is asked about the new project. The
- * order matters for the same reason it matters in Journeys: a fetch that went
+ * order matters for the same reason it matters in a sibling module: a fetch that went
  * out between the switch and this assignment would be asking the OLD project
  * for the new project's epic, and epic slugs are short and hand-picked —
  * `thesis`, `bridge`, `wire` — so a second project plausibly has the same one.

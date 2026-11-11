@@ -83,8 +83,8 @@ import { templateList } from './templates.ts'
  *
  * ## Why this is a file of functions rather than a server
  *
- * Lifted, argument and all, from Journeys, because the argument is not about
- * journeys. A module is ONE ORIGIN or it is nothing: the protocol refuses a
+ * Lifted, argument and all, from a sibling module, because the argument is not
+ * about any one module. A module is ONE ORIGIN or it is nothing: the protocol refuses a
  * manifest whose `entry` points anywhere but the origin that served the
  * manifest, and it is right to — a program that could name somebody else's page
  * would be a program that could have the host frame somebody else. So the
@@ -136,8 +136,8 @@ import { templateList } from './templates.ts'
  *  - **`storage: true` kept, so the ticket is not readable cross-origin.**
  *    There is still no `server.cors` line in `vite.config.ts` and the manifest
  *    still declares storage, so the page keeps a real origin and its own `/api`
- *    calls are ordinary same-origin requests involving no CORS at all. Journeys
- *    demonstrated the alternative rather than arguing it: `curl -H 'Origin:
+ *    calls are ordinary same-origin requests involving no CORS at all. A sibling
+ *    module demonstrated the alternative rather than arguing it: `curl -H 'Origin:
  *    https://evil.example'` against a permissive origin printed its ticket
  *    straight out of the page. This app now has a ticket, so it now has that to
  *    lose.
@@ -212,7 +212,7 @@ import { templateList } from './templates.ts'
  * nothing and must say, and is refused with a sentence when it does not. From
  * this file's side all three are a string in a request and none of them is
  * trusted further than `projectOf` will resolve it. This is the argument
- * Journeys makes at the head of its own `doors.ts`, and the reason it is
+ * a sibling module makes at the head of its own `doors.ts`, and the reason it is
  * repeated verbatim in shape is that a second module quietly reaching a
  * different conclusion is how a convention stops being one.
  *
@@ -271,7 +271,7 @@ const MAX_WHY = 240
  * It is printed into the document by the protocol's `doors()`, so anything that can
  * READ the page can read it, and it therefore proves nothing about who the
  * person at the keyboard is, what they are allowed to change, or whether they
- * meant it. Journeys mints one and is careful to write the same sentence beside
+ * meant it. A sibling module mints one and is careful to write the same sentence beside
  * it, and the sentence is worth repeating rather than referring to, because a
  * ticket is exactly the kind of thing a later reader assumes is an
  * authorization check.

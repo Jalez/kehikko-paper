@@ -11,9 +11,9 @@ import { filesOf } from './lib/files.ts'
  * ## What arrives, and from whom
  *
  * Nothing sends this page a list of ranges to draw and nothing sends it a
- * `goto` with a path in it. The one channel is `context.passage`: Notes puts a
- * note's anchor there when a note is pressed, Learning a question's, Slides a
- * citation's or — with no range at all — the section a slide is linked to. All
+ * `goto` with a path in it. The one channel is `context.passage`: a module that keeps notes puts a
+ * note's anchor there when a note is pressed, one that asks questions a question's, one that
+ * shows slides a citation's or — with no range at all — the section a slide is linked to. All
  * of them name an absolute path, most a byte range, some a section title.
  *
  * So the question this file answers is small and exact: is that path a file of
@@ -43,8 +43,8 @@ export type Pointed =
 /**
  * One passage as a comparable string.
  *
- * The page is part of it and the quote is not, which is the key Notes and
- * Learning use to recognise their own press coming back. Using the same one
+ * The page is part of it and the quote is not, which is the key the modules that keep notes
+ * and ask questions use to recognise their own press coming back. Using the same one
  * here is what lets this page recognise ITS own.
  */
 export function keyOf(passage: Passage): string {
@@ -68,7 +68,7 @@ export function fileOf(paper: Paper, path: string): string | null {
  * The heading a section names, by its title as `list_sections` spells it.
  *
  * By title first and offset second: the title survives an edit above the
- * heading and the offset does not, and Slides — the module that sends these —
+ * heading and the offset does not, and the module that shows slides — which sends these —
  * links a slide to a section by title for exactly that reason.
  */
 export function headingFor(paper: Paper, file: string, section: { title: string; from: number | null }): PlacedBlock | null {
