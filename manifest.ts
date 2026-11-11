@@ -370,8 +370,9 @@ export const MANIFEST: Manifest = manifestSchema.parse({
        itself; without a host, or when the host declines, it opens in a new tab.
 
        `agents:message` is `messages.notify` alone, from the server: when the
-       person declines a suggestion, the agent session that filed it is told,
-       with the person's reason when they gave one (`tell.ts`). */
+       person has answered every suggestion an agent session filed on a file,
+       that session is told once what they decided, with the reasons for what
+       they declined (`tell.ts`, the protocol's follow-up digest). */
     uses: ['passage:set', 'showing:set', 'state:keep', 'parts:set', 'content:report', 'activity:report', 'address:open', 'agents:message'],
     /* What this module publishes for the others (protocol 2.21.0): documents for the parts of an
        epic, the chapter files each part has, in its `parts.json` (`chapters.ts`). A skill that needs

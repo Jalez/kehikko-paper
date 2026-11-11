@@ -7,15 +7,17 @@ import { join } from 'node:path'
 import { TICKET, answerAt as answer } from '../doors.ts'
 import { paperState } from '../machine.ts'
 import { forgetAllProposals, restartProposals } from '../proposals.ts'
-import { setTeller } from '../tell.ts'
+import { DIGEST_QUIET_MS } from 'kehikot-module-protocol/proposals'
+import { resetDigester, setTeller } from '../tell.ts'
 import { DeclinedList } from '../src/declined.tsx'
 import { TagWidget, type InlineSuggestion } from '../src/editor/source-editor.tsx'
 import type { Declined } from '../src/use-paper.ts'
 
 /**
  * Declining a suggestion with a reason: kept with the decision, readable by
- * the agent that suggested it, told to that agent's session where its call
- * carried a place token, and drawn in the page as text.
+ * the agent that suggested it, said in the one digest its session gets when
+ * the person has answered all its suggestions (where its call carried a place
+ * token), and drawn in the page as text.
  */
 
 const SOURCE = [
@@ -30,6 +32,31 @@ let root = ''
 let project = ''
 let main = ''
 let told: { project: string; token: string; body: string }[] = []
+
+/** Timers the test moves by hand: the digest's quiet while without waiting 30 s. */
+function fakeClock() {
+  let now = 0
+  let timers: { run: () => void; at: number }[] = []
+  return {
+    setTimer: (run: () => void, ms: number) => {
+      const timer = { run, at: now + ms }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer: (timer: unknown) => {
+      timers = timers.filter((one) => one !== timer)
+    },
+    advance(ms: number) {
+      now += ms
+      for (const timer of timers.filter((one) => one.at <= now)) {
+        timers = timers.filter((one) => one !== timer)
+        timer.run()
+      }
+    },
+    waiting: () => timers.length,
+  }
+}
+let clock = fakeClock()
 const TOKEN = 'abcdefghijklmnopqrstuvwxyz0123'
 
 beforeEach(() => {
@@ -42,11 +69,14 @@ beforeEach(() => {
   forgetAllProposals()
   told = []
   setTeller((p, token, body) => told.push({ project: p, token, body }))
+  clock = fakeClock()
+  resetDigester(clock)
 })
 
 afterEach(() => {
   cleanup()
   setTeller(null)
+  resetDigester()
   rmSync(root, { recursive: true, force: true })
   forgetAllProposals()
 })
@@ -154,37 +184,71 @@ describe('declining, kept with the decision', () => {
   })
 })
 
-describe('the agent that suggested it is told', () => {
-  test('"Declined: <reason>" to the session whose place token came with propose_edit', () => {
-    const id = idOf(suggest('tpyo', 'typo', {}, TOKEN))
-    decline(id, 'It is a quotation.')
+describe('the agent that suggested it is told once, when the person has answered them all', () => {
+  const accept = (id: string) => answer('POST', '/api/proposal', q(), { id, decision: 'accept' }, TICKET)
+
+  test('answered all: one digest after the quiet while, to the token that came with propose_edit', () => {
+    const a = idOf(suggest('tpyo', 'typo', {}, TOKEN))
+    const b = idOf(suggest('mistkae', 'mistake', {}, TOKEN))
+    accept(a)
+    expect(clock.waiting()).toBe(0)
+    decline(b, 'It is a quotation.')
+    expect(told).toEqual([])
+    clock.advance(DIGEST_QUIET_MS - 1)
+    expect(told).toEqual([])
+    clock.advance(1)
     expect(told).toHaveLength(1)
     expect(told[0]!.token).toBe(TOKEN)
     expect(told[0]!.project).toBe(project)
-    expect(told[0]!.body).toStartWith('Declined: "It is a quotation."')
-    expect(told[0]!.body).toContain(id)
-    expect(told[0]!.body).toContain('list_proposals')
+    expect(told[0]!.body).toBe(
+      'Your 2 proposed changes to main.tex were answered: 1 accepted, 1 declined: "It is a quotation.". list_proposals shows each one.',
+    )
   })
 
-  test('declined without a reason, then one added: told both times', () => {
+  test('no message per decision: answering one of two says nothing while the other is open', () => {
+    const a = idOf(suggest('tpyo', 'typo', {}, TOKEN))
+    idOf(suggest('mistkae', 'mistake', {}, TOKEN))
+    decline(a, 'No.')
+    clock.advance(DIGEST_QUIET_MS * 10)
+    expect(told).toEqual([])
+  })
+
+  test('a decision in the quiet while starts it again', () => {
+    const a = idOf(suggest('tpyo', 'typo', {}, TOKEN))
+    decline(a, 'First.')
+    clock.advance(DIGEST_QUIET_MS - 1000)
+    const b = idOf(suggest('mistkae', 'mistake', {}, TOKEN))
+    decline(b, 'Second.')
+    clock.advance(DIGEST_QUIET_MS - 1000)
+    expect(told).toEqual([])
+    clock.advance(1000)
+    expect(told).toHaveLength(1)
+    expect(told[0]!.body).toBe(
+      'Your 2 proposed changes to main.tex were answered: 2 declined: "First."; "Second.". list_proposals shows each one.',
+    )
+  })
+
+  test('declined without a reason, then one added in the quiet while: the digest says the reason', () => {
     const id = idOf(suggest('tpyo', 'typo', {}, TOKEN))
     decline(id)
     giveReason(id, 'On reflection: a quote.')
-    expect(told.map((one) => one.body.split(' The person')[0])).toEqual([
-      'Declined, with no reason given.',
-      'Declined (reason added): "On reflection: a quote."',
+    clock.advance(DIGEST_QUIET_MS)
+    expect(told.map((one) => one.body)).toEqual([
+      'Your proposed change to main.tex was answered: 1 declined: "On reflection: a quote.". list_proposals shows each one.',
     ])
   })
 
-  test('a group is told once; a call with no place token is told nothing', () => {
+  test('a group is one digest; a call with no place token is told nothing', () => {
     const a = idOf(suggest('tpyo', 'typo', { group: 'g1' }, TOKEN))
     suggest('mistkae', 'mistake', { group: 'g1' }, TOKEN)
     decline(a, 'No.')
+    clock.advance(DIGEST_QUIET_MS)
     expect(told).toHaveLength(1)
-    expect(told[0]!.body).toContain('your 2 suggestions in group "g1"')
+    expect(told[0]!.body).toStartWith('Your 2 proposed changes to main.tex were answered: 2 declined: "No."; "No."')
     told = []
     const b = idOf(suggest('tpyo', 'typos'))
     decline(b, 'No.')
+    clock.advance(DIGEST_QUIET_MS)
     expect(told).toEqual([])
   })
 

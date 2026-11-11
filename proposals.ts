@@ -354,6 +354,28 @@ export function settle(
   const one = heldFor(project, epic).find((p) => p.id === id)
   if (one) note(project, epic, one, state, extra)
   drop(project, epic, id)
+  /* Told after it has left the pending list, so a listener asking what is still open does not count it. */
+  const outcome = one ? (outcomes.get(key(project, epic)) ?? []).findLast((o) => o.id === id) : undefined
+  if (outcome) {
+    for (const listener of settledListeners) {
+      try {
+        listener(project, epic, outcome)
+      } catch {
+        /* A listener that failed is its own problem, not the decision's. */
+      }
+    }
+  }
+}
+
+type SettledListener = (project: string, epic: string, outcome: Outcome) => void
+const settledListeners = new Set<SettledListener>()
+
+/** Hear of every suggestion answered, withdrawn or dropped (`tell.ts`'s follow-up digest). The function returned stops. */
+export function onSettled(listener: SettledListener): () => void {
+  settledListeners.add(listener)
+  return () => {
+    settledListeners.delete(listener)
+  }
 }
 
 /** A secret the filer holds, and the hash that is all this process keeps of it. */

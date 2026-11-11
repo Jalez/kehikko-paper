@@ -897,8 +897,12 @@ How a person reaches each action:
   `Esc` closes it and declines nothing. *Cancel change* stays the one-press
   decline. The reason (plain text, at most 1000 characters) is kept with the
   outcome (`declinedReason`, `declinedBy`, `declinedAt`), returned by
-  `list_proposals`, and told to the filing session through `messages.notify`
-  when its `propose_edit` call carried a place token. Declined suggestions are
+  `list_proposals`, and said to the filing session (when its `propose_edit`
+  call carried a place token) in ONE summary through `messages.notify`: once
+  the person has answered every suggestion that session has open on the file
+  and decided nothing more for 30 s, the session hears how many were accepted
+  and declined, with the reasons — the protocol's follow-up digest
+  (`proposalDigester`, `tell.ts`), never a message per decision. Declined suggestions are
   listed over the source for an hour (*Declined lately*), where a reason can
   be added, changed or cleared (`POST /api/review`, `action: 'decline-reason'`).
 - **In the header**, only the walk is pinned: `sg-prev`, `sg-next`. Accept,
