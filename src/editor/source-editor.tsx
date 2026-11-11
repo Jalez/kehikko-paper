@@ -177,7 +177,7 @@ type Suggesting = {
   drafts: Map<string, string>
   toggle(key: string): void
   answer(key: string, decision: 'accept' | 'reject', confirm?: boolean, reason?: string): void
-  /** Tags whose "Decline with reason…" field is open, by suggestion id, with what is typed in it. */
+  /** Tags whose Decline field is open, by suggestion id, with what is typed in it. */
   declining?: Map<string, string>
   draft(id: string, text: string): void
   why(id: string, text: string): void
@@ -192,7 +192,7 @@ const setSuggestions = StateEffect.define<Suggesting>()
 export const DECLINE_REASON_MAX = 1000
 
 /**
- * The open "Decline with reason…" fields, by suggestion id, with what is typed:
+ * The open Decline fields, by suggestion id, with what is typed:
  * outside any one editor, so a tag drawn again (or an editor mounted again)
  * keeps the field open and its words.
  */
@@ -356,6 +356,33 @@ export class TagWidget extends WidgetType {
       if (!one.armed) return null
       return decision === 'accept' ? { label: '\u23CE', name: 'Enter', aria: 'Enter' } : { label: 'Esc', name: 'Escape', aria: 'Escape' }
     }
+    /*
+     * Declining an agent's suggestion asks why, right here (#72): the first press on Decline opens a
+     * field under this tag, beside the diff it is about, with the caret in it. Nothing has to be
+     * written: Enter on the empty field, or Decline pressed again, declines without a reason; with
+     * words, they are kept with the decision for the agent to read. Escape (or Back) closes the field
+     * and declines nothing. A change found in the file is not an agent's, so its Cancel change stays
+     * one press with no field. Text only.
+     */
+    const asksWhy = one.kind === 'staged'
+    const open = on.declining ?? decliningNow
+    let declineForm: HTMLElement | null = null
+    let declineButton: HTMLButtonElement | null = null
+    const field = document.createElement('input')
+    const decline = () => {
+      const reason = field.value.trim().slice(0, DECLINE_REASON_MAX)
+      open.delete(one.id)
+      on.answer(one.key, 'reject', undefined, reason || undefined)
+    }
+    const showWhy = (yes: boolean) => {
+      if (!declineForm) return
+      declineForm.hidden = !yes
+      declineButton?.setAttribute('aria-expanded', String(yes))
+      if (yes) {
+        if (!open.has(one.id)) open.set(one.id, field.value)
+        queueMicrotask(() => field.isConnected && field.focus())
+      } else open.delete(one.id)
+    }
     let deleting = false
     const answer = (decision: 'accept' | 'reject', cls: string, icon: string, word: string) => {
       const button = document.createElement('button')
@@ -384,6 +411,12 @@ export class TagWidget extends WidgetType {
         button.append(kbd)
         button.title = `${word} \u2014 ${cap.name}`
         button.setAttribute('aria-keyshortcuts', cap.aria)
+      } else if (decision === 'reject' && asksWhy) {
+        button.title = 'Decline this change: say why if you like, the agent that suggested it can read it'
+      }
+      if (decision === 'reject' && asksWhy) {
+        declineButton = button
+        button.setAttribute('aria-expanded', String(open.has(one.id)))
       }
       button.addEventListener('mousedown', (event) => event.preventDefault())
       button.addEventListener('click', () => {
@@ -398,73 +431,55 @@ export class TagWidget extends WidgetType {
           on.answer(one.key, decision, true)
           return
         }
+        /* The first press asks why; the second declines, with whatever was written. */
+        if (decision === 'reject' && asksWhy && declineForm?.hidden) {
+          showWhy(true)
+          return
+        }
+        if (decision === 'reject' && asksWhy) {
+          decline()
+          return
+        }
         on.answer(one.key, decision)
       })
       controls.append(button)
     }
     answer('accept', 'cm-sugg-accept', '\u2713', 'Accept change')
-    answer('reject', 'cm-sugg-cancel', '\u2715', 'Cancel change')
-    /* Declining with a reason: a second, separate control, so Cancel change
-       stays one press. It opens a field under the tag; Enter (or Decline)
-       declines with what is written, an empty field declining without one;
-       Escape (or Cancel) closes it and declines nothing. Text only. */
-    let declineForm: HTMLElement | null = null
-    if (one.kind === 'staged') {
-      const open = on.declining ?? decliningNow
-      const ask = document.createElement('button')
-      ask.type = 'button'
-      ask.className = 'cm-sugg-toggle cm-sugg-reason'
-      ask.setAttribute('data-sugg-decline-reason', '')
-      ask.textContent = 'Decline with reason\u2026'
-      ask.title = 'Decline this change and say why: the agent that suggested it can read the reason'
-      ask.setAttribute('aria-label', `Decline with reason: ${about}`)
-      ask.setAttribute('aria-expanded', String(open.has(one.id)))
-      controls.append(ask)
+    if (asksWhy) {
       const form = document.createElement('span')
       form.className = 'cm-sugg-decline'
       form.setAttribute('data-sugg-decline', one.id)
       form.hidden = !open.has(one.id)
-      const field = document.createElement('input')
       field.type = 'text'
       field.className = 'cm-sugg-why cm-sugg-decline-why'
-      field.placeholder = 'Why? (optional)'
+      field.placeholder = 'Why? (optional) \u2014 Enter declines'
       field.maxLength = DECLINE_REASON_MAX
       field.value = open.get(one.id) ?? ''
-      field.setAttribute('aria-label', 'Why decline this change? (optional)')
+      field.setAttribute('aria-label', 'Why decline this change? (optional; Enter declines)')
       field.setAttribute('data-sugg-decline-why', one.id)
       const submit = document.createElement('button')
       submit.type = 'button'
       submit.className = 'cm-sugg-toggle cm-sugg-answer cm-sugg-cancel'
       submit.setAttribute('data-sugg-decline-submit', '')
-      submit.textContent = 'Decline'
+      const said = () => (submit.textContent = field.value.trim() ? 'Decline with reason' : 'Decline')
+      said()
       const back = document.createElement('button')
       back.type = 'button'
       back.className = 'cm-sugg-toggle'
       back.setAttribute('data-sugg-decline-cancel', '')
-      back.textContent = 'Cancel'
-      const show = (yes: boolean) => {
-        form.hidden = !yes
-        ask.setAttribute('aria-expanded', String(yes))
-        if (yes) {
-          if (!open.has(one.id)) open.set(one.id, field.value)
-          queueMicrotask(() => field.isConnected && field.focus())
-        } else open.delete(one.id)
-      }
-      const decline = () => {
-        const reason = field.value.trim().slice(0, DECLINE_REASON_MAX)
-        open.delete(one.id)
-        on.answer(one.key, 'reject', undefined, reason || undefined)
-      }
-      ask.addEventListener('mousedown', (event) => event.preventDefault())
-      ask.addEventListener('click', () => show(form.hidden))
+      back.textContent = 'Back'
+      back.title = 'Close this and decline nothing \u2014 Escape'
       submit.addEventListener('mousedown', (event) => event.preventDefault())
       submit.addEventListener('click', decline)
       back.addEventListener('mousedown', (event) => event.preventDefault())
       back.addEventListener('click', () => {
-        show(false)
-        ask.focus()
+        showWhy(false)
+        declineButton?.focus()
       })
-      field.addEventListener('input', () => open.set(one.id, field.value))
+      field.addEventListener('input', () => {
+        open.set(one.id, field.value)
+        said()
+      })
       field.addEventListener('mousedown', (event) => event.stopPropagation())
       field.addEventListener('keydown', (event) => {
         event.stopPropagation()
@@ -473,14 +488,15 @@ export class TagWidget extends WidgetType {
           decline()
         } else if (event.key === 'Escape') {
           event.preventDefault()
-          show(false)
-          ask.focus()
+          showWhy(false)
+          declineButton?.focus()
         }
       })
       form.append(field, submit, back)
       declineForm = form
-      if (!form.hidden) queueMicrotask(() => field.isConnected && document.activeElement !== field && field.focus())
     }
+    answer('reject', 'cm-sugg-cancel', '\u2715', asksWhy ? 'Decline' : 'Cancel change')
+    if (declineForm && !declineForm.hidden) queueMicrotask(() => field.isConnected && document.activeElement !== field && field.focus())
     const note = (cls: string, text: string, hidden = false) => {
       const el = document.createElement('span')
       el.className = `cm-sugg-note ${cls}`

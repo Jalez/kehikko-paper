@@ -13,6 +13,7 @@ import { pageOfLine, type PageRect } from '../compile/synctex.ts'
 import { plainText } from '../latex/parse.ts'
 import type { Proposal } from '../latex/propose.ts'
 import type { Paper } from '../store.ts'
+import { filesOf } from './lib/files.ts'
 import { apiUrl, json, standingAs, standingIn } from './api.ts'
 import { CompilerOffer } from './compiler-offer.tsx'
 import { SourceColumn, type ColumnRegion } from './editor/source-column.tsx'
@@ -173,7 +174,7 @@ export function Workspace({
 }) {
   const theme = useTheme()
   const { build, part, compiling, compile, compilePart, seePart, refresh } = useBuild(paper.epic)
-  const { setPaper, setProposals, setSaid, request } = wire
+  const { setPaper, setProposals, setSaid, request, askAgain } = wire
   /* What "compile" means just now: the whole paper, or — with parts picked
      whose files can be compiled on their own — those files. Decided further
      down, where the pick is known, and reached from here through a ref because
@@ -183,7 +184,11 @@ export function Workspace({
   const onLanded = useCallback(
     (landed: Landed) => {
       if (landed.paper) setPaper(landed.paper)
-      if (Array.isArray(landed.proposals)) setProposals(landed.proposals)
+      if (Array.isArray(landed.proposals)) {
+        setProposals(landed.proposals)
+        /* A list taken from a save's answer: asked again in full, so the tag the page keeps is of what it holds (#70). */
+        askAgain()
+      }
       if (landed.said) setSaid(landed.said)
       /* A chapter now pulls in another file, so what this module holds for a
          part changed: the canvas is told, and the host reads it again. */
@@ -191,7 +196,7 @@ export function Workspace({
       /* The save reached the disk, so the PDF on screen is now of older text. */
       recompile.current()
     },
-    [setPaper, setProposals, setSaid, request, paper.epic],
+    [setPaper, setProposals, setSaid, request, askAgain, paper.epic],
   )
   const source = useSource({ paper, disk: wire.disk, onLanded, saveDelay })
   const { file, doc, fresh } = source
@@ -207,7 +212,7 @@ export function Workspace({
   const focus = useMemo(
     () => narrowed(ticked, paper, pdf, file),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ticked, paper.epic, paper.files, paper.pulls, pdf?.id, file],
+    [ticked, paper.epic, paper.files, paper.others, paper.pulls, pdf?.id, file],
   )
   const focusRef = useRef(focus)
   focusRef.current = focus
@@ -1483,7 +1488,8 @@ export function Workspace({
 
   /* The files offered: all of them, or under a focus what the rule left —
      the picked parts' own, and the one in hand. */
-  const listed = focus ? focus.shown : paper.files
+  /* `main.tex`'s files and then its other builds' (#71): a submission's `main_tuni.tex` and its abstracts. */
+  const listed = useMemo(() => (focus ? focus.shown : filesOf(paper)), [focus, paper])
   /* The files to switch among: the picked parts' chapters, and nothing when
      nothing is picked. One file is not a switch. See `tabsOf`. */
   const tabs = useMemo(
@@ -1509,7 +1515,10 @@ export function Workspace({
   const columnFiles = (() => {
     const pulls = paper.pulls ?? {}
     const base = new Set(listed)
-    const wanted = paper.files.filter((one) => base.has(one) || dirtyFiles.includes(one))
+    /* A file of another build is laid out only while it is in hand: it is not `main.tex`'s document. */
+    const wanted = filesOf(paper).filter(
+      (one) => (base.has(one) && (paper.files.includes(one) || one === file)) || dirtyFiles.includes(one),
+    )
     const inList = new Set(wanted)
     return wanted.filter((one) => {
       const by = pulls[one]?.by
@@ -1743,7 +1752,6 @@ export function Workspace({
         if (control && spots.length === stop.members.length && spots.every(({ at }) => at !== null)) {
           control.replace(spots.map(({ at }) => ({ from: at!.from, to: at!.to, insert: at!.replacement })))
           if (await source.flush()) {
-            wire.askAgain()
             /* The offsets of what is still waiting are of the text before this: ask again. */
             left = (await wire.refreshProposals()) ?? proposalsNow.current.filter((p) => !stop.ids.includes(p.id))
           }
@@ -2311,7 +2319,12 @@ export function Workspace({
             {fallback && <HeaderFallback items={items} onPress={press} className={cn('relative shrink-0', footed && 'ml-auto')} />}
           </div>
           )}
-          <DeclinedList list={wire.facts.declined} onReason={(id, reason) => wire.review({ action: 'decline-reason', id, reason })} />
+          <DeclinedList
+            list={wire.facts.declined}
+            onReason={(id, reason) => wire.review({ action: 'decline-reason', id, reason })}
+            sectionOf={(name, from) => sectionAt(sections, name, from)?.title ?? null}
+            onShow={(name, from) => go({ file: name, bytes: { from, to: from }, focus: true })}
+          />
           <div ref={editorBox} className="min-h-0 flex-1" data-regions={columned ? regions.length : undefined} data-mounted={columned ? mountedCount : undefined}>
             {!doc && !columned ? (
               <p className="text-muted-foreground p-3 text-xs">Opening {file}…</p>

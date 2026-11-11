@@ -21,6 +21,7 @@ import { onBoundary } from './latex/edit.ts'
 import { buildLabelIndex, mapSegments, resolveRef } from './latex/labels.ts'
 import { findMacros, parseLatex, plainText, type Block, type Macro, type ParsedDocument } from './latex/parse.ts'
 import { ID } from './manifest.ts'
+import { filesOf } from './src/lib/files.ts'
 import { templateById, titleFor, type TemplateFile } from './templates.ts'
 
 /**
@@ -660,6 +661,8 @@ function real(path: string): string | null {
   }
 }
 
+export { filesOf }
+
 export const MAIN = 'main.tex'
 
 /**
@@ -781,7 +784,14 @@ export interface Paper {
   pulls: Record<string, Pull>
   /** `main.tex` narrows itself with an `\includeonly` of its own, which would overrule one given from outside. */
   narrowsItself: boolean
+  /**
+   * The files of the paper's other builds — another root beside `main.tex`, such as a submission's
+   * `main_tuni.tex`, and what it names (`othersOf`). Not in the reading view; a file of the paper for
+   * everything else: opened, suggested about, written and reviewed like one. In `hashes` too.
+   */
+  others: string[]
 }
+
 
 export interface Pull {
   by: string
@@ -917,6 +927,109 @@ interface Walked {
   /** How each file but `main.tex` was pulled in. See `Paper.pulls`. */
   pulls: Record<string, Pull>
   narrowsItself: boolean
+  /** The files of the paper's other builds (`othersOf`), in name order. Hashed in `hashes` too. */
+  others: string[]
+}
+
+/** How many `.tex` files of a paper's folder are looked at for other builds, and how deep. */
+const MAX_SCANNED_TEX = 400
+const MAX_SCAN_DEPTH = 4
+
+/**
+ * The files of the paper's OTHER builds (#71): what `main.tex` does not reach and a suggestion may
+ * still be about.
+ *
+ * A paper may be built more than one way from one folder: `main.tex` is the one this module reads
+ * and compiles, and a `main_tuni.tex` beside it is the submission, made with a university's template,
+ * that loads `abstract_en.tex` and `abstract_fi.tex` through the template's own `\abstract{…}`. Those
+ * files are the paper as much as a chapter is, and a change to them was a change nobody could review.
+ *
+ * So every `.tex` file in the folder that starts a document (`\documentclass` on a line that is not
+ * a comment) is a root, and every file a root names in braces — `\input{f}`, `\include{f}`, a
+ * template's `\abstract{f}`, written with or without `.tex` — that is a `.tex` file in the folder is
+ * one of its files, and so on down, to the same depth as the main walk. Nothing outside the folder:
+ * every name goes through `confine`, and a symbolic link is not followed. A file lying in the folder
+ * that no root names is still not the paper (the rule `readSource` gives).
+ *
+ * They are not folded into the reading view, which stays `main.tex`'s document; they are files the
+ * editor can open, a suggestion can be filed on and accepted into, and review compares.
+ */
+function othersOf(root: string, taken: ReadonlySet<string>, hashes: Record<string, string>): string[] {
+  const texs: string[] = []
+  const scan = (dir: string, relative: string, depth: number): void => {
+    if (depth > MAX_SCAN_DEPTH || texs.length >= MAX_SCANNED_TEX) return
+    let names: string[] = []
+    try {
+      names = readdirSync(dir).sort()
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (texs.length >= MAX_SCANNED_TEX) return
+      if (name.startsWith('.') || name === 'node_modules') continue
+      const at = join(dir, name)
+      let found
+      try {
+        found = lstatSync(at)
+      } catch {
+        continue
+      }
+      if (found.isSymbolicLink()) continue
+      const to = relative ? `${relative}/${name}` : name
+      if (found.isDirectory()) scan(at, to, depth + 1)
+      else if (found.isFile() && name.endsWith('.tex')) texs.push(to)
+    }
+  }
+  scan(root, '', 0)
+
+  const read = new Map<string, string | null>()
+  const readOne = (file: string): string | null => {
+    if (read.has(file)) return read.get(file)!
+    let text: string | null = null
+    const path = confine(root, file)
+    try {
+      if (path && statSync(path).isFile() && statSync(path).size <= MAX_TEX_BYTES) {
+        const bytes = readFileSync(path)
+        text = bytes.toString('utf8')
+        hashes[file] = hashOf(bytes)
+      }
+    } catch {
+      text = null
+    }
+    read.set(file, text)
+    return text
+  }
+  const known = new Set(texs)
+  /* What a file names in braces that is a `.tex` file of the folder. Comments are not read. */
+  const named = (source: string): string[] => {
+    const out: string[] = []
+    for (const line of source.split('\n')) {
+      const code = line.replace(/(^|[^\\])%.*$/, '$1')
+      for (const m of code.matchAll(/\{\s*([\w./-]+?)\s*\}/g)) {
+        const name = m[1]!.replace(/^\.\//, '')
+        const file = name.endsWith('.tex') ? name : `${name}.tex`
+        if (known.has(file) && !out.includes(file)) out.push(file)
+      }
+    }
+    return out
+  }
+
+  const others = new Set<string>()
+  const follow = (file: string, depth: number): void => {
+    const source = readOne(file)
+    if (source === null) return
+    others.add(file)
+    if (depth >= MAX_INCLUDE_DEPTH) return
+    for (const next of named(source)) if (!taken.has(next) && !others.has(next)) follow(next, depth + 1)
+  }
+  for (const file of texs) {
+    if (taken.has(file) || others.has(file)) continue
+    const source = readOne(file)
+    if (source !== null && /^[^%\n]*\\documentclass\b/m.test(source)) follow(file, 0)
+  }
+  /* Read and not kept: a root's hash is only for the files that are the paper. */
+  for (const file of read.keys()) if (!others.has(file)) delete hashes[file]
+  return [...others].sort()
 }
 
 /**
@@ -1066,8 +1179,9 @@ function walk(root: string): Walked | null {
     }
   }
   fold(parsed.blocks, MAIN, 0)
+  const others = othersOf(root, seen, hashes)
 
-  return { source, bytes: size, blocks, files, hashes, pulls, narrowsItself }
+  return { source, bytes: size, blocks, files, hashes, pulls, narrowsItself, others }
 }
 
 /**
@@ -1091,7 +1205,7 @@ export function readPaper(epic: string, project: string | null): Paper | null {
   if (!root) return null
   const walked = walk(root)
   if (!walked) return null
-  const { source, blocks, files, hashes, pulls, narrowsItself } = walked
+  const { source, blocks, files, hashes, pulls, narrowsItself, others } = walked
 
   /*
    * Every `\ref` and every `\cite` in the paper, rewritten from its placeholder
@@ -1159,6 +1273,7 @@ export function readPaper(epic: string, project: string | null): Paper | null {
     figures,
     pulls,
     narrowsItself,
+    others,
   }
 }
 
@@ -1317,7 +1432,7 @@ export function readFigure(epic: string, file: string, project: string | null): 
 export function readSource(epic: string, file: string, project: string | null): string | null {
   const paper = readPaper(epic, project)
   if (!paper) return null
-  if (!paper.files.includes(file)) return null
+  if (!filesOf(paper).includes(file)) return null
   const root = paperRoot(epic, project)
   if (!root) return null
   const path = confine(root, file)
@@ -1561,8 +1676,8 @@ function opened(
      filesystem would let a caller name any `.tex` under the epic's directory,
      so "correct the paper" would quietly become "write to whatever is lying
      around beside it". A file the paper does not include is not the paper. */
-  if (!paper.files.includes(named)) {
-    return no(`This paper does not name a file called “${named}”. It is made of: ${paper.files.join(', ')}`)
+  if (!filesOf(paper).includes(named)) {
+    return no(`This paper does not name a file called “${named}”. It is made of: ${filesOf(paper).join(', ')}`)
   }
   const root = paperRoot(epic, project)
   if (!root) return no('There is no paper for that epic in this project.')

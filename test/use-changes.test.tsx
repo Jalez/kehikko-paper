@@ -293,6 +293,47 @@ describe('useChanges', () => {
     expect(changesAsked().at(-1)!.searchParams.get('since')).toBe('')
   })
 
+  /* #70: no project switch. The page took a list from somewhere other than `/api/changes` (a
+     decision's answer, a save's, a re-read) while the server's tag stayed the one the page held;
+     a nudge that named that tag was answered `same`, and the list the server holds never arrived. */
+  test('a nudge after the page took a list from elsewhere asks in full, and the list the server holds arrives', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    withProposals()
+    const heard: Record<string, unknown>[] = []
+    const { rerender } = renderHook(({ nudge }) => useChanges('thesis', true, nudge, (body) => heard.push(body)), { initialProps: { nudge: 0 } })
+    await settle()
+    expect(heard.length).toBe(1)
+    /* An answer from elsewhere replaced the page's list; the server is still at t1. */
+    rerender({ nudge: 1 })
+    await settle()
+    expect(changesAsked().at(-1)!.searchParams.get('since')).toBe('')
+    expect(heard.length).toBe(2)
+    expect(heard.at(-1)!.proposals).toEqual(waiting)
+  })
+
+  test('an answer the page did not take leaves no tag: the next news is asked in full', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    withProposals()
+    let take = false
+    const heard: Record<string, unknown>[] = []
+    renderHook(() => useChanges('thesis', true, 0, (body) => (heard.push(body), take)))
+    await settle()
+    await act(async () => Stream.made[0]!.send('ready', { tag: 't1' }))
+    await settle()
+    /* Not taken, so the ready naming t1 was not "what the page holds": it asked again. */
+    expect(changesAsked().length).toBe(2)
+    expect(changesAsked()[1]!.searchParams.get('since')).toBe('')
+    take = true
+    await act(async () => Stream.made[0]!.send('changed', { tag: 't1' }))
+    await settle()
+    expect(changesAsked().length).toBe(3)
+    await act(async () => Stream.made[0]!.send('changed', { tag: 't1' }))
+    await settle()
+    /* Taken now: the tag is held and the same news asks nothing. */
+    expect(changesAsked().length).toBe(3)
+    expect(heard.at(-1)!.proposals).toEqual(waiting)
+  })
+
   test('a stream reopened after the switch says ready with a tag already seen: the list still arrives once', async () => {
     ;(globalThis as { EventSource?: unknown }).EventSource = Stream
     withProposals()

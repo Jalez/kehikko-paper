@@ -300,48 +300,74 @@ describe('in the page: declining from the tag', () => {
   const press = (el: Element | null) => (el as HTMLElement).click()
   const key = (el: Element, k: string) => el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }))
 
-  test('Cancel change stays one press, with no reason', () => {
-    const { tag, answers } = draw(one())
-    press(tag.querySelector('[data-sugg-answer="reject"]'))
-    expect(answers).toEqual([['k1', 'reject']])
-  })
-
-  test('Decline with reason… opens a field; Enter declines with what was written', () => {
-    const { tag, answers } = draw(one())
+  /* #72: the reason is asked where Decline was pressed, not afterwards in a list. */
+  test('Decline opens a field on this tag, beside the diff, and declines nothing yet', () => {
+    const { tag, answers, declining } = draw(one())
     const form = tag.querySelector<HTMLElement>('[data-sugg-decline]')!
     expect(form.hidden).toBe(true)
-    press(tag.querySelector('[data-sugg-decline-reason]'))
+    const button = tag.querySelector<HTMLElement>('[data-sugg-answer="reject"]')!
+    expect(button.textContent).toContain('Decline')
+    expect(tag.querySelector('[data-sugg-decline-reason]')).toBeNull()
+    press(button)
     expect(form.hidden).toBe(false)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(answers).toEqual([])
+    expect(declining.has('p1')).toBe(true)
     const field = tag.querySelector<HTMLInputElement>('[data-sugg-decline-why]')!
-    expect(field.placeholder).toBe('Why? (optional)')
+    expect(field.placeholder).toStartWith('Why? (optional)')
     expect(field.maxLength).toBe(1000)
-    field.value = '  Keep the original.  '
-    key(field, 'Enter')
-    expect(answers).toEqual([['k1', 'reject', undefined, 'Keep the original.']])
   })
 
-  test('an empty field declines without a reason; the Decline button does the same as Enter', () => {
+  test('the fast path: Decline pressed again declines without a reason', () => {
     const { tag, answers } = draw(one())
-    press(tag.querySelector('[data-sugg-decline-reason]'))
-    press(tag.querySelector('[data-sugg-decline-submit]'))
+    press(tag.querySelector('[data-sugg-answer="reject"]'))
+    press(tag.querySelector('[data-sugg-answer="reject"]'))
     expect(answers).toEqual([['k1', 'reject', undefined, undefined]])
   })
 
-  test('Escape and Cancel close the field and decline nothing', () => {
+  test('Enter on the empty field declines without a reason', () => {
+    const { tag, answers } = draw(one())
+    press(tag.querySelector('[data-sugg-answer="reject"]'))
+    key(tag.querySelector('[data-sugg-decline-why]')!, 'Enter')
+    expect(answers).toEqual([['k1', 'reject', undefined, undefined]])
+  })
+
+  test('words in the field go with the decision: Enter, or Decline with reason', () => {
+    const { tag, answers } = draw(one())
+    press(tag.querySelector('[data-sugg-answer="reject"]'))
+    const field = tag.querySelector<HTMLInputElement>('[data-sugg-decline-why]')!
+    const submit = tag.querySelector<HTMLElement>('[data-sugg-decline-submit]')!
+    expect(submit.textContent).toBe('Decline')
+    field.value = '  Keep the original.  '
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(submit.textContent).toBe('Decline with reason')
+    key(field, 'Enter')
+    press(submit)
+    expect(answers).toEqual([
+      ['k1', 'reject', undefined, 'Keep the original.'],
+      ['k1', 'reject', undefined, 'Keep the original.'],
+    ])
+  })
+
+  test('Escape and Back close the field and decline nothing', () => {
     const { tag, answers, declining } = draw(one())
-    press(tag.querySelector('[data-sugg-decline-reason]'))
+    press(tag.querySelector('[data-sugg-answer="reject"]'))
     key(tag.querySelector('[data-sugg-decline-why]')!, 'Escape')
     expect(tag.querySelector<HTMLElement>('[data-sugg-decline]')!.hidden).toBe(true)
-    press(tag.querySelector('[data-sugg-decline-reason]'))
+    press(tag.querySelector('[data-sugg-answer="reject"]'))
     press(tag.querySelector('[data-sugg-decline-cancel]'))
     expect(tag.querySelector<HTMLElement>('[data-sugg-decline]')!.hidden).toBe(true)
     expect(answers).toEqual([])
     expect(declining.size).toBe(0)
   })
 
-  test('a change found in the file has no reason to give an agent: no field', () => {
-    const { tag } = draw(one({ kind: 'disk' }))
-    expect(tag.querySelector('[data-sugg-decline-reason]')).toBeNull()
+  test('a change found in the file has no reason to give an agent: Cancel change is one press, no field', () => {
+    const { tag, answers } = draw(one({ kind: 'disk' }))
+    expect(tag.querySelector('[data-sugg-decline]')).toBeNull()
+    const button = tag.querySelector<HTMLElement>('[data-sugg-answer="reject"]')!
+    expect(button.textContent).toContain('Cancel change')
+    press(button)
+    expect(answers).toEqual([['k1', 'reject']])
   })
 })
 
@@ -381,6 +407,38 @@ describe('in the page: the declined list', () => {
     render(<DeclinedList list={[item({ reason: 'Old reason' })]} onReason={async () => true} />)
     fireEvent.click(screen.getByText('Edit reason'))
     expect((screen.getByLabelText('Why it was declined (optional)') as HTMLInputElement).value).toBe('Old reason')
+  })
+
+  /* #72: who or what ended it, where it was, what it was, and the way back to it. */
+  test('declined by you, set aside by an accepted change and withdrawn by the agent read differently', () => {
+    const { container } = render(
+      <DeclinedList
+        list={[item({ id: 'a' }), item({ id: 'b', how: 'superseded' }), item({ id: 'c', how: 'withdrawn' })]}
+        onReason={async () => true}
+      />,
+    )
+    const by = [...container.querySelectorAll('[data-declined-by]')].map((el) => el.textContent)
+    expect(by).toEqual(['Declined by you', 'Set aside: it overlapped a change you accepted', 'Withdrawn by the agent'])
+    /* Only the person's own decision carries a reason to give. */
+    expect(container.querySelectorAll('[data-declined-edit]')).toHaveLength(1)
+    expect(screen.getAllByText('no reason given')).toHaveLength(1)
+  })
+
+  test('it says the file and section, the passage as quoted and proposed, and Show goes back to it', () => {
+    const shown: [string, number][] = []
+    const long = 'harjoitustehtävän keskusteluna sen sijaan, että se olisi staattinen tehtävänanto, jonka opiskelija lukee'
+    const { container } = render(
+      <DeclinedList
+        list={[item({ file: 'chapters/2.tex', from: 120, old: long, new: 'Suuret kielimallit tekevät mahdolliseksi' })]}
+        onReason={async () => true}
+        sectionOf={(file, from) => (file === 'chapters/2.tex' && from === 120 ? 'Background' : null)}
+        onShow={(file, from) => shown.push([file, from])}
+      />,
+    )
+    expect(container.querySelector('[data-declined-section]')!.textContent).toBe('§ Background')
+    expect(container.querySelector('[data-declined-change] del')!.textContent).toBe(long)
+    fireEvent.click(screen.getByText('Show'))
+    expect(shown).toEqual([['chapters/2.tex', 120]])
   })
 
   test('nothing declined lately draws nothing', () => {

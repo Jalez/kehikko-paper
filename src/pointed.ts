@@ -2,6 +2,7 @@ import type { Passage } from 'kehikot-module-protocol'
 
 import { plainText } from '../latex/parse.ts'
 import type { Paper, PlacedBlock } from '../store.ts'
+import { filesOf } from './lib/files.ts'
 
 /**
  * A passage somebody else on the canvas pointed at, turned into a place in
@@ -60,7 +61,7 @@ export function fileOf(paper: Paper, path: string): string | null {
   const dir = paper.dir.endsWith('/') ? paper.dir : `${paper.dir}/`
   if (!path.startsWith(dir)) return null
   const relative = path.slice(dir.length)
-  return paper.files.includes(relative) ? relative : null
+  return filesOf(paper).includes(relative) ? relative : null
 }
 
 /**

@@ -91,7 +91,7 @@ export interface ReviewFacts {
   accepted: { n: number; file: string; old: string; new: string; why: string; at: number; by: 'author' | 'auto'; kind: string }[]
   /** Files left out of the comparison, and why. */
   untracked: { file: string; why: string }[]
-  /** Suggestions the person declined lately, newest first, with the reason they gave ('' for none). */
+  /** Suggestions declined, set aside or withdrawn lately, newest first, with the reason given for a declined one ('' for none). */
   declined: Declined[]
 }
 
@@ -104,8 +104,15 @@ export interface Declined {
   why: string
   at: number
   reason: string
-  /** How many were declined with it, as one group. */
+  /** How many went with it, as one group. */
   count: number
+  /**
+   * What became of it (#72): declined by the person, set aside because the person accepted a change
+   * to the same words, or withdrawn by the agent. Absent from an older server: declined.
+   */
+  how?: 'declined' | 'superseded' | 'withdrawn'
+  /** Where it was in its file (bytes), to go back to the passage. */
+  from?: number
 }
 
 const NO_FACTS: ReviewFacts = { auto: false, jump: true, readOnly: null, baseline: null, accepted: [], untracked: [], declined: [] }
@@ -388,7 +395,8 @@ export function usePaper(framed: boolean) {
 
   const shown = useShown(hostHides)
   useChanges(epicOnScreen, shown, nudge, (body) => {
-    if (epicOnScreen === null) return
+    /* Not taken, so not tagged: the next ask is answered in full (`use-changes.ts`, #70). */
+    if (epicOnScreen === null) return false
     if (Array.isArray(body.proposals)) {
       setProposals(body.proposals as Proposal[])
       const next = factsOf(body)
@@ -400,6 +408,7 @@ export function usePaper(framed: boolean) {
     if (read) setSaving(read)
     const now = asHashes(body.hashes)
     if (now) setDisk((was) => (sameHashes(was, now) ? was : now))
+    return true
   })
 
   /* One decision at a time. Accepting writes a file and commits it; two of
@@ -498,8 +507,11 @@ export function usePaper(framed: boolean) {
       return body.proposals as Proposal[]
     } catch {
       return null
+    } finally {
+      /* A list taken from outside `/api/changes`: asked again in full, so a tag never names another (#70). */
+      askAgain()
     }
-  }, [])
+  }, [askAgain])
 
   const waiting = useRef<Proposal[]>([])
   waiting.current = proposals

@@ -59,6 +59,7 @@ import {
 import {
   MAIN,
   PAPERS_AT,
+  filesOf,
   hashesOf,
   isEpic,
   keepsPapers,
@@ -666,7 +667,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const file = str(args.file, MAX_PATH) || 'main.tex'
       const source = readSource(epic, file, named.project)
       if (source === null) {
-        return `"${epic}" does not name a file called "${file}". It is made of: ${paper.files.join(', ')}`
+        return `"${epic}" does not name a file called "${file}". It is made of: ${filesOf(paper).join(', ')}`
       }
       return source
     },
@@ -776,7 +777,7 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       const file = str(args.file, MAX_PATH) || MAIN
       const source = readSource(epic, file, named.project)
       if (source === null) {
-        return `"${epic}" does not name a file called "${file}". It is made of: ${paper.files.join(', ')}`
+        return `"${epic}" does not name a file called "${file}". It is made of: ${filesOf(paper).join(', ')}`
       }
       const was = paper.hashes[file]
       /* Unreachable while `readSource` and `readPaper` agree about which files
@@ -1058,7 +1059,8 @@ const TOOLS: Record<string, { description: string; schema: object; run: ToolCall
       if (!held.length) return [gone || 'Nothing is waiting on that paper.', ...recent, ...auto].join('\n')
       /* The reading order a person walks them in: the paper's files as the
          paper names them, then position in the file; a group is one stop. */
-      const files = readPaper(epic, named.project)?.files ?? []
+      const reading = readPaper(epic, named.project)
+      const files = reading ? filesOf(reading) : []
       const walked = [...held].sort((x, y) => files.indexOf(x.file) - files.indexOf(y.file) || x.from - y.from)
       const orderOf = new Map<string, number>()
       const seen = new Map<string, number>()
@@ -1186,6 +1188,18 @@ function everything(project: string, epic: string): { proposals: Proposal[]; ctx
  * (the others go with it) or cancels them all. Overlap is of the ranges drawn
  * (the words each is about), touching or sharing a byte, or of one quoted text.
  */
+/** Two changes are about the same words: their ranges touch or share a byte, or they quote one text. */
+function sameWords(a: Proposal, b: Proposal): boolean {
+  if (a.file !== b.file) return false
+  if (a.asked && b.asked && a.asked.find === b.asked.find) return true
+  const az = a.from === a.to
+  const bz = b.from === b.to
+  if (az && bz) return a.from === b.from
+  if (az) return b.from < a.from && a.from < b.to
+  if (bz) return a.from < b.from && b.from < a.to
+  return a.from < b.to && b.from < a.to
+}
+
 function versionsOf(all: Proposal[]): Proposal[] {
   const live = all.filter((p) => (p.kind === undefined || p.kind === 'staged' || p.kind === 'disk') && p.held !== 'gone')
   const parent = new Map<string, string>()
@@ -1194,22 +1208,12 @@ function versionsOf(all: Proposal[]): Proposal[] {
     while ((parent.get(at) ?? at) !== at) at = parent.get(at)!
     return at
   }
-  const touches = (a: Proposal, b: Proposal): boolean => {
-    if (a.file !== b.file) return false
-    const az = a.from === a.to
-    const bz = b.from === b.to
-    if (az && bz) return a.from === b.from
-    if (az) return b.from < a.from && a.from < b.to
-    if (bz) return a.from < b.from && b.from < a.to
-    return a.from < b.to && b.from < a.to
-  }
   for (let i = 0; i < live.length; i++) {
     for (let j = i + 1; j < live.length; j++) {
       const a = live[i]!
       const b = live[j]!
       if (a.group && a.group === b.group) continue
-      const same = a.asked && b.asked && a.asked.find === b.asked.find && a.file === b.file
-      if (touches(a, b) || same) parent.set(find(b.id), find(a.id))
+      if (sameWords(a, b)) parent.set(find(b.id), find(a.id))
     }
   }
   const members = new Map<string, Proposal[]>()
@@ -1292,16 +1296,19 @@ export function changesOf(project: string | null, epic: string): { body: Record<
 /** What goes beside the list in every answer: the setting, the baseline in words, what was accepted lately. */
 function reviewFacts(review: Review | null, project: string, epic: string): Record<string, unknown> {
   return {
-    /* Declined lately, still listed so the person can give or change a reason. Text only. */
+    /* Declined, set aside or withdrawn lately, and which (#72); a declined one can still be given a reason. Text only. */
     declined: declinedLately(project, epic).map((o) => ({
       id: o.id,
       file: o.file,
-      old: o.was_text.slice(0, 200),
-      new: o.replace.slice(0, 200),
+      /* The passage as quoted and as proposed: one readable pair, not a narrowed middle beside a whole. */
+      old: (o.find ?? o.was_text).slice(0, 400),
+      new: o.replace.slice(0, 400),
       why: o.why,
       at: o.declinedAt ?? o.at,
       reason: o.declinedReason ?? '',
-      count: o.group ? outcomesFor(project, epic).filter((x) => x.group === o.group && x.state === 'rejected').length : 1,
+      how: o.state === 'rejected' ? 'declined' : o.state === 'withdrawn' ? 'withdrawn' : 'superseded',
+      ...(typeof o.from === 'number' ? { from: o.from } : {}),
+      count: o.group ? outcomesFor(project, epic).filter((x) => x.group === o.group && x.state === o.state).length : 1,
     })),
     auto: review?.auto ?? false,
     jump: review?.jump ?? true,
@@ -1416,7 +1423,9 @@ function outcomeLine(o: Outcome): string {
   const how =
     o.state === 'accepted' && o.editedByAuthor
       ? 'accepted, adjusted by the author'
-      : o.state === 'dropped'
+      : o.state === 'dropped' && o.supersededBy
+        ? `superseded: the author accepted ${o.supersededBy}, a change to the same words; not declined`
+        : o.state === 'dropped'
         ? 'dropped, the text it was about changed'
         : o.state === 'rejected'
           ? 'declined by the author'
@@ -1748,13 +1757,15 @@ export function answerAt(
 
     /* The other versions of this passage, if it has any: answering one answers
        the item. Read before anything changes the files. */
-    const mates = (() => {
+    const { mates, answered } = (() => {
       /* Not `everything`: that measures the suggestions against the disk, and an
          answer is measured against the page's hash, not smoothed over first. */
       const ctxNow = ctxOf(project, epic)
       const all = versionsOf([...pendingFor(project, epic), ...(ctxNow ? reviewOf(ctxNow).changes : [])])
       const me = all.find((p) => p.id === id)
-      return me?.alt ? all.filter((p) => p.alt === me.alt && p.id !== id) : []
+      /* What this answer is about: the change, and the group it was filed in. */
+      const answered = me ? all.filter((p) => p.id === id || (me.group !== undefined && p.group === me.group)) : []
+      return { mates: me?.alt ? all.filter((p) => p.alt === me.alt && !answered.includes(p)) : [], answered }
     })()
     const answerMates = (how: 'accept' | 'reject') => {
       for (const mate of mates) {
@@ -1764,11 +1775,27 @@ export function answerAt(
             const ctx = ctxOf(project, epic)
             if (ctx) cancelChange(ctx, mate.id)
           }
-        } else {
-          /* A suggestion goes with the whole group it is in. */
-          const one = proposalById(project, epic, mate.id)
-          if (one) for (const member of groupOf(project, epic, one)) decline(member.id)
+          continue
         }
+        const one = proposalById(project, epic, mate.id)
+        if (!one) continue
+        /* A suggestion goes with the whole group it is in. */
+        const members = groupOf(project, epic, one)
+        if (how === 'reject') {
+          for (const member of members) decline(member.id)
+          continue
+        }
+        /*
+         * Accepting one version sets aside only the versions about the SAME words as what was
+         * accepted (#70). An item is every change linked to another by overlap, so one long rewrite
+         * can tie ten small suggestions to each other and to one beside them; accepting that one
+         * must not take the ten with it. What is set aside is not the person's decision: it is kept
+         * as superseded by the accepted change, never as declined by the author. The rest stay
+         * pending and are moved onto the file as it now is (`rebaseAll`).
+         */
+        const hit = answered.find((took) => members.some((member) => sameWords(member, took)))
+        if (!hit) continue
+        for (const member of members) settle(project, epic, member.id, 'dropped', { supersededBy: hit.id })
       }
     }
 

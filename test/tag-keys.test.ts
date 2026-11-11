@@ -18,17 +18,17 @@ describe('keycaps on a suggestion’s tag', () => {
     expect(tag.querySelector('[aria-keyshortcuts]')).toBeNull()
     expect(tag.classList.contains('cm-sugg-armed')).toBe(false)
   })
-  test('armed: Enter on Accept change, Esc on Cancel change, in titles and aria too', () => {
+  test('armed: Enter on Accept change, Esc on Decline, in titles and aria too', () => {
     const tag = draw(one({ armed: true }))
     expect(caps(tag)).toEqual(['⏎', 'Esc'])
     const [accept, cancel] = [...tag.querySelectorAll('button[data-sugg-answer]')] as HTMLElement[]
     expect(accept!.title).toBe('Accept change — Enter')
     expect(accept!.getAttribute('aria-keyshortcuts')).toBe('Enter')
-    expect(cancel!.title).toBe('Cancel change — Escape')
+    expect(cancel!.title).toBe('Decline — Escape')
     expect(cancel!.getAttribute('aria-keyshortcuts')).toBe('Escape')
     expect(tag.classList.contains('cm-sugg-armed')).toBe(true)
   })
-  test('editing: the modified Enter on Accept change, nothing on Cancel change', () => {
+  test('editing: the modified Enter on Accept change, nothing on Decline', () => {
     const [accept, cancel] = caps(draw(one({ armed: true, editing: true })))
     expect(accept).toMatch(/⏎/)
     expect(accept).not.toBe('⏎')

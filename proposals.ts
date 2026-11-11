@@ -207,6 +207,15 @@ export interface Outcome {
   declinedBy?: 'author'
   declinedAt?: number
   reasonAt?: number
+  /**
+   * A `dropped` suggestion only: the id of the change the person accepted over the same words (#70).
+   * Set aside by that decision, not declined: nobody said no to this one.
+   */
+  supersededBy?: string
+  /** Where it was in its file when it was answered (bytes), so the page can go back to the passage. */
+  from?: number
+  /** The whole passage the filer quoted, as `replace` is the whole of what it proposed: a pair a person can read. */
+  find?: string
 }
 
 /** How long a reason for declining may be. */
@@ -250,6 +259,8 @@ function note(project: string, epic: string, one: Proposal, state: Settled, extr
     why: one.why,
     was_text: one.was_text,
     replace: one.asked?.replace ?? one.text,
+    from: one.from,
+    ...(one.asked ? { find: one.asked.find } : {}),
     ...(one.revisions ? { revisions: one.revisions } : {}),
     ...(one.group ? { group: one.group } : {}),
     ...(state === 'rejected' ? { declinedBy: 'author' as const, declinedAt: Date.now() } : {}),
@@ -296,11 +307,18 @@ export function setDeclinedReason(
 /** How long a declined suggestion stays listed in the page, where its reason can still be written. */
 export const DECLINED_LISTED_MS = 60 * 60 * 1000
 
-/** The suggestions the person declined lately on one paper, newest first: the page lists them so a reason can be added. */
+/**
+ * What became of the suggestions that went without being accepted lately, newest first (#72):
+ * declined by the person, set aside because the person accepted a change to the same words, or
+ * withdrawn by the agent that filed it. Three different things, and the page says which: a list
+ * that called all of them "declined" made a decision nobody took look like the person's.
+ * A suggestion dropped because the text it was about changed is said where it happens and not here.
+ */
 export function declinedLately(project: string, epic: string, now: number = Date.now()): Outcome[] {
   const seen = new Set<string>()
   return outcomesFor(project, epic).filter((o) => {
-    if (o.state !== 'rejected' || now - (o.declinedAt ?? o.at) > DECLINED_LISTED_MS) return false
+    const listed = o.state === 'rejected' || o.state === 'withdrawn' || (o.state === 'dropped' && o.supersededBy !== undefined)
+    if (!listed || now - (o.declinedAt ?? o.at) > DECLINED_LISTED_MS) return false
     /* A group is one decision: listed once, by its first member. */
     if (o.group) {
       if (seen.has(o.group)) return false
@@ -524,7 +542,9 @@ export function ownership(
             ? `already declined by the author${done.declinedReason ? `, who said: ${JSON.stringify(done.declinedReason)}` : ''}`
             : done.state === 'withdrawn'
               ? 'already withdrawn'
-              : 'dropped because the text it was about changed'
+              : done.supersededBy
+                ? `set aside because the author accepted ${done.supersededBy}, a change to the same words`
+                : 'dropped because the text it was about changed'
       return { why: `That suggestion was ${how}, so it can no longer be changed. File a new one if it still matters.` }
     }
     return {

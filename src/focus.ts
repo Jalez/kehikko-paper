@@ -3,6 +3,7 @@ import type { Focus } from 'kehikot-module-protocol/client/react'
 
 import { planOf, type Plan, type Pullable } from '../compile/part.ts'
 import type { PageSpan } from '../compile/synctex.ts'
+import { filesOf } from './lib/files.ts'
 
 /**
  * The paper, narrowed to the parts of the epic a person picked out.
@@ -135,6 +136,7 @@ export interface Narrowed {
 /** As much of a paper as narrowing reads. */
 export interface NarrowablePaper extends Anchored {
   files: readonly string[]
+  others?: readonly string[]
 }
 
 /** As much of a build as narrowing reads: the last PDF's page count and page map. */
@@ -197,7 +199,7 @@ function named(parts: readonly EpicPart[], epic: string): string[] {
  */
 export function narrowed(focus: Focus, paper: NarrowablePaper, pdf: NarrowablePdf | null, open: string | null = null): Narrowed | null {
   if (!focus.focused) return null
-  const said = focus.narrow(paper.files, (file) => anchorOf(paper, file), { noun: 'page', keep: (file) => file === open })
+  const said = focus.narrow(filesOf(paper), (file) => anchorOf(paper, file), { noun: 'page', keep: (file) => file === open })
   const files = said.kept ? said.shown.filter((file) => file !== open) : said.shown
   return {
     one: pickedParts(focus.parts).length === 1,
