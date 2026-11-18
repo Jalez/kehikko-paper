@@ -61,5 +61,8 @@ const server = Bun.serve({
   },
 })
 
+/* A session's own KEHIKOT_HOST (the running app, :4170) would win over the stand-in; protocol 2.104.0's `testing/setup` does this for every KEHIKOT_* once the pin carries it. */
+delete process.env.KEHIKOT_HOST
+delete process.env.KEHIKOT_ORIGIN
 process.env.KEHIKOT_ORIGINS = `http://127.0.0.1:${server.port}`
 delete process.env.KEHIKOT_ORIGIN
