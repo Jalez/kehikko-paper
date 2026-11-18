@@ -1,3 +1,6 @@
+/* The shared test preload (protocol 2.104.0): the running app's environment never reaches a test. */
+import 'kehikot-module-protocol/testing/setup'
+
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 /* Before the document: the stand-in host takes Bun's own `Response` (see host.ts). */
 import './host.ts'
