@@ -789,7 +789,8 @@ describe('a change that arrives', () => {
     proposals = [suggestion()]
     wake()
     await waitFor(() => expect(source().getAttribute('data-mark')).toBe(`${at}-${at + 4}`))
-    expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`)
+    /* The mark is made first and the jump follows in a later render: wait for it, never read it the moment the mark shows. */
+    await waitFor(() => expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`))
     expect(pane()).toBe('pdf')
     expect(options('pane')[0]!.label).toBe('Source · 1 suggested')
     expect(await screen.findByText(/A change was suggested in main\.tex/)).toBeDefined()
@@ -858,7 +859,7 @@ describe('a change that arrives', () => {
     await new Promise((done) => setTimeout(done, 40))
     expect(lastPreview!.reveal?.nonce).toBe(was)
     /* The editor is still taken there: it is behind the PDF, and nobody is typing in it. */
-    expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`)
+    await waitFor(() => expect(source().getAttribute('data-jump')).toBe(`${at}-${at + 4}`))
     /* Its file name selects it in the source — the real editor reports that
        selection, as here — and a selection is followed on the PDF. */
     act(() => lastEditor!.onSelect({ from: at, to: at + 4 }))
