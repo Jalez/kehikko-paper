@@ -69,7 +69,7 @@ export interface HeaderState {
    * walk (a group is one), `position` is "2 of 5" for the current one, null
    * when none is current; `editing` while the author's own text is being typed.
    */
-  suggest?: { stops: number; position: string | null; editing: boolean; busy: boolean; noMore?: boolean }
+  suggest?: { stops: number; position: string | null; editing: boolean; busy: boolean; noMore?: boolean; heard?: boolean }
   /**
    * The host draws this page's footer (`footer.ts`), so what is a readout goes
    * there and not here: the compile time and pages from Compile's result, the
@@ -255,7 +255,8 @@ export function headerOf(state: HeaderState): HeaderItemInput[] {
   }
   if (state.suggest) {
     const q = state.suggest
-    const none = 'No suggestion is waiting on this paper.'
+    /* Until the page has heard its server's list, it does not know that none is waiting (#88). */
+    const none = q.heard === false ? 'Still asking whether a suggestion is waiting on this paper.' : 'No suggestion is waiting on this paper.'
     const noCurrent = 'Put the caret in a marked passage, or press Next suggestion, to choose which one.'
     const move = (id: string, label: string, icon: string, shortcut: string): HeaderItemInput =>
       ({
