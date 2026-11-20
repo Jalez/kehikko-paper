@@ -89,9 +89,12 @@ describe('/api/changes', () => {
     expect((after.proposals as unknown[]).length).toBe(1)
   })
 
-  test('no project answers as the two did: nothing waiting', () => {
-    const body = answer('GET', '/api/changes', new URLSearchParams({ epic }), null)?.body as Record<string, unknown>
-    expect(body).toMatchObject({ ok: true, proposals: [], standing: { at: 'nogit' }, hashes: null })
+  test('no project is refused, as /api/paper is, not answered "nothing waiting" (#88)', () => {
+    for (const path of ['/api/changes', '/api/proposals']) {
+      const got = answer('GET', path, new URLSearchParams({ epic }), null)
+      expect(got?.status).toBe(409)
+      expect(got?.body).toMatchObject({ ok: false, project: null })
+    }
   })
 })
 

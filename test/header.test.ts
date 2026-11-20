@@ -198,3 +198,15 @@ describe('the review items', () => {
     expect(items.filter((one) => one.agents).map((one) => one.id)).toEqual(['compile'])
   })
 })
+
+describe('a paper that has not heard its server yet (#88)', () => {
+  const idle = (heard?: boolean) => headerOf({ ...base, suggest: { stops: 0, position: null, editing: false, busy: false, ...(heard === undefined ? {} : { heard }) } } as HeaderState)
+  const reason = (items: ReturnType<typeof headerOf>) => (items.find((one) => one.id === 'sg-accept') as { disabled?: string | null } | undefined)?.disabled
+  test('says it is still asking, not that none is waiting', () => {
+    expect(reason(idle(false))).toBe('Still asking whether a suggestion is waiting on this paper.')
+  })
+  test('once heard, or when the caller does not say, none waiting is said as before', () => {
+    expect(reason(idle(true))).toBe('No suggestion is waiting on this paper.')
+    expect(reason(idle())).toBe('No suggestion is waiting on this paper.')
+  })
+})

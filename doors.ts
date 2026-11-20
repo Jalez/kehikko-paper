@@ -1686,10 +1686,10 @@ export function answerAt(
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
-    /* No project is not an error on a read that answers with a list: there is
-       nowhere to have filed anything, so the honest answer is that nothing is
-       waiting. The page polls this, and a refusal every four seconds while
-       nobody has a project open would be a container that looks broken. */
+    /* 409 without a project, as `/api/paper` (#88): "nothing is waiting" was an answer about no
+       project told to a page that then said so of the paper on screen. The page asks this after
+       something changed the files, not on a clock, and a refused ask leaves what it held. */
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
     return ok(proposalsAnswer(project, epic))
   }
 
@@ -2191,6 +2191,8 @@ export function answerAt(
     const epic = str(query.get('epic'), MAX_SLUG)
     if (!isEpic(epic)) return bad('that is not an epic name')
     const project = projectOf(str(query.get('project'), MAX_PROJECT))
+    /* 409 without a project, as `/api/paper` and `/api/proposals` (#88). */
+    if (project === null) return { status: 409, body: { ok: false, error: NOWHERE, project: null } }
     const now = changesOf(project, epic)
     if (str(query.get('since'), 64) === now.tag) return ok({ ok: true, same: true, tag: now.tag })
     return ok({ ...now.body, tag: now.tag })

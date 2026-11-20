@@ -109,12 +109,26 @@ describe('useShown', () => {
 })
 
 describe('useChanges', () => {
-  test('not shown: nothing is asked and nothing is listened to', async () => {
+  test('not shown: asked once, so the page knows what is waiting, and nothing is listened to (#88)', async () => {
     ;(globalThis as { EventSource?: unknown }).EventSource = Stream
-    renderHook(() => useChanges('a-paper', false, 0, () => {}))
+    const heard: unknown[] = []
+    renderHook(() => useChanges('a-paper', false, 0, (body) => heard.push(body)))
     await settle()
-    expect(changesAsked()).toEqual([])
+    expect(changesAsked().length).toBe(1)
+    expect(heard.length).toBe(1)
     expect(Stream.made).toEqual([])
+  })
+
+  test('a page that starts believing it is not shown and then is: the suggestions it heard stay, and it listens (#88)', async () => {
+    ;(globalThis as { EventSource?: unknown }).EventSource = Stream
+    const heard: Record<string, unknown>[] = []
+    const { rerender } = renderHook(({ shown }) => useChanges('a-paper', shown, 0, (body) => heard.push(body)), { initialProps: { shown: false } })
+    await settle()
+    expect(heard[0]).toMatchObject({ ok: true })
+    rerender({ shown: true })
+    await settle()
+    expect(Stream.made.length).toBe(1)
+    expect(changesAsked().length).toBe(2)
   })
 
   test('shown: one ask and one stream, and nothing scheduled on a clock', async () => {
@@ -172,18 +186,21 @@ describe('useChanges', () => {
     expect(heard.at(-1)!.tag).toBe('t2')
   })
 
-  test('hidden again: the stream is closed; shown again: asked once, naming what it holds', async () => {
+  test('hidden again: the stream is closed and it asks once; shown again: asked once and listened to, naming what it holds', async () => {
     ;(globalThis as { EventSource?: unknown }).EventSource = Stream
     const { rerender } = renderHook(({ shown }) => useChanges('a-paper', shown, 0, () => {}), { initialProps: { shown: true } })
     await settle()
     rerender({ shown: false })
     await settle()
     expect(Stream.made[0]!.closed).toBe(true)
-    expect(changesAsked().length).toBe(1)
-    rerender({ shown: true })
-    await settle()
+    /* Hidden: asked once more, naming what it holds (a few bytes), and not listened to. */
     expect(changesAsked().length).toBe(2)
     expect(changesAsked()[1]!.searchParams.get('since')).toBe('t1')
+    expect(Stream.made.length).toBe(1)
+    rerender({ shown: true })
+    await settle()
+    expect(changesAsked().length).toBe(3)
+    expect(changesAsked()[2]!.searchParams.get('since')).toBe('t1')
     expect(Stream.made.length).toBe(2)
   })
 

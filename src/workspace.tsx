@@ -1912,7 +1912,7 @@ export function Workspace({
     footed,
     tab,
     proposals: walkable.length,
-    suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy, noMore },
+    suggest: { stops: stops.length, position: positionOf(stops, currentKey), editing: editing !== null, busy, noMore, heard: wire.proposalsHeard },
     jump: wire.facts.jump,
     baseline: wire.facts.readOnly ?? wire.facts.baseline?.says ?? null,
     stale: outOfDate.length,

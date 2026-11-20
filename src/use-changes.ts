@@ -36,8 +36,9 @@ import { apiUrl, json, standingIn } from './api.ts'
  * server holds would be missing from the page with every button saying none is waiting. An answer
  * `heard` does not take (it answers false) leaves no tag behind, for the same reason.
   *
- * Not shown — folded, on another kehikko, scrolled off, a hidden tab: nothing is asked and the
- * stream is closed. Shown again, it asks once and listens again.
+ * Not shown — folded, on another kehikko, a hidden tab: the stream is closed, but the page still
+ * asks once for its paper (#88). A page that believes it is not shown while it is in plain view then
+ * still holds what is waiting, instead of saying nothing is. Shown again, it asks once and listens.
  *
  * `heard` is handed every answer that is not `same`; it answers `false` when the page did not take it.
  */
@@ -59,7 +60,7 @@ export function useChanges(
        tag kept from before would say "nothing new" about a list that is now empty. Going to another
        project and back, or to another epic and back, passes through here (#56). */
     if (epic === null) tag.current = { epic: null, project: null, tag: '' }
-    if (epic === null || !shown) return
+    if (epic === null) return
     const project = standingIn()
     if (tag.current.epic !== epic || tag.current.project !== project) tag.current = { epic, project, tag: '' }
     let stopped = false
@@ -110,9 +111,11 @@ export function useChanges(
       if (asking && tag.current.tag === '') return
       ask()
     }
-    const unsubscribe = subscribe<unknown>(apiUrl('/api/watch', { epic }), (said, name) => {
-      if (name === 'ready' || name === 'changed') fresh(said)
-    }, { events: ['ready', 'changed'], probe: true })
+    const unsubscribe = shown
+      ? subscribe<unknown>(apiUrl('/api/watch', { epic }), (said, name) => {
+          if (name === 'ready' || name === 'changed') fresh(said)
+        }, { events: ['ready', 'changed'], probe: true })
+      : () => {}
 
     askNow.current = () => ask(true)
     ask()
